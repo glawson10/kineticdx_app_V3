@@ -5,6 +5,7 @@
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
@@ -41,6 +42,8 @@ class _PatientUploadViewerScreenState extends State<PatientUploadViewerScreen> {
   final TextEditingController _notesCtl = TextEditingController();
   String _lastSavedNotes = '';
   bool _savingNotes = false;
+  final Map<String, String> _memberNameCache = {};
+  final Set<String> _memberNameLoading = {};
   Uint8List? _bytes;
   String? _error;
   bool _loading = true;
@@ -149,6 +152,8 @@ class _PatientUploadViewerScreenState extends State<PatientUploadViewerScreen> {
     final createdLabel = createdAt != null ? _formatDateTime(createdAt) : '-';
     final canEdit = widget.canEditNotes;
     final notesHint = canEdit ? 'Add notes...' : 'No notes';
+    final updatedAt = widget.upload.updatedAt;
+    final updatedByUid = widget.upload.updatedByUid;
 
     return SafeArea(
       top: false,
@@ -172,6 +177,15 @@ class _PatientUploadViewerScreenState extends State<PatientUploadViewerScreen> {
                 _detailRow('File', Text(widget.upload.fileName)),
                 _detailRow('Uploaded', Text(createdLabel)),
                 _detailRow('Uploaded by', Text(_uploadedByLabel())),
+                if (updatedAt != null)
+                  _detailRow('Notes updated', Text(_formatDateTime(updatedAt))),
+                if (updatedAt != null &&
+                    updatedByUid != null &&
+                    updatedByUid.trim().isNotEmpty)
+                  _detailRow(
+                    'Updated by',
+                    Text(_memberNameFor(updatedByUid)),
+                  ),
                 if (!widget.upload.isPdf && !widget.upload.isImage) ...[
                   const SizedBox(height: 8),
                   OutlinedButton.icon(
@@ -246,7 +260,48 @@ class _PatientUploadViewerScreenState extends State<PatientUploadViewerScreen> {
       final displayName = (current.displayName ?? '').trim();
       return displayName.isNotEmpty ? displayName : 'You';
     }
-    return createdBy;
+    return _memberNameFor(createdBy);
+  }
+
+  String _memberNameFor(String? uid) {
+    final clean = (uid ?? '').trim();
+    if (clean.isEmpty) return '-';
+    final cached = _memberNameCache[clean];
+    if (cached != null) return cached;
+    _fetchMemberName(clean);
+    return clean;
+  }
+
+  Future<void> _fetchMemberName(String uid) async {
+    if (_memberNameLoading.contains(uid)) return;
+    _memberNameLoading.add(uid);
+    try {
+      final snap = await FirebaseFirestore.instance
+          .collection('clinics')
+          .doc(widget.clinicId)
+          .collection('members')
+          .doc(uid)
+          .get();
+      final data = snap.data() ?? const <String, dynamic>{};
+      final name = snap.exists ? _nameFromMemberData(data, uid) : uid;
+      _memberNameCache[uid] = name;
+      if (mounted) setState(() {});
+    } catch (_) {
+      _memberNameCache[uid] = uid;
+      if (mounted) setState(() {});
+    } finally {
+      _memberNameLoading.remove(uid);
+    }
+  }
+
+  String _nameFromMemberData(Map<String, dynamic> data, String uid) {
+    final displayName = (data['displayName'] ?? '').toString().trim();
+    if (displayName.isNotEmpty) return displayName;
+    final name = (data['name'] ?? '').toString().trim();
+    if (name.isNotEmpty) return name;
+    final email = (data['email'] ?? '').toString().trim();
+    if (email.isNotEmpty) return email;
+    return uid;
   }
 
   String _formatDateTime(DateTime d) {

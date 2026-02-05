@@ -2,13 +2,18 @@
 //
 // Uploads tab for patient detail: list active uploads, upload button, delete.
 
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:pdfx/pdfx.dart';
+import 'package:share_plus/share_plus.dart';
+import 'package:cross_file/cross_file.dart';
 
 import '../../../data/repositories/patient_uploads_repository.dart';
 import '../../../models/patient_upload.dart';
@@ -41,6 +46,8 @@ class _PatientUploadsTabState extends State<PatientUploadsTab> {
   _UploadTypeFilter _typeFilter = _UploadTypeFilter.all;
   _UploadSortKey _sortKey = _UploadSortKey.date;
   bool _sortDescending = true; // newest / largest first by default
+  final Map<String, String> _memberNameCache = {};
+  final Set<String> _memberNameLoading = {};
 
   @override
   Widget build(BuildContext context) {
@@ -75,11 +82,16 @@ class _PatientUploadsTabState extends State<PatientUploadsTab> {
                         itemCount: uploads.length,
                         itemBuilder: (context, index) {
                           final u = uploads[index];
+                          final uploaderName = _memberNameFor(u.createdByUid);
                           return _UploadTile(
                             key: ValueKey(u.id),
                             upload: u,
                             repo: _repo,
-                            onTap: () => _openViewer(context, u),
+                            uploadedByLabel: uploaderName,
+                            canWrite: widget.canWrite,
+                            onOpen: () => _openViewer(context, u),
+                            onEditNotes: () => _openEditNotesSheet(context, u),
+                            onShare: () => _shareUpload(context, u),
                             onDelete: widget.canWrite
                                 ? () => _confirmDelete(context, _repo, u)
                                 : null,
@@ -291,6 +303,47 @@ class _PatientUploadsTabState extends State<PatientUploadsTab> {
     return list;
   }
 
+  String _memberNameFor(String? uid) {
+    final clean = (uid ?? '').trim();
+    if (clean.isEmpty) return '-';
+    final cached = _memberNameCache[clean];
+    if (cached != null) return cached;
+    _fetchMemberName(clean);
+    return clean;
+  }
+
+  Future<void> _fetchMemberName(String uid) async {
+    if (_memberNameLoading.contains(uid)) return;
+    _memberNameLoading.add(uid);
+    try {
+      final snap = await FirebaseFirestore.instance
+          .collection('clinics')
+          .doc(widget.clinicId)
+          .collection('members')
+          .doc(uid)
+          .get();
+      final data = snap.data() ?? const <String, dynamic>{};
+      final name = snap.exists ? _nameFromMemberData(data, uid) : uid;
+      _memberNameCache[uid] = name;
+      if (mounted) setState(() {});
+    } catch (_) {
+      _memberNameCache[uid] = uid;
+      if (mounted) setState(() {});
+    } finally {
+      _memberNameLoading.remove(uid);
+    }
+  }
+
+  String _nameFromMemberData(Map<String, dynamic> data, String uid) {
+    final displayName = (data['displayName'] ?? '').toString().trim();
+    if (displayName.isNotEmpty) return displayName;
+    final name = (data['name'] ?? '').toString().trim();
+    if (name.isNotEmpty) return name;
+    final email = (data['email'] ?? '').toString().trim();
+    if (email.isNotEmpty) return email;
+    return uid;
+  }
+
   void _openViewer(BuildContext context, PatientUpload u) {
     Navigator.of(context).push(
       MaterialPageRoute<void>(
@@ -347,6 +400,183 @@ class _PatientUploadsTabState extends State<PatientUploadsTab> {
         SnackBar(content: Text('Delete failed: $e')),
       );
     }
+  }
+
+  Future<void> _openEditNotesSheet(
+    BuildContext context,
+    PatientUpload upload,
+  ) async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('You must be signed in to edit notes.')),
+      );
+      return;
+    }
+
+    final controller = TextEditingController(text: upload.notes);
+    var saving = false;
+    final messenger = ScaffoldMessenger.of(context);
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (sheetContext) {
+        return StatefulBuilder(
+          builder: (sheetContext, setModalState) {
+            return Padding(
+              padding: EdgeInsets.only(
+                bottom: MediaQuery.of(sheetContext).viewInsets.bottom,
+              ),
+              child: SafeArea(
+                top: false,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Text(
+                            'Edit notes',
+                            style: Theme.of(sheetContext).textTheme.titleMedium,
+                          ),
+                          const Spacer(),
+                          IconButton(
+                            onPressed: () => Navigator.pop(sheetContext),
+                            icon: const Icon(Icons.close),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      TextField(
+                        controller: controller,
+                        minLines: 3,
+                        maxLines: 8,
+                        decoration: const InputDecoration(
+                          hintText: 'Add notes...',
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          TextButton(
+                            onPressed: saving
+                                ? null
+                                : () => Navigator.pop(sheetContext),
+                            child: const Text('Cancel'),
+                          ),
+                          const Spacer(),
+                          FilledButton.icon(
+                            onPressed: saving
+                                ? null
+                                : () async {
+                                    setModalState(() => saving = true);
+                                    try {
+                                      final notes = controller.text.trim();
+                                      await _repo.updateNotes(
+                                        clinicId: widget.clinicId,
+                                        patientId: widget.patientId,
+                                        uploadId: upload.id,
+                                        notes: notes,
+                                        updatedByUid: uid,
+                                      );
+                                      if (!mounted) return;
+                                      Navigator.pop(sheetContext);
+                                      messenger.showSnackBar(
+                                        const SnackBar(
+                                            content: Text('Notes saved.')),
+                                      );
+                                    } catch (e) {
+                                      if (!mounted) return;
+                                      setModalState(() => saving = false);
+                                      messenger.showSnackBar(
+                                        SnackBar(
+                                            content: Text('Save failed: $e')),
+                                      );
+                                    }
+                                  },
+                            icon: saving
+                                ? const SizedBox(
+                                    width: 18,
+                                    height: 18,
+                                    child: CircularProgressIndicator(
+                                        strokeWidth: 2),
+                                  )
+                                : const Icon(Icons.save),
+                            label:
+                                Text(saving ? 'Saving...' : 'Save notes'),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+
+    controller.dispose();
+  }
+
+  Future<void> _shareUpload(
+    BuildContext context,
+    PatientUpload upload,
+  ) async {
+    final ok = await _confirmShare(context);
+    if (ok != true) return;
+
+    try {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Preparing share...')),
+      );
+      final bytes = await _repo.getBytes(storagePath: upload.storagePath);
+      final dir = await getTemporaryDirectory();
+      final ext = upload.fileName.contains('.')
+          ? upload.fileName.split('.').last
+          : (upload.isPdf ? 'pdf' : 'bin');
+      final file = File('${dir.path}/share_${upload.id}.$ext');
+      await file.writeAsBytes(bytes);
+      if (!context.mounted) return;
+      await Share.shareXFiles(
+        [XFile(file.path)],
+        text: 'Patient document: ${upload.fileName}',
+      );
+    } catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Share failed: $e')),
+      );
+    }
+  }
+
+  Future<bool?> _confirmShare(BuildContext context) async {
+    return showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Share clinical information'),
+        content: const Text(
+          'Sharing patient documents outside the clinic may violate privacy. '
+          'Only share when appropriate and with proper consent.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Continue'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _pickAndUpload(
@@ -468,17 +698,27 @@ class _PatientUploadsTabState extends State<PatientUploadsTab> {
   }
 }
 
+enum _UploadMenuAction { open, editNotes, share, delete }
+
 class _UploadTile extends StatelessWidget {
   final PatientUpload upload;
   final PatientUploadsRepository repo;
-  final VoidCallback onTap;
+  final String uploadedByLabel;
+  final bool canWrite;
+  final VoidCallback onOpen;
+  final VoidCallback onEditNotes;
+  final VoidCallback onShare;
   final VoidCallback? onDelete;
 
   const _UploadTile({
     super.key,
     required this.upload,
     required this.repo,
-    required this.onTap,
+    required this.uploadedByLabel,
+    required this.canWrite,
+    required this.onOpen,
+    required this.onEditNotes,
+    required this.onShare,
     this.onDelete,
   });
 
@@ -498,22 +738,87 @@ class _UploadTile extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              '${_formatSize(upload.sizeBytes)} • ${upload.createdAt != null ? _formatDate(upload.createdAt!) : '—'}'
-              '${upload.createdByUid != null ? ' • by ${upload.createdByUid}' : ''}',
+              _subtitleLine(),
             ),
             const SizedBox(height: 2),
             _notesPreview(context),
           ],
         ),
-        onTap: onTap,
-        trailing: onDelete != null
-            ? IconButton(
-                icon: const Icon(Icons.delete_outline),
-                onPressed: onDelete,
-              )
-            : null,
+        onTap: onOpen,
+        trailing: PopupMenuButton<_UploadMenuAction>(
+          tooltip: 'More actions',
+          onSelected: (action) {
+            switch (action) {
+              case _UploadMenuAction.open:
+                onOpen();
+                break;
+              case _UploadMenuAction.editNotes:
+                onEditNotes();
+                break;
+              case _UploadMenuAction.share:
+                onShare();
+                break;
+              case _UploadMenuAction.delete:
+                onDelete?.call();
+                break;
+            }
+          },
+          itemBuilder: (context) => [
+            PopupMenuItem(
+              value: _UploadMenuAction.open,
+              child: Row(
+                children: const [
+                  Icon(Icons.open_in_new, size: 18),
+                  SizedBox(width: 8),
+                  Text('Open'),
+                ],
+              ),
+            ),
+            if (canWrite)
+              PopupMenuItem(
+                value: _UploadMenuAction.editNotes,
+                child: Row(
+                  children: const [
+                    Icon(Icons.edit_note, size: 18),
+                    SizedBox(width: 8),
+                    Text('Edit notes'),
+                  ],
+                ),
+              ),
+            PopupMenuItem(
+              value: _UploadMenuAction.share,
+              child: Row(
+                children: const [
+                  Icon(Icons.share, size: 18),
+                  SizedBox(width: 8),
+                  Text('Share / Export'),
+                ],
+              ),
+            ),
+            if (onDelete != null)
+              PopupMenuItem(
+                value: _UploadMenuAction.delete,
+                child: Row(
+                  children: const [
+                    Icon(Icons.delete_outline, size: 18),
+                    SizedBox(width: 8),
+                    Text('Delete'),
+                  ],
+                ),
+              ),
+          ],
+          child: const Icon(Icons.more_vert),
+        ),
       ),
     );
+  }
+
+  String _subtitleLine() {
+    final dateLabel =
+        upload.createdAt != null ? _formatDate(upload.createdAt!) : '-';
+    final by = uploadedByLabel.trim();
+    final byLabel = (by.isEmpty || by == '-') ? '' : ' • by $by';
+    return '${_formatSize(upload.sizeBytes)} • $dateLabel$byLabel';
   }
 
   Widget _notesPreview(BuildContext context) {
@@ -521,7 +826,7 @@ class _UploadTile extends StatelessWidget {
     final theme = Theme.of(context);
     if (notes.isEmpty) {
       return Text(
-        'Add notes…',
+        'Add notes...',
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
         style: theme.textTheme.bodySmall?.copyWith(
@@ -563,6 +868,7 @@ class _UploadThumbnail extends StatefulWidget {
 
 class _UploadThumbnailState extends State<_UploadThumbnail> {
   static const double _size = 52;
+  static const int _pdfPreviewMaxBytes = 2 * 1024 * 1024;
 
   Uint8List? _imageBytes;
   Uint8List? _pdfPreviewBytes;
@@ -599,7 +905,15 @@ class _UploadThumbnailState extends State<_UploadThumbnail> {
       _pdfPreviewBytes = null;
     });
 
-    final maxBytes = widget.upload.isPdf ? 4 * 1024 * 1024 : 5 * 1024 * 1024;
+    if (_skipPdfPreview) {
+      setState(() {
+        _loading = false;
+      });
+      return;
+    }
+
+    final maxBytes =
+        widget.upload.isPdf ? _pdfPreviewMaxBytes : 5 * 1024 * 1024;
     final bytes = await widget.repo.getThumbnailBytes(
       storagePath: widget.upload.storagePath,
       maxBytes: maxBytes,
@@ -657,6 +971,13 @@ class _UploadThumbnailState extends State<_UploadThumbnail> {
 
   @override
   Widget build(BuildContext context) {
+    if (_skipPdfPreview) {
+      return _fallbackThumb(
+        context,
+        icon: Icons.picture_as_pdf,
+        badge: 'PDF',
+      );
+    }
     if (_loading) {
       return _loadingThumb(context);
     }
@@ -721,6 +1042,9 @@ class _UploadThumbnailState extends State<_UploadThumbnail> {
       ),
     );
   }
+
+  bool get _skipPdfPreview =>
+      widget.upload.isPdf && widget.upload.sizeBytes > _pdfPreviewMaxBytes;
 
   Widget _fallbackThumb(
     BuildContext context, {
