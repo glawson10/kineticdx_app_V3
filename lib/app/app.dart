@@ -34,6 +34,7 @@ import '../features/public/ui/patient_booking_simple_screen.dart';
 // Preassessment
 import '../preassessment/ui/preassessment_consent_entry_screen.dart';
 import '../preassessment/screens/intake_start_screen.dart' as intake;
+import '../preassessment/screens/general_questionnaire_token_screen.dart';
 
 // Auth
 import '../features/auth/accept_invite_screen.dart';
@@ -80,6 +81,17 @@ class MyApp extends StatelessWidget {
         normalizedPath == AppRoutes.patientBookSimpleLegacy1 ||
         normalizedPath == AppRoutes.patientBookSimpleLegacy2 ||
         normalizedPath == AppRoutes.patientBookSimpleLegacy3;
+  }
+
+  String? _generalTokenFromUri(Uri uri) {
+    final segments = uri.pathSegments;
+    if (segments.length == 3 &&
+        segments[0] == 'q' &&
+        segments[1] == 'general' &&
+        segments[2].trim().isNotEmpty) {
+      return segments[2].trim();
+    }
+    return null;
   }
 
   /// Enable verbose route logs in hosted builds by adding:
@@ -279,6 +291,7 @@ class MyApp extends StatelessWidget {
         _isBookingAliasPath(path) ||
         path == AppRoutes.preassessmentConsent ||
         path == AppRoutes.intakeStart ||
+        _generalTokenFromUri(uri) != null ||
         path == AcceptInviteScreen.routeName ||
         path == '/intake') {
       return true;
@@ -406,6 +419,16 @@ class MyApp extends StatelessWidget {
       }
 
       default: {
+        final generalToken = _generalTokenFromUri(routeUri);
+        if (generalToken != null) {
+          return MaterialPageRoute(
+            settings: settings,
+            builder: (_) => GeneralQuestionnaireTokenScreen(
+              token: generalToken,
+            ),
+          );
+        }
+
         // Booking screen (canonical + legacy aliases)
         if (_isBookingAliasPath(normalizedPath)) {
           final corp = _corpFor(settings, routeUri);

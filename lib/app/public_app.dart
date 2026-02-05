@@ -10,6 +10,7 @@ import '../features/public/ui/price_list_screen.dart';
 import '../features/public/ui/patient_booking_simple_screen.dart';
 import '../preassessment/ui/preassessment_consent_entry_screen.dart';
 import '../preassessment/screens/intake_start_screen.dart' as intake;
+import '../preassessment/screens/general_questionnaire_token_screen.dart';
 
 class PublicApp extends StatelessWidget {
   const PublicApp({super.key});
@@ -43,6 +44,17 @@ class PublicApp extends StatelessWidget {
         p == '/patient-book-simple';
   }
 
+  String? _generalTokenFromPath(Uri uri) {
+    final segments = uri.pathSegments;
+    if (segments.length == 3 &&
+        segments[0] == 'q' &&
+        segments[1] == 'general' &&
+        segments[2].trim().isNotEmpty) {
+      return segments[2].trim();
+    }
+    return null;
+  }
+
   MaterialPageRoute _missingClinic(String routeName) {
     return MaterialPageRoute(
       settings: RouteSettings(name: routeName),
@@ -73,6 +85,16 @@ class PublicApp extends StatelessWidget {
         final clinicId = _clinicIdFrom(uri);
         final corp = _corpFrom(uri);
         final corpOrNull = corp.isEmpty ? null : corp;
+        final generalToken = _generalTokenFromPath(uri);
+
+        if (generalToken != null) {
+          return MaterialPageRoute(
+            settings: settings,
+            builder: (_) => GeneralQuestionnaireTokenScreen(
+              token: generalToken,
+            ),
+          );
+        }
 
         switch (path) {
           case '/':

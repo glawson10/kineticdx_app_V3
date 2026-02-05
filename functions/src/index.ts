@@ -94,6 +94,8 @@ import { getAssessmentPack } from "./clinic/assessments/getAssessmentPack";
 import { submitIntakeSession } from "./clinic/intake/submitIntakeSession";
 export { computeIntakeSummaryV2 } from "./clinic/intake/computeIntakeSummary";
 export * from "./clinic/intake/computeDecisionSupport";
+import { createGeneralQuestionnaireLinkFn } from "./intake/createGeneralQuestionnaireLinkFn";
+import { resolveIntakeLinkTokenFn } from "./intake/resolveIntakeLinkTokenFn";
 
 // ─────────────────────────────
 // Audit exports
@@ -293,6 +295,7 @@ export const submitIntakeSessionFn = onCall(
   { region: REGION, cors: true, serviceAccount: RUNTIME_SA },
   submitIntakeSession
 );
+export { createGeneralQuestionnaireLinkFn, resolveIntakeLinkTokenFn };
 
 // Audit
 export const exportClosureOverrideAuditReportFn = onCall(

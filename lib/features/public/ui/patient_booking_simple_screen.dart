@@ -1117,6 +1117,58 @@ class _PatientBookingSimpleScreenState
     );
   }
 
+  Future<void> _showPreparingQuestionnaireDialog() async {
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const AlertDialog(
+        title: Text('Preparing questionnaire…'),
+        content: Padding(
+          padding: EdgeInsets.only(top: 8),
+          child: Row(
+            children: [
+              SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+              SizedBox(width: 12),
+              Expanded(
+                child: Text('Please wait while we prepare your form.'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<String> _createGeneralQuestionnaireToken({
+    required _PatientFormResult patient,
+  }) async {
+    final functions = FirebaseFunctions.instanceFor(region: 'europe-west3');
+    final fn = functions.httpsCallable('createGeneralQuestionnaireLinkFn');
+
+    final res = await fn.call(<String, dynamic>{
+      'clinicId': widget.clinicId.trim(),
+      'email': patient.email,
+      'expiresInDays': 7,
+    });
+
+    if (res.data is! Map) {
+      throw Exception('Server returned unexpected payload: ${res.data}');
+    }
+
+    final data = Map<String, dynamic>.from(res.data as Map);
+    final token = (data['token'] ?? '').toString().trim();
+    if (token.isEmpty) {
+      throw Exception('Server did not return a token.');
+    }
+
+    return token;
+  }
+
   void _closeDialogIfOpen() {
     if (!mounted) return;
     final nav = Navigator.of(context);
@@ -1145,15 +1197,15 @@ class _PatientBookingSimpleScreenState
     );
   }
 
-  /// ✅ UPDATED: pass bookingRequestId through to preassessment route arguments
+  /// ✅ Updated: ask which questionnaire to complete after booking
   Future<void> _askPreassessmentNextStep(
     _PatientFormResult patient, {
     required String bookingRequestId,
   }) async {
-    final result = await showDialog<bool>(
+    final result = await showDialog<_IntakeChoice>(
       context: context,
       barrierDismissible: false,
-      builder: (_) => const _PreassessmentPromptDialog(),
+      builder: (_) => const _QuestionnaireChoiceDialog(),
     );
 
     if (!mounted) return;
@@ -1162,13 +1214,9 @@ class _PatientBookingSimpleScreenState
     await Future.delayed(_fadePause);
     if (!mounted) return;
 
-    if (result == true) {
-      await Navigator.of(context).pushNamedAndRemoveUntil(
-        AppRoutes.publicHome,
-        (r) => false,
-        arguments: {'clinicId': widget.clinicId},
-      );
-    } else {
+    if (result == _IntakeChoice.skip) return;
+
+    if (result == _IntakeChoice.preassessment) {
       await Navigator.of(context).push(
         PageRouteBuilder(
           transitionDuration: _fadeDuration,
@@ -1191,6 +1239,40 @@ class _PatientBookingSimpleScreenState
               FadeTransition(opacity: anim, child: child),
         ),
       );
+      return;
+    }
+
+    if (result == _IntakeChoice.general) {
+      unawaited(_showPreparingQuestionnaireDialog());
+      try {
+        final token =
+            await _createGeneralQuestionnaireToken(patient: patient);
+        _closeDialogIfOpen();
+        if (!mounted) return;
+
+        await Navigator.of(context).push(
+          PageRouteBuilder(
+            transitionDuration: _fadeDuration,
+            pageBuilder: (_, __, ___) => _PushNamedAfterFrame(
+              routeName:
+                  '${AppRoutes.generalQuestionnaireTokenBase}/$token',
+            ),
+            transitionsBuilder: (_, anim, __, child) =>
+                FadeTransition(opacity: anim, child: child),
+          ),
+        );
+      } catch (e) {
+        _closeDialogIfOpen();
+        if (!mounted) return;
+        final msg = e.toString().replaceFirst('Exception: ', '').trim();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              msg.isEmpty ? 'Could not start questionnaire.' : msg,
+            ),
+          ),
+        );
+      }
     }
   }
 
@@ -1833,6 +1915,8 @@ enum BookingKind { newPatient, followUp }
 
 enum CorporateMode { linkOnly, codeUnlock }
 
+enum _IntakeChoice { skip, preassessment, general }
+
 class _AppointmentType {
   final int minutes;
   final BookingKind kind;
@@ -1898,43 +1982,60 @@ class _PractitionerOption {
 // -----------------------------------------------------------------------------
 // Dialogs / helpers
 // -----------------------------------------------------------------------------
-class _PreassessmentPromptDialog extends StatelessWidget {
-  const _PreassessmentPromptDialog();
+class _QuestionnaireChoiceDialog extends StatelessWidget {
+  const _QuestionnaireChoiceDialog();
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
 
     return AlertDialog(
-      title: const Text('Preassessment'),
+      title: const Text('Questionnaire'),
       content: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const Text(
-            'Have you completed the preassessment screening questionnaire?',
+            'Would you like to complete a questionnaire now?',
           ),
           const SizedBox(height: 10),
           Text(
-            'Completing the preassessment helps your clinician understand your symptoms and goals before you arrive, '
-            'so your session can be more focused and tailored to you from the start.',
+            'Questionnaires help your clinician understand your goals and symptoms before you arrive.',
             style: theme.textTheme.bodySmall?.copyWith(
               height: 1.35,
               color: Colors.black54,
             ),
           ),
+          const SizedBox(height: 16),
+          SizedBox(
+            width: double.infinity,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                OutlinedButton(
+                  onPressed: () =>
+                      Navigator.pop(context, _IntakeChoice.skip),
+                  child: const Text('Skip and continue booking'),
+                ),
+                const SizedBox(height: 8),
+                FilledButton(
+                  onPressed: () =>
+                      Navigator.pop(context, _IntakeChoice.preassessment),
+                  child:
+                      const Text('Specific issue (Preassessment questionnaire)'),
+                ),
+                const SizedBox(height: 8),
+                FilledButton.tonal(
+                  onPressed: () =>
+                      Navigator.pop(context, _IntakeChoice.general),
+                  child: const Text(
+                      'General issue (General questionnaire)'),
+                ),
+              ],
+            ),
+          ),
         ],
       ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context, true),
-          child: const Text('Yes'),
-        ),
-        FilledButton(
-          onPressed: () => Navigator.pop(context, false),
-          child: const Text('No'),
-        ),
-      ],
     );
   }
 }
