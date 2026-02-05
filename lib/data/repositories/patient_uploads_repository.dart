@@ -84,6 +84,7 @@ class PatientUploadsRepository {
       'createdByUid': createdByUid,
       'status': 'active',
       'notes': '',
+      'tags': <String>[],
     };
     await _uploadsRef(clinicId, patientId).doc(uploadId).set(meta);
     return uploadId;
@@ -151,5 +152,32 @@ class PatientUploadsRepository {
       'updatedAt': FieldValue.serverTimestamp(),
       'updatedByUid': updatedByUid,
     });
+  }
+
+  /// Update tags and audit fields on an upload.
+  Future<void> updateTags({
+    required String clinicId,
+    required String patientId,
+    required String uploadId,
+    required List<String> tags,
+    required String updatedByUid,
+  }) async {
+    await _uploadsRef(clinicId, patientId).doc(uploadId).update({
+      'tags': _normalizeTags(tags),
+      'updatedAt': FieldValue.serverTimestamp(),
+      'updatedByUid': updatedByUid,
+    });
+  }
+
+  static List<String> _normalizeTags(Iterable<String> raw) {
+    final allowed = kPatientUploadTags.toSet();
+    final out = <String>[];
+    for (final tag in raw) {
+      final clean = tag.trim();
+      if (clean.isEmpty) continue;
+      if (!allowed.contains(clean)) continue;
+      if (!out.contains(clean)) out.add(clean);
+    }
+    return out;
   }
 }

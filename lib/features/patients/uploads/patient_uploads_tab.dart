@@ -48,6 +48,7 @@ class _PatientUploadsTabState extends State<PatientUploadsTab> {
   bool _sortDescending = true; // newest / largest first by default
   final Map<String, String> _memberNameCache = {};
   final Set<String> _memberNameLoading = {};
+  Set<String> _selectedTags = {};
 
   @override
   Widget build(BuildContext context) {
@@ -91,6 +92,7 @@ class _PatientUploadsTabState extends State<PatientUploadsTab> {
                             canWrite: widget.canWrite,
                             onOpen: () => _openViewer(context, u),
                             onEditNotes: () => _openEditNotesSheet(context, u),
+                            onEditTags: () => _openEditTagsSheet(context, u),
                             onShare: () => _shareUpload(context, u),
                             onDelete: widget.canWrite
                                 ? () => _confirmDelete(context, _repo, u)
@@ -165,6 +167,12 @@ class _PatientUploadsTabState extends State<PatientUploadsTab> {
                     ),
                   ],
                 ),
+              ),
+              const SizedBox(width: 8),
+              OutlinedButton.icon(
+                onPressed: () => _openTagFilterSheet(context),
+                icon: const Icon(Icons.local_offer_outlined, size: 18),
+                label: Text(_tagFilterLabel()),
               ),
               const SizedBox(width: 8),
               PopupMenuButton<_UploadSortKey>(
@@ -247,6 +255,12 @@ class _PatientUploadsTabState extends State<PatientUploadsTab> {
     }
   }
 
+  String _tagFilterLabel() {
+    final count = _selectedTags.length;
+    if (count == 0) return 'Tags';
+    return 'Tags ($count)';
+  }
+
   List<PatientUpload> _applyFiltersAndSort(List<PatientUpload> source) {
     Iterable<PatientUpload> filtered = source;
 
@@ -272,6 +286,13 @@ class _PatientUploadsTabState extends State<PatientUploadsTab> {
           return !u.isImage && !u.isPdf;
       }
     });
+
+    if (_selectedTags.isNotEmpty) {
+      filtered = filtered.where((u) {
+        final tags = u.tags.toSet();
+        return _selectedTags.every(tags.contains);
+      });
+    }
 
     final list = filtered.toList();
 
@@ -301,6 +322,83 @@ class _PatientUploadsTabState extends State<PatientUploadsTab> {
     });
 
     return list;
+  }
+
+  Future<void> _openTagFilterSheet(BuildContext context) async {
+    final local = <String>{..._selectedTags};
+    await showModalBottomSheet<void>(
+      context: context,
+      builder: (sheetContext) {
+        return StatefulBuilder(
+          builder: (sheetContext, setModalState) {
+            return SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Text(
+                          'Filter by tags',
+                          style: Theme.of(sheetContext).textTheme.titleMedium,
+                        ),
+                        const Spacer(),
+                        IconButton(
+                          onPressed: () => Navigator.pop(sheetContext),
+                          icon: const Icon(Icons.close),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        for (final tag in kPatientUploadTags)
+                          FilterChip(
+                            label: Text(tag),
+                            selected: local.contains(tag),
+                            onSelected: (selected) {
+                              setModalState(() {
+                                if (selected) {
+                                  local.add(tag);
+                                } else {
+                                  local.remove(tag);
+                                }
+                              });
+                            },
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        TextButton(
+                          onPressed: local.isEmpty
+                              ? null
+                              : () => setModalState(() => local.clear()),
+                          child: const Text('Clear'),
+                        ),
+                        const Spacer(),
+                        FilledButton(
+                          onPressed: () {
+                            setState(() => _selectedTags = local);
+                            Navigator.pop(sheetContext);
+                          },
+                          child: const Text('Apply'),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
   }
 
   String _memberNameFor(String? uid) {
@@ -525,6 +623,149 @@ class _PatientUploadsTabState extends State<PatientUploadsTab> {
     controller.dispose();
   }
 
+  Future<void> _openEditTagsSheet(
+    BuildContext context,
+    PatientUpload upload,
+  ) async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('You must be signed in to edit tags.')),
+      );
+      return;
+    }
+
+    final initial = <String>{...upload.tags};
+    final selected = <String>{...upload.tags};
+    var saving = false;
+    final messenger = ScaffoldMessenger.of(context);
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (sheetContext) {
+        return StatefulBuilder(
+          builder: (sheetContext, setModalState) {
+            final hasChanges = !_setEquals(selected, initial);
+            return Padding(
+              padding: EdgeInsets.only(
+                bottom: MediaQuery.of(sheetContext).viewInsets.bottom,
+              ),
+              child: SafeArea(
+                top: false,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Text(
+                            'Edit tags',
+                            style: Theme.of(sheetContext).textTheme.titleMedium,
+                          ),
+                          const Spacer(),
+                          IconButton(
+                            onPressed: () => Navigator.pop(sheetContext),
+                            icon: const Icon(Icons.close),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          for (final tag in kPatientUploadTags)
+                            FilterChip(
+                              label: Text(tag),
+                              selected: selected.contains(tag),
+                              onSelected: saving
+                                  ? null
+                                  : (value) {
+                                      setModalState(() {
+                                        if (value) {
+                                          selected.add(tag);
+                                        } else {
+                                          selected.remove(tag);
+                                        }
+                                      });
+                                    },
+                            ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          TextButton(
+                            onPressed: saving
+                                ? null
+                                : () => Navigator.pop(sheetContext),
+                            child: const Text('Cancel'),
+                          ),
+                          const Spacer(),
+                          FilledButton.icon(
+                            onPressed: (!hasChanges || saving)
+                                ? null
+                                : () async {
+                                    setModalState(() => saving = true);
+                                    try {
+                                      await _repo.updateTags(
+                                        clinicId: widget.clinicId,
+                                        patientId: widget.patientId,
+                                        uploadId: upload.id,
+                                        tags: selected.toList(),
+                                        updatedByUid: uid,
+                                      );
+                                      if (!mounted) return;
+                                      Navigator.pop(sheetContext);
+                                      messenger.showSnackBar(
+                                        const SnackBar(
+                                            content: Text('Tags saved.')),
+                                      );
+                                    } catch (e) {
+                                      if (!mounted) return;
+                                      setModalState(() => saving = false);
+                                      messenger.showSnackBar(
+                                        SnackBar(
+                                            content: Text('Save failed: $e')),
+                                      );
+                                    }
+                                  },
+                            icon: saving
+                                ? const SizedBox(
+                                    width: 18,
+                                    height: 18,
+                                    child: CircularProgressIndicator(
+                                        strokeWidth: 2),
+                                  )
+                                : const Icon(Icons.save),
+                            label:
+                                Text(saving ? 'Saving...' : 'Save tags'),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  bool _setEquals(Set<String> a, Set<String> b) {
+    if (a.length != b.length) return false;
+    for (final v in a) {
+      if (!b.contains(v)) return false;
+    }
+    return true;
+  }
+
   Future<void> _shareUpload(
     BuildContext context,
     PatientUpload upload,
@@ -698,7 +939,7 @@ class _PatientUploadsTabState extends State<PatientUploadsTab> {
   }
 }
 
-enum _UploadMenuAction { open, editNotes, share, delete }
+enum _UploadMenuAction { open, editNotes, editTags, share, delete }
 
 class _UploadTile extends StatelessWidget {
   final PatientUpload upload;
@@ -707,6 +948,7 @@ class _UploadTile extends StatelessWidget {
   final bool canWrite;
   final VoidCallback onOpen;
   final VoidCallback onEditNotes;
+  final VoidCallback onEditTags;
   final VoidCallback onShare;
   final VoidCallback? onDelete;
 
@@ -718,6 +960,7 @@ class _UploadTile extends StatelessWidget {
     required this.canWrite,
     required this.onOpen,
     required this.onEditNotes,
+    required this.onEditTags,
     required this.onShare,
     this.onDelete,
   });
@@ -742,6 +985,7 @@ class _UploadTile extends StatelessWidget {
             ),
             const SizedBox(height: 2),
             _notesPreview(context),
+            _tagChips(context),
           ],
         ),
         onTap: onOpen,
@@ -754,6 +998,9 @@ class _UploadTile extends StatelessWidget {
                 break;
               case _UploadMenuAction.editNotes:
                 onEditNotes();
+                break;
+              case _UploadMenuAction.editTags:
+                onEditTags();
                 break;
               case _UploadMenuAction.share:
                 onShare();
@@ -782,6 +1029,17 @@ class _UploadTile extends StatelessWidget {
                     Icon(Icons.edit_note, size: 18),
                     SizedBox(width: 8),
                     Text('Edit notes'),
+                  ],
+                ),
+              ),
+            if (canWrite)
+              PopupMenuItem(
+                value: _UploadMenuAction.editTags,
+                child: Row(
+                  children: const [
+                    Icon(Icons.local_offer_outlined, size: 18),
+                    SizedBox(width: 8),
+                    Text('Edit tags'),
                   ],
                 ),
               ),
@@ -839,6 +1097,39 @@ class _UploadTile extends StatelessWidget {
       maxLines: 1,
       overflow: TextOverflow.ellipsis,
       style: theme.textTheme.bodySmall,
+    );
+  }
+
+  Widget _tagChips(BuildContext context) {
+    final tags = upload.tags;
+    if (tags.isEmpty) return const SizedBox.shrink();
+    final visible = tags.take(2).toList();
+    final extra = tags.length - visible.length;
+    return Padding(
+      padding: const EdgeInsets.only(top: 4),
+      child: Wrap(
+        spacing: 6,
+        runSpacing: 4,
+        children: [
+          for (final tag in visible) _tagChip(context, tag),
+          if (extra > 0) _tagChip(context, '+$extra'),
+        ],
+      ),
+    );
+  }
+
+  Widget _tagChip(BuildContext context, String label) {
+    final theme = Theme.of(context);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceVariant,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Text(
+        label,
+        style: theme.textTheme.labelSmall,
+      ),
     );
   }
 

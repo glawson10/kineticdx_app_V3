@@ -5,6 +5,15 @@
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+const List<String> kPatientUploadTags = [
+  'Imaging',
+  'Referral',
+  'Consent',
+  'Report',
+  'Patient-provided',
+  'Other',
+];
+
 class PatientUpload {
   final String id;
   final String clinicId;
@@ -17,6 +26,7 @@ class PatientUpload {
   final String? createdByUid;
   final String status; // "active" | "deleted"
   final String notes;
+  final List<String> tags;
   final DateTime? updatedAt;
   final String? updatedByUid;
 
@@ -32,6 +42,7 @@ class PatientUpload {
     this.createdByUid,
     required this.status,
     this.notes = '',
+    this.tags = const [],
     this.updatedAt,
     this.updatedByUid,
   });
@@ -45,6 +56,28 @@ class PatientUpload {
   }
 
   static String _str(dynamic v) => v?.toString() ?? '';
+
+  static List<String> _stringList(dynamic v) {
+    if (v is Iterable) {
+      return v
+          .map((e) => e?.toString().trim() ?? '')
+          .where((e) => e.isNotEmpty)
+          .toList();
+    }
+    return <String>[];
+  }
+
+  static List<String> _normalizeTags(dynamic v) {
+    final allowed = kPatientUploadTags.toSet();
+    final raw = _stringList(v);
+    final out = <String>[];
+    for (final tag in raw) {
+      if (allowed.contains(tag) && !out.contains(tag)) {
+        out.add(tag);
+      }
+    }
+    return out;
+  }
 
   factory PatientUpload.fromFirestore(String id, Map<String, dynamic> data) {
     return PatientUpload(
@@ -65,6 +98,7 @@ class PatientUpload {
           : _str(data['createdByUid']),
       status: _str(data['status']).isEmpty ? 'active' : _str(data['status']),
       notes: _str(data['notes']),
+      tags: _normalizeTags(data['tags']),
       updatedAt: _toDate(data['updatedAt']),
       updatedByUid: _str(data['updatedByUid']).isEmpty
           ? null

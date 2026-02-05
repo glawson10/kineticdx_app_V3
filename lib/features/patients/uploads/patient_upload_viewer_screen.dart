@@ -186,6 +186,13 @@ class _PatientUploadViewerScreenState extends State<PatientUploadViewerScreen> {
                     'Updated by',
                     Text(_memberNameFor(updatedByUid)),
                   ),
+                const SizedBox(height: 8),
+                Text(
+                  'Tags',
+                  style: Theme.of(context).textTheme.titleSmall,
+                ),
+                const SizedBox(height: 6),
+                _buildTagChips(context),
                 if (!widget.upload.isPdf && !widget.upload.isImage) ...[
                   const SizedBox(height: 8),
                   OutlinedButton.icon(
@@ -230,6 +237,38 @@ class _PatientUploadViewerScreenState extends State<PatientUploadViewerScreen> {
             ),
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildTagChips(BuildContext context) {
+    final tags = widget.upload.tags;
+    if (tags.isEmpty) {
+      return Text(
+        'None',
+        style: Theme.of(context).textTheme.bodySmall,
+      );
+    }
+    return Wrap(
+      spacing: 6,
+      runSpacing: 4,
+      children: [
+        for (final tag in tags) _tagChip(context, tag),
+      ],
+    );
+  }
+
+  Widget _tagChip(BuildContext context, String label) {
+    final theme = Theme.of(context);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceVariant,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Text(
+        label,
+        style: theme.textTheme.labelSmall,
       ),
     );
   }
