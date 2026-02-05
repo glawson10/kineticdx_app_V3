@@ -16,6 +16,9 @@ class PatientUpload {
   final DateTime? createdAt;
   final String? createdByUid;
   final String status; // "active" | "deleted"
+  final String notes;
+  final DateTime? updatedAt;
+  final String? updatedByUid;
 
   const PatientUpload({
     required this.id,
@@ -28,6 +31,9 @@ class PatientUpload {
     this.createdAt,
     this.createdByUid,
     required this.status,
+    this.notes = '',
+    this.updatedAt,
+    this.updatedByUid,
   });
 
   static DateTime? _toDate(dynamic v) {
@@ -58,6 +64,11 @@ class PatientUpload {
           ? null
           : _str(data['createdByUid']),
       status: _str(data['status']).isEmpty ? 'active' : _str(data['status']),
+      notes: _str(data['notes']),
+      updatedAt: _toDate(data['updatedAt']),
+      updatedByUid: _str(data['updatedByUid']).isEmpty
+          ? null
+          : _str(data['updatedByUid']),
     );
   }
 
@@ -75,4 +86,6 @@ class PatientUpload {
         fn.endsWith('.gif') ||
         fn.endsWith('.webp');
   }
+
+  bool get hasNotes => notes.trim().isNotEmpty;
 }
