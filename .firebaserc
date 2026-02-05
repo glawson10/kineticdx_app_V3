@@ -1,0 +1,27 @@
+{
+  "projects": {
+    "dev": "kineticdx-v3-dev",
+    "prod": "kineticdx-app-v3",
+    "default": "kineticdx-v3-dev"
+  },
+  "targets": {
+    "kineticdx-v3-dev": {
+      "hosting": {
+        "dev": [
+          "kineticdx-v3-dev"
+        ]
+      }
+    },
+    "kineticdx-app-v3": {
+      "hosting": {
+        "prod": [
+          "kineticdx-app-v3"
+        ],
+        "dev": [
+          "kineticdx-v3-dev"
+        ]
+      }
+    }
+  },
+  "etags": {}
+}

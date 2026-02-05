@@ -1,0 +1,22 @@
+{
+  "roleId": "clinician",
+  "permissions": {
+    "settings.read": true,
+    "settings.write": false,
+    "members.read": true,
+    "members.manage": false,
+    "services.manage": false,
+    "resources.manage": false,
+    "registries.manage": false,
+    "schedule.read": true,
+    "schedule.write": true,
+    "patients.read": true,
+    "clinical.read": true,
+    "notes.create": true,
+    "notes.update.own": true,
+    "notes.update.any": false
+  },
+  "active": true,
+  "createdAt": "SERVER_TIMESTAMP",
+  "updatedAt": "SERVER_TIMESTAMP"
+}

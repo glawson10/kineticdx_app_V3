@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+
+  "noteType": "initial",
+  "patientId": "string",
+  "episodeId": "string",
+
+  "appointmentId": null,
+  "assessmentId": null,
+  "previousNoteId": null,
+
+  "clinicianId": "string",
+
+  "soap": {},
+
+  "amendmentCount": 0,
+  "lastAmendedAt": null,
+  "lastAmendedByUid": null,
+
+  "createdAt": "timestamp",
+  "updatedAt": "timestamp"
+}

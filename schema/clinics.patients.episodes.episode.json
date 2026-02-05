@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "patientId": "string",
+  "status": "open",
+  "startedAt": "timestamp",
+  "closedAt": null,
+
+  "lastNoteId": null,
+  "lastNoteAt": null,
+  "noteCount": 0
+}

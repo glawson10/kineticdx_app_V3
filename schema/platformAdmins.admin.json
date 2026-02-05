@@ -1,0 +1,7 @@
+{
+  "uid": "uid_platform_admin",
+  "email": "admin@yourapp.com",
+  "active": true,
+  "role": "platform_admin",
+  "createdAt": "SERVER_TIMESTAMP"
+}

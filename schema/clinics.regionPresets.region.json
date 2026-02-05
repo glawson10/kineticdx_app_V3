@@ -1,0 +1,9 @@
+{
+  "regionKey": "cervical",
+  "label": "Neck / Cervical",
+  "defaultObjectiveTemplateId": "cervical_v1",
+  "defaultTestIds": ["spurling", "ulnt1"],
+  "defaultOutcomeMeasureIds": ["NDI", "PSFS"],
+  "active": true,
+  "updatedAt": "SERVER_TIMESTAMP"
+}

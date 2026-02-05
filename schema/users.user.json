@@ -1,0 +1,12 @@
+{
+  "displayName": "Jane Clinician",
+  "email": "jane@example.com",
+  "phone": null,
+  "defaultClinicId": "clinic_abc",
+  "onboarding": {
+    "completedIntro": true,
+    "hasCreatedClinic": false
+  },
+  "createdAt": "SERVER_TIMESTAMP",
+  "lastSeenAt": "SERVER_TIMESTAMP"
+}

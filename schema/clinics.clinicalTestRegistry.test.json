@@ -1,0 +1,11 @@
+{
+  "testId": "spurling",
+  "name": "Spurling Test",
+  "region": "cervical",
+  "category": "provocation",
+  "evidenceLevel": "moderate",
+  "instructions": "Standardized description here",
+  "active": true,
+  "createdAt": "SERVER_TIMESTAMP",
+  "updatedAt": "SERVER_TIMESTAMP"
+}

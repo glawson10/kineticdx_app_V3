@@ -1,0 +1,53 @@
+name: kineticdx_app_v3
+description: "A new Flutter project."
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.3.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  firebase_core: ^4.3.0
+  firebase_auth: ^6.0.0
+  cloud_firestore: ^6.0.0
+  cloud_functions: ^6.0.0
+  provider: ^6.1.2
+  qr_flutter: ^4.1.0
+  cupertino_icons: ^1.0.8
+  video_player: ^2.9.1
+  flutter_lints: ^5.0.0
+  shared_preferences: ^2.2.3
+  http: ^1.2.2
+  url_launcher: ^6.3.0
+  firebase_storage: ^13.0.5
+  file_picker: ^8.1.2
+  image_picker: ^1.0.7
+  path_provider: ^2.1.2
+  share_plus: ^10.0.2
+  pdfx: ^2.9.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+flutter:
+  uses-material-design: true
+
+  assets:
+    - assets/kineticdx_logo.png
+    - assets/Price_List.png
+    - assets/book_online.png
+    - assets/fundamental_recovery.png
+    - assets/intro_h264.mp4
+    - assets/body_map_person.png
+
+  fonts:
+    - family: OpenSans
+      fonts:
+        - asset: assets/fonts/OpenSans-Regular.ttf
+        - asset: assets/fonts/OpenSans-Bold.ttf
+          weight: 700

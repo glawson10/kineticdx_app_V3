@@ -1,0 +1,76 @@
+{
+  "schemaVersion": 2,
+  "clinicId": "WXyILCpdFfdtNhjzeXqD",
+
+  "identity": {
+    "firstName": "John",
+    "lastName": "Smith",
+    "preferredName": null,
+    "dateOfBirth": "TIMESTAMP",
+    "sex": null,
+    "pronouns": null,
+    "language": null
+  },
+
+  "contact": {
+    "email": "j@s.com",
+    "phone": "2",
+    "preferredMethod": null,
+    "address": {
+      "line1": null,
+      "line2": null,
+      "city": null,
+      "postcode": null,
+      "country": null
+    },
+    "consent": {
+      "sms": null,
+      "email": null
+    }
+  },
+
+  "emergencyContact": {
+    "name": null,
+    "relationship": null,
+    "phone": null
+  },
+
+  "referrer": {
+    "source": null,
+    "name": null,
+    "org": null,
+    "phone": null,
+    "email": null
+  },
+
+  "billing": {
+    "isDifferent": false,
+    "name": null,
+    "address": null,
+    "insurer": {
+      "provider": null,
+      "policyNumber": null
+    },
+    "invoiceNotes": null
+  },
+
+  "tags": [],
+  "alerts": [],
+  "adminNotes": null,
+
+  "status": {
+    "active": true,
+    "archived": false,
+    "archivedAt": null
+  },
+
+  "retention": {
+    "policy": "7y",
+    "retentionUntil": "TIMESTAMP"
+  },
+
+  "createdAt": "TIMESTAMP",
+  "updatedAt": "TIMESTAMP",
+  "createdByUid": "uid",
+  "updatedByUid": "uid"
+}

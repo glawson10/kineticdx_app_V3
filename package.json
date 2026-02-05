@@ -1,0 +1,26 @@
+{
+  "name": "functions",
+  "private": true,
+  "main": "index.js",
+  "engines": {
+    "node": "20"
+  },
+  "scripts": {
+    "build": "tsc",
+    "serve": "npm run build && firebase emulators:start --only functions",
+    "deploy": "npm run build && firebase deploy --only functions"
+  },
+  "dependencies": {
+    "@sparticuz/chromium": "^131.0.0",
+    "firebase-admin": "^13.6.0",
+    "firebase-functions": "^7.0.3",
+    "pdfkit": "^0.17.2",
+    "puppeteer-core": "^24.36.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.27",
+    "@types/pdfkit": "^0.17.4",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.4.5"
+  }
+}

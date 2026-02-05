@@ -1,0 +1,7 @@
+{
+  "clinicId": "clinic_abc",
+  "openingHours": { "weekStart": "mon", "daysOrder": "mon", "days": [] },
+  "bookingRules": { "maxDaysInAdvance": 90, "minNoticeMinutes": 120, "cancelNoPenaltyHours": 24 },
+  "publicSlotMinutes": 60,
+  "updatedAt": "SERVER_TIMESTAMP"
+}

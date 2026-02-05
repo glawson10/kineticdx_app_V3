@@ -1,0 +1,8 @@
+{
+  "name": "Initial assessment",
+  "description": "60-minute initial assessment",
+  "defaultMinutes": 60,
+  "active": true,
+  "createdAt": "SERVER_TIMESTAMP",
+  "updatedAt": "SERVER_TIMESTAMP"
+}

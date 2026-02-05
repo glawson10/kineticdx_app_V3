@@ -1,0 +1,15 @@
+{
+  "name": "Clinician",
+  "description": "Standard clinician access",
+  "permissions": {
+    "settings": { "read": true, "write": false },
+    "members": { "read": true, "manage": false },
+    "schedule": { "read": true },
+    "patients": { "read": true },
+    "clinical": { "read": true },
+    "notes": { "create": true, "updateOwn": true, "updateAny": false },
+    "registries": { "manage": false }
+  },
+  "createdAt": "SERVER_TIMESTAMP",
+  "updatedAt": "SERVER_TIMESTAMP"
+}

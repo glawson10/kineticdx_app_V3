@@ -1,0 +1,8 @@
+{
+  "displayName": "Jane Clinician",
+  "userUid": "uid_123",
+  "active": true,
+  "serviceIds": ["initial", "followup"],
+  "createdAt": "SERVER_TIMESTAMP",
+  "updatedAt": "SERVER_TIMESTAMP"
+}

@@ -1,0 +1,14 @@
+{
+  "measureId": "NDI",
+  "name": "Neck Disability Index",
+  "region": "cervical",
+  "scoring": {
+    "type": "numeric",
+    "min": 0,
+    "max": 50,
+    "units": "points"
+  },
+  "active": true,
+  "createdAt": "SERVER_TIMESTAMP",
+  "updatedAt": "SERVER_TIMESTAMP"
+}

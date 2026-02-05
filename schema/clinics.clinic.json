@@ -1,0 +1,94 @@
+{
+  "schemaVersion": 1,
+  "profile": {
+    "name": "KineticDX Prague",
+    "logoUrl": "",
+    "address": "",
+    "phone": "",
+    "email": "",
+    "timezone": "Europe/Prague",
+    "defaultLanguage": "en"
+  },
+  "openingHours": {
+    "weekStart": "mon",
+    "daysOrder": "mon",
+    "days": [
+      { "enabled": true, "morningStart": { "hour": 8, "minute": 0 }, "morningEnd": { "hour": 12, "minute": 0 }, "afternoonStart": { "hour": 13, "minute": 0 }, "afternoonEnd": { "hour": 17, "minute": 0 }, "corporateOnly": false, "corporateCode": null, "locationLabel": null },
+      { "enabled": true, "morningStart": { "hour": 8, "minute": 0 }, "morningEnd": { "hour": 12, "minute": 0 }, "afternoonStart": { "hour": 13, "minute": 0 }, "afternoonEnd": { "hour": 17, "minute": 0 }, "corporateOnly": false, "corporateCode": null, "locationLabel": null },
+      { "enabled": true, "morningStart": { "hour": 8, "minute": 0 }, "morningEnd": { "hour": 12, "minute": 0 }, "afternoonStart": { "hour": 13, "minute": 0 }, "afternoonEnd": { "hour": 17, "minute": 0 }, "corporateOnly": false, "corporateCode": null, "locationLabel": null },
+      { "enabled": true, "morningStart": { "hour": 8, "minute": 0 }, "morningEnd": { "hour": 12, "minute": 0 }, "afternoonStart": { "hour": 13, "minute": 0 }, "afternoonEnd": { "hour": 17, "minute": 0 }, "corporateOnly": false, "corporateCode": null, "locationLabel": null },
+      { "enabled": true, "morningStart": { "hour": 8, "minute": 0 }, "morningEnd": { "hour": 12, "minute": 0 }, "afternoonStart": { "hour": 13, "minute": 0 }, "afternoonEnd": { "hour": 17, "minute": 0 }, "corporateOnly": false, "corporateCode": null, "locationLabel": null },
+      { "enabled": false, "morningStart": { "hour": 8, "minute": 0 }, "morningEnd": { "hour": 12, "minute": 0 }, "afternoonStart": { "hour": 13, "minute": 0 }, "afternoonEnd": { "hour": 17, "minute": 0 }, "corporateOnly": false, "corporateCode": null, "locationLabel": null },
+      { "enabled": false, "morningStart": { "hour": 8, "minute": 0 }, "morningEnd": { "hour": 12, "minute": 0 }, "afternoonStart": { "hour": 13, "minute": 0 }, "afternoonEnd": { "hour": 17, "minute": 0 }, "corporateOnly": false, "corporateCode": null, "locationLabel": null }
+    ]
+  },
+  "bookingStructure": {
+    "defaultSlotMinutes": 20,
+    "adminGridMinutes": 15,
+    "publicSlotMinutes": 60,
+    "slotMinutesByType": {},
+    "bufferBeforeFirst": 0,
+    "bufferBetween": 5,
+    "bufferAfterLast": 0
+  },
+  "bookingRules": {
+    "maxDaysInAdvance": 90,
+    "minNoticeMinutes": 120,
+    "cancelNoPenaltyHours": 24,
+    "patientsCanReschedule": false,
+    "allowGroupOverbook": true,
+    "allowOverlapWithAssistant": true,
+    "preventResourceDoubleBooking": true
+  },
+  "emailConfirmationSettings": {
+    "confirmationSubject": "Your appointment is confirmed",
+    "confirmationHeading": "Your appointment is confirmed",
+    "appointmentDetailsHeading": "Appointment details",
+    "additionalNotesHeading": "Additional notes",
+    "additionalNotes": null,
+    "beforeAppointmentHeading": "Before your appointment",
+    "beforeAppointmentText": "Please complete this questionnaire:",
+    "clinicLocation": null,
+    "corporateLocation": null,
+    "reminderSubject": "Appointment reminder",
+    "reminderHeading": "Your appointment is coming up",
+    "senderName": "KineticDX Prague",
+    "senderEmail": "hello@kineticdx.example",
+    "includePreassessmentSection": true,
+    "includeWhatsAppSection": true,
+    "whatsappNumber": null,
+    "includePhoneSection": true,
+    "phoneNumberForEmails": null
+  },
+  "appearance": {
+    "bookedColor": 4282121726,
+    "attendedColor": 4279321345,
+    "cancelledColor": 4294541581,
+    "noShowColor": 4294198076,
+    "nowLineColor": 4279303463,
+    "slotHeight": 48,
+    "showWeekends": false
+  },
+"billing": {
+  "defaultFee": 0.0,
+  "vatPercent": 0.0,
+  "invoicePrefix": ""
+},
+"settings": {
+  "notes": {
+    "defaults": {
+      "initialTemplate": "standard",
+      "followupTemplate": "standard"
+    },
+    "objective": {
+      "enabledTestIdsByRegion": {
+        "cervical": ["spurling"],
+        "lumbar": ["slr"]
+      },
+      "enabledOutcomeMeasureIds": ["NDI", "ODI", "PSFS"]
+    }
+  }
+},
+"createdAt": "timestamp",
+"updatedAt": "timestamp"
+}

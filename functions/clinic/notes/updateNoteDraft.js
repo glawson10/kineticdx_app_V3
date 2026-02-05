@@ -1,0 +1,99 @@
+"use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.updateNoteDraft = updateNoteDraft;
+const https_1 = require("firebase-functions/v2/https");
+const admin = __importStar(require("firebase-admin"));
+const authz_1 = require("../authz");
+const paths_1 = require("../paths");
+function asObj(v) {
+    if (!v || typeof v !== "object" || Array.isArray(v))
+        return null;
+    return v;
+}
+async function updateNoteDraft(req) {
+    var _a, _b, _c, _d, _e, _f, _g, _h, _j;
+    if (!req.auth)
+        throw new https_1.HttpsError("unauthenticated", "Sign in required.");
+    const clinicId = ((_b = (_a = req.data) === null || _a === void 0 ? void 0 : _a.clinicId) !== null && _b !== void 0 ? _b : "").trim();
+    const patientId = ((_d = (_c = req.data) === null || _c === void 0 ? void 0 : _c.patientId) !== null && _d !== void 0 ? _d : "").trim();
+    const episodeId = ((_f = (_e = req.data) === null || _e === void 0 ? void 0 : _e.episodeId) !== null && _f !== void 0 ? _f : "").trim();
+    const draftId = ((_h = (_g = req.data) === null || _g === void 0 ? void 0 : _g.draftId) !== null && _h !== void 0 ? _h : "").trim();
+    const note = asObj((_j = req.data) === null || _j === void 0 ? void 0 : _j.note);
+    if (!clinicId || !patientId || !episodeId || !draftId) {
+        throw new https_1.HttpsError("invalid-argument", "clinicId, patientId, episodeId, draftId required.");
+    }
+    if (!note)
+        throw new https_1.HttpsError("invalid-argument", "note must be an object.");
+    const db = admin.firestore();
+    const uid = req.auth.uid;
+    const epRef = (0, paths_1.episodeRef)(db, clinicId, patientId, episodeId);
+    const drRef = (0, paths_1.noteDraftRef)(db, clinicId, patientId, episodeId, draftId);
+    await db.runTransaction(async (tx) => {
+        var _a;
+        const epSnap = await tx.get(epRef);
+        if (!epSnap.exists)
+            throw new https_1.HttpsError("not-found", "Episode not found.");
+        const drSnap = await tx.get(drRef);
+        if (!drSnap.exists)
+            throw new https_1.HttpsError("not-found", "Draft not found.");
+        const draft = drSnap.data();
+        if (draft.status !== "draft") {
+            throw new https_1.HttpsError("failed-precondition", "Draft is not editable.");
+        }
+        const authorUid = ((_a = draft.authorUid) !== null && _a !== void 0 ? _a : "").toString();
+        const isAuthor = authorUid === uid;
+        const canWriteOwn = await (0, authz_1.hasPerm)(db, clinicId, uid, "notes.write.own");
+        const canWriteAny = await (0, authz_1.hasPerm)(db, clinicId, uid, "notes.write.any");
+        if (isAuthor) {
+            if (!canWriteOwn && !canWriteAny) {
+                throw new https_1.HttpsError("permission-denied", "Missing permission: notes.write.own");
+            }
+        }
+        else {
+            if (!canWriteAny) {
+                throw new https_1.HttpsError("permission-denied", "Only managers can edit others' drafts.");
+            }
+        }
+        const now = admin.firestore.FieldValue.serverTimestamp();
+        tx.update(drRef, {
+            current: note,
+            updatedAt: now,
+            version: admin.firestore.FieldValue.increment(1),
+        });
+    });
+    return { success: true, draftId };
+}
+//# sourceMappingURL=updateNoteDraft.js.map

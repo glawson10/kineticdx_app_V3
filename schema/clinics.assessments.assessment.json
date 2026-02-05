@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "type": "assessment",
+  "path": "clinics/{clinicId}/assessments/{assessmentId}",
+  "description": "Phase 3 intake/preassessment submission (clinic-scoped, functions-only writes).",
+  "fields": {
+    "schemaVersion": { "type": "number", "required": true },
+
+    "clinicId": { "type": "string", "required": true },
+    "packId": { "type": "string", "required": true },
+    "regionKey": { "type": "string", "required": true },
+
+    "patientId": { "type": ["string", "null"], "required": false },
+    "appointmentId": { "type": ["string", "null"], "required": false },
+
+    "consentGiven": { "type": "boolean", "required": false },
+    "triageStatus": { "type": ["string", "null"], "required": false, "enum": ["green", "amber", "red", null] },
+
+    "answers": { "type": "object", "required": true },
+
+    "clinicianSummary": { "type": ["string", "null"], "required": false },
+
+    "submittedBy": {
+      "type": "object",
+      "required": true,
+      "fields": {
+        "type": { "type": "string", "required": true, "enum": ["staff"] },
+        "uid": { "type": "string", "required": true }
+      }
+    },
+
+    "createdAt": { "type": "timestamp", "required": true },
+    "updatedAt": { "type": "timestamp", "required": true }
+  }
+}

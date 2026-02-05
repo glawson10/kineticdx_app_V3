@@ -1,0 +1,313 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ─────────────────────────────
+    // Helpers
+    // ─────────────────────────────
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function uid() {
+      return request.auth.uid;
+    }
+
+    // ✅ AUTHORIZATION MEMBERSHIP PATHS (clinic-scoped only)
+    // Canonical: clinics/{clinicId}/members/{uid}
+    function memberPathCanonical(clinicId) {
+      return /databases/$(database)/documents/clinics/$(clinicId)/members/$(uid());
+    }
+
+    // Legacy fallback: clinics/{clinicId}/memberships/{uid}
+    function memberPathLegacy(clinicId) {
+      return /databases/$(database)/documents/clinics/$(clinicId)/memberships/$(uid());
+    }
+
+    function hasAuthMemberDoc(clinicId) {
+      return isSignedIn() && (
+        exists(memberPathCanonical(clinicId)) ||
+        exists(memberPathLegacy(clinicId))
+      );
+    }
+
+    function authMemberData(clinicId) {
+      return exists(memberPathCanonical(clinicId))
+        ? get(memberPathCanonical(clinicId)).data
+        : get(memberPathLegacy(clinicId)).data;
+    }
+
+    // Treat missing "active" as active (backwards compatible)
+    function isActiveMember(clinicId) {
+      return hasAuthMemberDoc(clinicId)
+        && (!("active" in authMemberData(clinicId)) || authMemberData(clinicId).active == true);
+    }
+
+    // ✅ V3 rule: roles do NOT grant access. Only explicit permission flags do.
+    function hasPerm(clinicId, p) {
+      return isActiveMember(clinicId)
+        && ("permissions" in authMemberData(clinicId))
+        && (authMemberData(clinicId).permissions[p] == true);
+    }
+
+    // ─────────────────────────────
+    // USERS (global)
+    // ─────────────────────────────
+    match /users/{uidParam} {
+      allow read, create, update, delete:
+        if isSignedIn() && uid() == uidParam;
+
+      // ✅ Picker index mirror only (NOT auth source)
+      match /memberships/{clinicId} {
+        allow read: if isSignedIn() && uid() == uidParam;
+        allow write: if false;
+      }
+
+      match /{document=**} {
+        allow read, write: if false;
+      }
+    }
+
+    // ─────────────────────────────
+    // CLINICS (tenant root)
+    // ─────────────────────────────
+    match /clinics/{clinicId} {
+
+      // Clinic root
+      allow create, delete: if false;
+      allow read: if hasPerm(clinicId, "settings.read");
+      allow update: if hasPerm(clinicId, "settings.write");
+
+      // ─────────────────────────────
+      // Clinic Settings
+      // clinics/{clinicId}/settings/{docId}
+      // ─────────────────────────────
+      match /settings/{docId} {
+        allow read: if hasPerm(clinicId, "settings.read");
+        allow create, update, delete: if hasPerm(clinicId, "settings.write");
+      }
+
+      // Members (canonical path)
+      match /members/{memberUid} {
+        allow read:
+          if hasPerm(clinicId, "members.read")
+          || (isSignedIn() && uid() == memberUid);
+        allow write: if false;
+      }
+
+      // Memberships (legacy path - allow reads during migration)
+      match /memberships/{memberUid} {
+        allow read:
+          if hasPerm(clinicId, "members.read")
+          || (isSignedIn() && uid() == memberUid);
+        allow write: if false;
+      }
+
+      // Roles
+      match /roles/{roleId} {
+        allow read: if isActiveMember(clinicId);
+        allow write: if false;
+      }
+
+      // Invites
+      match /invites/{inviteId} {
+        allow read: if hasPerm(clinicId, "members.manage");
+        allow write: if false;
+      }
+
+      // Services / Resources / Practitioners
+      match /services/{serviceId} {
+        allow read: if isActiveMember(clinicId);
+        allow write: if hasPerm(clinicId, "services.manage");
+      }
+
+      match /resources/{resourceId} {
+        allow read: if isActiveMember(clinicId);
+        allow write: if hasPerm(clinicId, "resources.manage");
+      }
+
+      match /practitioners/{practitionerId} {
+        allow read: if isActiveMember(clinicId);
+        allow write: if hasPerm(clinicId, "members.manage");
+      }
+
+      // ─────────────────────────────
+      // Staff Profiles (HR-ish)
+      // clinics/{clinicId}/staffProfiles/{uid}
+      // ─────────────────────────────
+      match /staffProfiles/{staffUid} {
+        allow read:
+          if hasPerm(clinicId, "members.read")
+          || (isSignedIn() && uid() == staffUid);
+
+        // Write: function-authoritative only
+        allow create, update, delete: if false;
+
+        match /availability/{docId} {
+          allow read:
+            if hasPerm(clinicId, "members.read")
+            || (isSignedIn() && uid() == staffUid);
+
+          allow create, update, delete: if false;
+        }
+
+        match /{document=**} {
+          allow read, write: if false;
+        }
+      }
+
+      // ─────────────────────────────
+      // Appointments (clinic calendar)
+      // ─────────────────────────────
+      match /appointments/{appointmentId} {
+  allow read: if hasPerm(clinicId, "schedule.read");
+  allow create, update, delete: if false;
+}
+
+      // ─────────────────────────────
+      // Closures (calendar modifiers)
+      // ─────────────────────────────
+match /closures/{closureId} {
+  allow read: if hasPerm(clinicId, "schedule.read");
+  allow create, update, delete: if false;
+}
+
+      // Audit
+      match /audit/{auditId} {
+        allow read:
+          if hasPerm(clinicId, "audit.read")
+          || hasPerm(clinicId, "settings.read");
+        allow write: if false;
+      }
+
+      // Phase 3
+      match /assessmentPacks/{packId} {
+        allow read: if isActiveMember(clinicId);
+        allow write: if false;
+      }
+
+      match /assessments/{assessmentId} {
+        allow read:
+          if hasPerm(clinicId, "clinical.read")
+          || hasPerm(clinicId, "notes.read");
+        allow write: if false;
+      }
+
+      match /intakeSessions/{intakeSessionId} {
+        allow read:
+          if hasPerm(clinicId, "clinical.read")
+          || hasPerm(clinicId, "notes.read");
+        allow write: if false;
+      }
+
+      match /decisionSupport/{intakeSessionId} {
+        allow read:
+          if hasPerm(clinicId, "clinical.read")
+          || hasPerm(clinicId, "notes.read");
+        allow write: if false;
+      }
+
+      // Registries
+      match /clinicalTestRegistry/{testId} {
+        allow read: if isActiveMember(clinicId);
+        allow write: if hasPerm(clinicId, "registries.manage");
+      }
+
+      match /outcomeMeasures/{measureId} {
+        allow read: if isActiveMember(clinicId);
+        allow write: if hasPerm(clinicId, "registries.manage");
+      }
+
+      // Patients (function-authoritative writes)
+      match /patients/{patientId} {
+        allow read: if hasPerm(clinicId, "patients.read");
+        allow write: if false;
+
+        match /episodes/{episodeId} {
+          allow read: if hasPerm(clinicId, "clinical.read");
+          allow write: if false;
+
+          match /notes/{noteId} {
+            allow read:
+              if hasPerm(clinicId, "notes.read")
+              || hasPerm(clinicId, "clinical.read");
+            allow write: if false;
+
+            match /amendments/{amendId} {
+              allow read:
+                if hasPerm(clinicId, "notes.read")
+                || hasPerm(clinicId, "clinical.read");
+              allow write: if false;
+            }
+          }
+        }
+
+        // Patient uploads (documents/images) – read: clinical or patients.read; write: patients.write
+        match /uploads/{uploadId} {
+          allow read:
+            if hasPerm(clinicId, "clinical.read")
+            || hasPerm(clinicId, "patients.read");
+          allow create, update, delete: if hasPerm(clinicId, "patients.write");
+        }
+      }
+
+      // ─────────────────────────────
+      // PUBLIC AVAILABILITY (read-only)
+      // clinics/{clinicId}/public/**/*
+      // ─────────────────────────────
+      match /public/{docId} {
+        allow read: if true;
+        allow write: if false;
+
+        match /{document=**} {
+          allow read: if true;
+          allow write: if false;
+        }
+      }
+
+      // ─────────────────────────────
+      // BOOKING REQUESTS (Option 1)
+      // ✅ Client NEVER writes bookingRequests (callable creates it).
+      // Client can read their own booking request; staff can read via schedule.read.
+      //
+      // IMPORTANT:
+      // Firestore listeners can evaluate rules at moments where `resource` is null.
+      // If you reference `resource.data` unguarded, you can get "insufficient permissions"
+      // even though the doc exists a moment later.
+      // ─────────────────────────────
+      match /bookingRequests/{requestId} {
+        allow create: if false;
+
+        // ✅ Guard resource access to avoid transient permission errors
+        allow read: if isSignedIn() && (
+          (resource != null &&
+            (resource.data.requesterUid == uid() || hasPerm(clinicId, "schedule.read"))
+          )
+          || resource == null
+        );
+
+        allow update: if false;
+        allow delete: if false;
+      }
+
+      // Default deny inside clinic
+      match /{document=**} {
+        allow read, write: if false;
+      }
+    }
+
+    // PLATFORM (locked)
+    match /platform/{document=**} {
+      allow read, write: if false;
+    }
+
+    match /platformAdmins/{document=**} {
+      allow read, write: if false;
+    }
+
+    // Global default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

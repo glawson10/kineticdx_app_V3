@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "features": {
+    "supportAccessEnabled": false
+  },
+  "limits": {
+    "freeTierClinics": 1,
+    "maxStaffPerClinicDefault": 5
+  },
+  "updatedAt": "SERVER_TIMESTAMP"
+}

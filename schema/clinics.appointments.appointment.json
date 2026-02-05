@@ -1,0 +1,16 @@
+{
+  "patientId": "patient_001",
+  "practitionerId": "pract_001",
+  "serviceId": "initial",
+  "start": "2026-01-05T08:00:00.000Z",
+  "end": "2026-01-05T09:00:00.000Z",
+  "status": "booked",
+  "notes": {
+    "noteId": null,
+    "noteType": "initial",
+    "assessmentId": null,
+    "episodeId": null
+  },
+  "createdAt": "SERVER_TIMESTAMP",
+  "updatedAt": "SERVER_TIMESTAMP"
+}

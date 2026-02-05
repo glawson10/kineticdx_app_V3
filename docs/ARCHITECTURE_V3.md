@@ -1,0 +1,382 @@
+# Clinical Platform Architecture (V3)
+
+This document defines the **canonical architecture** for the platform.
+
+It is a **multi-tenant, security-first clinical system** built on:
+- Firebase Auth
+- Firestore
+- Cloud Functions
+- Firebase Storage
+
+Any implementation, feature, migration, or AI-generated code **must conform** to this document.
+
+Breaking changes require:
+- a schema version increment
+- a documented migration strategy
+
+This document is **authoritative**.
+
+---
+
+## 1. Core Principles
+
+### 1.1 Clinic-first tenancy
+- All sensitive data is scoped to a clinic
+- There is no concept of a “global patient”
+- Every access path includes `clinicId`
+
+❌ Anti-patterns:
+- Global `patients` collection
+- Nullable `clinicId` fields
+- Shared tenant data
+
+---
+
+### 1.2 Zero trust
+- UI is never trusted
+- Client code is never trusted
+- Authentication alone is not sufficient
+
+**Only Firestore documents + Firestore rules grant access**
+
+---
+
+### 1.3 Public vs private is absolute
+- Public booking data is projection-only
+- Public users never touch private collections
+- No write access exists in public paths
+
+---
+
+## 2. Data Ownership
+
+| Data | Owner |
+|-----|------|
+| Patient & clinical data | Clinic |
+| Staff permissions | Clinic |
+| Roles | Clinic |
+| Public booking projection | System |
+| Platform configuration | Platform owner |
+| Subscriptions & limits | Platform owner |
+
+---
+
+## 3. Identity & Membership
+
+### 3.1 Users are global
+- Firebase Auth UID identifies a person
+- Users may belong to zero, one, or many clinics
+
+---
+
+### 3.2 Membership is mandatory
+All clinic access requires **all three**:
+1. Authenticated user
+2. Active membership document
+3. Explicit permission flag
+
+There are **no exceptions**.
+
+---
+
+## 4. Permissions System
+
+### 4.1 Atomic permissions
+Permissions are:
+- Explicit
+- Boolean
+- Flattened onto membership documents
+
+❌ No role inference  
+❌ No implicit access  
+
+---
+
+### 4.2 Roles are templates
+- Roles define permission templates
+- Roles do **not** grant access directly
+- Membership documents grant access
+
+---
+
+## 5. Platform Admin Boundary
+
+### 5.1 Platform admins are not clinic members
+- Platform admins do not bypass clinic rules
+- They operate via custom auth claims
+- They cannot see patient data by default
+
+---
+
+### 5.2 Support access is explicit
+If support access exists, it must be:
+- Explicit
+- Time-limited
+- Auditable
+- Revocable
+
+There is **no permanent “god mode”**.
+
+---
+
+## 6. Security Rules as Law
+
+- If rules do not allow it, the feature does not exist
+- Missing rules = denied access
+- UI must adapt to rules, never the opposite
+
+---
+
+## 7. Auditability
+
+Audit logs are required for:
+- Membership changes
+- Permission changes
+- Role edits
+- Clinic settings updates
+- Support access grants
+
+Audit logs are:
+- Append-only
+- Immutable
+- Clinic-scoped
+
+---
+
+## 8. Schema Evolution
+
+- All breaking changes increment `schemaVersion`
+- Backward compatibility is required
+- No silent rewrites of existing data
+
+---
+
+## 9. AI Usage Rules
+
+AI assistance must:
+- Preserve clinic scoping
+- Preserve permission enforcement
+- Preserve public/private separation
+
+AI must never:
+- Suggest bypassing Firestore rules
+- Suggest client-only security
+- Suggest global collections for clinic data
+
+If a request violates this architecture, AI **must stop** and explain why.
+
+---
+
+## 10. Enforcement
+
+This document is authoritative.
+
+Any deviation requires:
+- Explicit review
+- Schema version bump
+- Migration strategy
+
+---
+
+## 11. Time & Scheduling Data Rules
+
+### 11.1 Canonical time storage
+All schedule-critical times **must** be stored as Firestore `Timestamp`:
+- `appointments.startAt`
+- `appointments.endAt`
+- closure ranges (`closures.fromAt`, `closures.toAt`)
+- invite expiry (`invites.expiresAt`)
+
+ISO8601 strings are permitted **only** for non-query metadata (discouraged).
+
+**Reason:** ordering, range queries, and overlap checks must be reliable and timezone-safe.
+
+---
+
+### 11.2 Timezone handling
+- A clinic’s timezone is stored in `clinics/{clinicId}.profile.timezone`
+- UI may render local times based on clinic timezone
+- Storage remains timezone-neutral (`Timestamp`)
+
+---
+
+## 12. Backend Authority Rules
+
+### 12.1 Membership writes are backend-only
+The following documents are **never** written directly by clients:
+- `clinics/{clinicId}/members/{uid}`
+- `users/{uid}/memberships/{clinicId}`
+- `clinics/{clinicId}/invites/{inviteId}`
+
+All changes must:
+- occur via Cloud Functions
+- generate audit entries
+
+---
+
+### 12.2 Scheduling writes are backend-only
+Appointments are authoritative clinical operations.
+
+Therefore:
+- `clinics/{clinicId}/appointments/{appointmentId}` are created/updated **only** via Cloud Functions
+- Firestore rules should deny appointment writes from clients
+
+Functions must enforce:
+- overlap checks
+- resource conflicts
+- practitioner availability
+- buffers / booking rules
+- audit events
+
+Temporary prototyping exceptions must be explicitly documented and removed before production.
+
+---
+
+### 12.3 Public projection writes are system-only
+- All documents under `clinics/{clinicId}/public/**` are written by Cloud Functions only
+- No client writes exist in any public path
+
+---
+
+## 13. Token, Invite, and Access Grant Rules
+
+### 13.1 Invite tokens
+- Raw invite tokens must **never** be stored
+- Only secure hashes (e.g. SHA-256) may be stored (`tokenHash`)
+- Invites must be:
+  - one-time use
+  - expiring
+  - auditable (createdBy, acceptedBy, timestamps)
+
+Acceptance must validate:
+- signed-in user email matches invite email  
+  or
+- explicit re-authentication
+
+---
+
+### 13.2 Support access grants
+Platform support access (if implemented) must:
+- be explicit and clinic-scoped  
+  `clinics/{clinicId}/supportAccess/{grantId}`
+- be time-limited and revocable
+- be auditable and append-only
+- never provide blanket access to clinical data
+
+Platform admins must **not** bypass Firestore rules.
+
+---
+
+## 14. Storage Architecture & Rules
+
+### 14.1 Storage path scoping
+All storage objects must be clinic-scoped:
+- Private: `clinics/{clinicId}/private/**`
+- Public assets: `clinics/{clinicId}/public/**` (e.g. booking logos)
+
+Global upload paths for sensitive files are forbidden.
+
+---
+
+### 14.2 Storage permissions mirror Firestore
+Storage rules must mirror Firestore permissions:
+- members may read/write only with explicit permissions
+- public assets are read-only
+- no client write access to public assets unless explicitly documented
+
+---
+
+### 14.3 Clinical attachments
+If clinical attachments are added:
+- they must be clinic-scoped
+- linked from clinic-scoped clinical documents
+- protected by permissions and audit events
+
+---
+
+## 15. Audit Log Enforcement
+
+### 15.1 Append-only and function-only
+Audit logs must be:
+- append-only (no updates or deletes)
+- written only by Cloud Functions
+- clinic-scoped by default  
+  `clinics/{clinicId}/audit/{eventId}`
+
+---
+
+### 15.2 Required audit events
+At minimum:
+- membership creation / activation / deactivation
+- invite creation / acceptance / revocation
+- role creation and edits
+- permission changes
+- clinic settings updates
+- support access grants / revocations
+
+---
+
+## 16. API Stability & Versioning
+
+### 16.1 Callable function naming is a contract
+Callable Cloud Function names are stable API contracts.
+
+Renaming requires:
+- compatibility alias  
+  or
+- versioned callable + migration plan
+
+---
+
+### 16.2 Schema and callable alignment
+Breaking schema changes must:
+- increment `schemaVersion`
+- document migration steps
+- specify which callable versions support which schema versions
+
+---
+
+# Schema Migrations
+
+This project uses `schemaVersion` fields on Firestore documents.
+Breaking changes require:
+1) Bumping the relevant schema version constant in `functions/src/schema/schemaVersions.ts`
+2) A migration plan documented here
+3) Either:
+   - a backfill Cloud Function / admin script, or
+   - dual-read compatibility in code until migrated
+
+## Principles
+- No silent rewrites of existing data
+- Backward compatibility is required
+- Migrations must be auditable
+
+## Document schemaVersion keys
+See: `functions/src/schema/schemaVersions.ts`
+
+## Migration template
+
+### Migration: note v1 -> v2
+**Reason:** (what changed)
+
+**Old schema:**
+- fields...
+
+**New schema:**
+- fields...
+
+**Compatibility strategy:**
+- read: support both fields X and Y
+- write: only write new fields
+
+**Backfill plan:**
+- script/function name
+- scope (which clinics / dates)
+- dry-run mode
+- logs / audit events
+
+**Rollback plan:**
+- how to revert or tolerate partial completion
+
+
+**End of document**

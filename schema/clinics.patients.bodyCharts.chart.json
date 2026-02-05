@@ -1,0 +1,7 @@
+{
+  "type": "pain_drawing",
+  "format": "json",
+  "data": { "strokes": [] },
+  "createdByUid": "uid_123",
+  "createdAt": "SERVER_TIMESTAMP"
+}

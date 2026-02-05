@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "type": "assessmentPack",
+  "path": "clinics/{clinicId}/assessmentPacks/{packId}",
+  "description": "Phase 3 assessment pack definition. Option 1: pack references built-in question registry in the app.",
+  "fields": {
+    "schemaVersion": { "type": "number", "required": true },
+
+    "name": { "type": "string", "required": true },
+    "active": { "type": "boolean", "required": true },
+
+    "packVersion": { "type": "number", "required": true },
+
+    "source": {
+      "type": "object",
+      "required": true,
+      "fields": {
+        "type": { "type": "string", "required": true, "enum": ["builtin_registry_ref"] },
+        "registryId": { "type": "string", "required": true },
+        "registryVersion": { "type": "number", "required": true }
+      }
+    },
+
+    "regions": {
+      "type": "array",
+      "required": true,
+      "items": {
+        "type": "object",
+        "fields": {
+          "regionKey": { "type": "string", "required": true },
+          "label": { "type": "string", "required": true },
+          "needsSide": { "type": "boolean", "required": true },
+          "enabled": { "type": "boolean", "required": true }
+        }
+      }
+    },
+
+    "createdAt": { "type": "timestamp", "required": true },
+    "updatedAt": { "type": "timestamp", "required": true }
+  }
+}

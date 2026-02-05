@@ -1,0 +1,7 @@
+{
+  "amendedAt": "timestamp",
+  "amendedByUid": "string",
+  "amendedByRole": "clinician",
+  "reason": null,
+  "summary": null
+}

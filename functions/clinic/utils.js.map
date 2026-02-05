@@ -1,0 +1,1 @@
+{"version":3,"file":"utils.js","sourceRoot":"","sources":["../src/clinic/utils.ts"],"names":[],"mappings":";;AAEA,kCAKC;AAPD,uDAAyD;AAEzD,SAAgB,WAAW,CAAC,IAAS;IACnC,IAAI,CAAC,IAAI,EAAE,CAAC;QACV,MAAM,IAAI,kBAAU,CAAC,iBAAiB,EAAE,kBAAkB,CAAC,CAAC;IAC9D,CAAC;IACD,OAAO,IAAI,CAAC,GAAG,CAAC;AAClB,CAAC"}

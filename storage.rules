@@ -1,0 +1,72 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function uid() {
+      return request.auth.uid;
+    }
+
+    // Canonical + legacy membership doc paths (match Firestore rules)
+    function memberPathCanonical(clinicId) {
+      return /databases/(default)/documents/clinics/$(clinicId)/members/$(uid());
+    }
+
+    function memberPathLegacy(clinicId) {
+      return /databases/(default)/documents/clinics/$(clinicId)/memberships/$(uid());
+    }
+
+    function hasMemberDoc(clinicId) {
+      return isSignedIn() && (
+        firestore.exists(memberPathCanonical(clinicId)) ||
+        firestore.exists(memberPathLegacy(clinicId))
+      );
+    }
+
+    function memberData(clinicId) {
+      return firestore.exists(memberPathCanonical(clinicId))
+        ? firestore.get(memberPathCanonical(clinicId)).data
+        : firestore.get(memberPathLegacy(clinicId)).data;
+    }
+
+    // Treat missing "active" as active (backwards compatible)
+    function isActiveMember(clinicId) {
+      return hasMemberDoc(clinicId)
+        && (!("active" in memberData(clinicId)) || memberData(clinicId).active == true);
+    }
+
+    // V3: permissions only (no roles)
+    function hasPerm(clinicId, p) {
+      return isActiveMember(clinicId)
+        && ("permissions" in memberData(clinicId))
+        && (memberData(clinicId).permissions[p] == true);
+    }
+
+    // Public assets (logos etc) - readable by anyone (portal + emails)
+    match /clinics/{clinicId}/public/{allPaths=**} {
+      allow read: if true;
+      allow write: if hasPerm(clinicId, "settings.write");
+    }
+
+    // Private assets (settings, etc.)
+    match /clinics/{clinicId}/private/{allPaths=**} {
+      allow read, write: if hasPerm(clinicId, "settings.write");
+    }
+
+    // Patient uploads: clinic-scoped; read = clinical.read OR patients.read; write = patients.write
+    match /clinics/{clinicId}/private/patientUploads/{patientId}/{uploadId}/{fileName} {
+      allow read:
+        if hasPerm(clinicId, "clinical.read")
+        || hasPerm(clinicId, "patients.read");
+      allow write: if hasPerm(clinicId, "patients.write");
+    }
+
+    // Default deny
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

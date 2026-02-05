@@ -1,0 +1,210 @@
+"use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+var __exportStar = (this && this.__exportStar) || function(m, exports) {
+    for (var p in m) if (p !== "default" && !Object.prototype.hasOwnProperty.call(exports, p)) __createBinding(exports, m, p);
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.onClinicCreatedProvisionOwnerMembership = exports.bootstrapPublicBookingSettingsFn = exports.consumeIntakeInviteFn = exports.backfillNotificationsSettings = exports.onClinicCreatedProvisionDefaults = exports.testCallable = exports.rescheduleBookingWithTokenFn = exports.cancelBookingWithTokenFn = exports.getManageContextFn = exports.listPublicSlotsFn = exports.mirrorPractitionerToPublic = exports.onAppointmentWrite_toBusyBlock = exports.onPublicBookingSettingsWrite = exports.onBookingRequestCreateV2 = exports.exportClosureOverrideAuditReportFn = exports.submitIntakeSessionFn = exports.generateAssessmentPdfFn = exports.getAssessmentPackFn = exports.submitAssessmentFn = exports.deleteOutcomeMeasureFn = exports.upsertOutcomeMeasureFn = exports.deleteClinicalTestFn = exports.upsertClinicalTestFn = exports.amendClinicalNoteFn = exports.createClinicalNoteFn = exports.closeEpisodeFn = exports.updateEpisodeFn = exports.createEpisodeFn = exports.deletePatientFn = exports.mergePatientsFn = exports.updatePatientFn = exports.createPatientFn = exports.updateAppointmentStatusFn = exports.updateAppointmentFn = exports.deleteAppointmentFn = exports.createAppointmentFn = exports.deleteClosureFn = exports.createClosureFn = exports.setStaffAvailabilityDefaultFn = exports.upsertStaffProfileFn = exports.syncMyDisplayNameFn = exports.setMembershipStatusFn = exports.blockSelfSignup = exports.updateClinicProfileFn = exports.acceptInviteFn = exports.inviteMemberFn = exports.updateMemberProfileFn = exports.clinicCreateFn = exports.getSchemaVersionsFn = exports.computeIntakeSummaryV2 = void 0;
+// functions/src/index.ts
+const admin = __importStar(require("firebase-admin"));
+const https_1 = require("firebase-functions/v2/https");
+// ─────────────────────────────
+// Firebase init (ONLY ONCE)
+// ─────────────────────────────
+if (!admin.apps.length)
+    admin.initializeApp();
+// ─────────────────────────────
+// Region (single source of truth)
+// ─────────────────────────────
+const REGION = "europe-west3";
+// ─────────────────────────────
+// ✅ Runtime service account (workaround for missing appspot SA)
+// Project number: 326894670032
+// This avoids Firebase CLI trying to IAM-check: <projectId>@appspot.gserviceaccount.com
+// ─────────────────────────────
+const RUNTIME_SA = "326894670032-compute@developer.gserviceaccount.com";
+// ─────────────────────────────
+// Schema versions (single source of truth)
+// ─────────────────────────────
+const schemaVersions_1 = require("./schema/schemaVersions");
+// ─────────────────────────────
+// Clinic / membership
+// ─────────────────────────────
+const createClinic_1 = require("./clinic/createClinic");
+const inviteMember_1 = require("./clinic/inviteMember"); // ✅ import secret too
+const acceptInvite_1 = require("./clinic/acceptInvite");
+const updateClinicProfile_1 = require("./clinic/updateClinicProfile");
+const setMembershipStatus_1 = require("./clinic/setMembershipStatus");
+const syncMyDisplayName_1 = require("./clinic/syncMyDisplayName");
+const updateMemberProfile_1 = require("./clinic/updateMemberProfile");
+const upsertStaffProfile_1 = require("./clinic/staff/upsertStaffProfile");
+const setStaffAvailabilityDefault_1 = require("./clinic/staff/setStaffAvailabilityDefault");
+// ─────────────────────────────
+// Closures
+// ─────────────────────────────
+const createClosure_1 = require("./clinic/closures/createClosure");
+const deleteClosure_1 = require("./clinic/closures/deleteClosure");
+// ─────────────────────────────
+// Booking / patients / episodes
+// ─────────────────────────────
+const createAppointment_1 = require("./clinic/createAppointment");
+const deleteAppointment_1 = require("./clinic/deleteAppointment");
+const updateAppointment_1 = require("./clinic/updateAppointment");
+const updateAppointmentStatus_1 = require("./clinic/updateAppointmentStatus");
+const createPatient_1 = require("./clinic/patients/createPatient");
+const updatePatient_1 = require("./clinic/patients/updatePatient");
+const createEpisode_1 = require("./clinic/episode/createEpisode");
+const updateEpisode_1 = require("./clinic/episode/updateEpisode");
+const closeEpisode_1 = require("./clinic/episode/closeEpisode");
+const mergePatients_1 = require("./clinic/patients/mergePatients");
+const deletePatient_1 = require("./clinic/patients/deletePatient");
+// ─────────────────────────────
+// Clinical notes
+// ─────────────────────────────
+const createClinicalNote_1 = require("./clinic/notes/createClinicalNote");
+const amendClinicalNote_1 = require("./clinic/notes/amendClinicalNote");
+// ─────────────────────────────
+// Registries
+// ─────────────────────────────
+const upsertClinicalTest_1 = require("./clinic/registries/upsertClinicalTest");
+const deleteClinicalTest_1 = require("./clinic/registries/deleteClinicalTest");
+const upsertOutcomeMeasure_1 = require("./clinic/registries/upsertOutcomeMeasure");
+const deleteOutcomeMeasure_1 = require("./clinic/registries/deleteOutcomeMeasure");
+// ─────────────────────────────
+// Assessments
+// ─────────────────────────────
+const submitAssessment_1 = require("./clinic/assessments/submitAssessment");
+const generateAssessmentPdf_1 = require("./clinic/assessments/generateAssessmentPdf");
+const getAssessmentPack_1 = require("./clinic/assessments/getAssessmentPack");
+// ─────────────────────────────
+// Intake / decision support
+// ─────────────────────────────
+const submitIntakeSession_1 = require("./clinic/intake/submitIntakeSession");
+var computeIntakeSummary_1 = require("./clinic/intake/computeIntakeSummary");
+Object.defineProperty(exports, "computeIntakeSummaryV2", { enumerable: true, get: function () { return computeIntakeSummary_1.computeIntakeSummaryV2; } });
+__exportStar(require("./clinic/intake/computeDecisionSupport"), exports);
+// ─────────────────────────────
+// Audit exports
+// ─────────────────────────────
+const exportClosureOverrideAuditReport_1 = require("./clinic/audit/exportClosureOverrideAuditReport");
+// ─────────────────────────────
+// Public booking
+// ─────────────────────────────
+const bootstrapPublicBookingSettings_1 = require("./clinic/bootstrapPublicBookingSettings");
+const listPublicSlots_1 = require("./public/listPublicSlots");
+Object.defineProperty(exports, "listPublicSlotsFn", { enumerable: true, get: function () { return listPublicSlots_1.listPublicSlotsFn; } });
+const bookingActions_1 = require("./public/bookingActions");
+// ─────────────────────────────
+// Callable exports
+// ─────────────────────────────
+// DEBUG / PLATFORM (optional)
+exports.getSchemaVersionsFn = (0, https_1.onCall)({ region: REGION, cors: true, serviceAccount: RUNTIME_SA }, async () => {
+    return { ok: true, versions: schemaVersions_1.SCHEMA_VERSIONS };
+});
+// Clinic
+exports.clinicCreateFn = (0, https_1.onCall)({ region: REGION, cors: true, serviceAccount: RUNTIME_SA }, createClinic_1.createClinic);
+exports.updateMemberProfileFn = (0, https_1.onCall)({ region: REGION, cors: true, serviceAccount: RUNTIME_SA }, updateMemberProfile_1.updateMemberProfile);
+// ✅ IMPORTANT (Gen2): bind secret to function
+exports.inviteMemberFn = (0, https_1.onCall)({ region: REGION, cors: true, secrets: [inviteMember_1.BREVO_API_KEY], serviceAccount: RUNTIME_SA }, inviteMember_1.inviteMember);
+exports.acceptInviteFn = (0, https_1.onCall)({ region: REGION, cors: true, serviceAccount: RUNTIME_SA }, acceptInvite_1.acceptInvite);
+exports.updateClinicProfileFn = (0, https_1.onCall)({ region: REGION, cors: true, serviceAccount: RUNTIME_SA }, updateClinicProfile_1.updateClinicProfile);
+var blockSelfSignup_1 = require("./auth/blockSelfSignup");
+Object.defineProperty(exports, "blockSelfSignup", { enumerable: true, get: function () { return blockSelfSignup_1.blockSelfSignup; } });
+exports.setMembershipStatusFn = (0, https_1.onCall)({ region: REGION, cors: true, serviceAccount: RUNTIME_SA }, setMembershipStatus_1.setMembershipStatus);
+exports.syncMyDisplayNameFn = (0, https_1.onCall)({ region: REGION, cors: true, serviceAccount: RUNTIME_SA }, (req) => (0, syncMyDisplayName_1.syncMyDisplayName)(req));
+// ✅ Staff profile / availability (explicit service account to avoid appspot SA)
+exports.upsertStaffProfileFn = (0, https_1.onCall)({ region: REGION, cors: true, serviceAccount: RUNTIME_SA }, upsertStaffProfile_1.upsertStaffProfile);
+exports.setStaffAvailabilityDefaultFn = (0, https_1.onCall)({ region: REGION, cors: true, serviceAccount: RUNTIME_SA }, setStaffAvailabilityDefault_1.setStaffAvailabilityDefault);
+// Closures
+exports.createClosureFn = (0, https_1.onCall)({ region: REGION, cors: true, serviceAccount: RUNTIME_SA }, createClosure_1.createClosure);
+exports.deleteClosureFn = (0, https_1.onCall)({ region: REGION, cors: true, serviceAccount: RUNTIME_SA }, deleteClosure_1.deleteClosure);
+// Booking (clinic authenticated)
+exports.createAppointmentFn = (0, https_1.onCall)({ region: REGION, cors: true, serviceAccount: RUNTIME_SA }, createAppointment_1.createAppointment);
+exports.deleteAppointmentFn = (0, https_1.onCall)({ region: REGION, cors: true, serviceAccount: RUNTIME_SA }, deleteAppointment_1.deleteAppointment);
+exports.updateAppointmentFn = (0, https_1.onCall)({ region: REGION, cors: true, serviceAccount: RUNTIME_SA }, updateAppointment_1.updateAppointment);
+exports.updateAppointmentStatusFn = (0, https_1.onCall)({ region: REGION, cors: true, serviceAccount: RUNTIME_SA }, updateAppointmentStatus_1.updateAppointmentStatus);
+// Patients
+exports.createPatientFn = (0, https_1.onCall)({ region: REGION, cors: true, serviceAccount: RUNTIME_SA }, createPatient_1.createPatient);
+exports.updatePatientFn = (0, https_1.onCall)({ region: REGION, cors: true, serviceAccount: RUNTIME_SA }, updatePatient_1.updatePatient);
+exports.mergePatientsFn = (0, https_1.onCall)({ region: REGION, cors: true, serviceAccount: RUNTIME_SA }, mergePatients_1.mergePatients);
+exports.deletePatientFn = (0, https_1.onCall)({ region: REGION, cors: true, serviceAccount: RUNTIME_SA }, deletePatient_1.deletePatient);
+// Episodes
+exports.createEpisodeFn = (0, https_1.onCall)({ region: REGION, cors: true, serviceAccount: RUNTIME_SA }, createEpisode_1.createEpisode);
+exports.updateEpisodeFn = (0, https_1.onCall)({ region: REGION, cors: true, serviceAccount: RUNTIME_SA }, updateEpisode_1.updateEpisode);
+exports.closeEpisodeFn = (0, https_1.onCall)({ region: REGION, cors: true, serviceAccount: RUNTIME_SA }, closeEpisode_1.closeEpisode);
+// Clinical notes
+exports.createClinicalNoteFn = (0, https_1.onCall)({ region: REGION, cors: true, serviceAccount: RUNTIME_SA }, createClinicalNote_1.createClinicalNote);
+exports.amendClinicalNoteFn = (0, https_1.onCall)({ region: REGION, cors: true, serviceAccount: RUNTIME_SA }, amendClinicalNote_1.amendClinicalNote);
+// Registries
+exports.upsertClinicalTestFn = (0, https_1.onCall)({ region: REGION, cors: true, serviceAccount: RUNTIME_SA }, upsertClinicalTest_1.upsertClinicalTest);
+exports.deleteClinicalTestFn = (0, https_1.onCall)({ region: REGION, cors: true, serviceAccount: RUNTIME_SA }, deleteClinicalTest_1.deleteClinicalTest);
+exports.upsertOutcomeMeasureFn = (0, https_1.onCall)({ region: REGION, cors: true, serviceAccount: RUNTIME_SA }, upsertOutcomeMeasure_1.upsertOutcomeMeasure);
+exports.deleteOutcomeMeasureFn = (0, https_1.onCall)({ region: REGION, cors: true, serviceAccount: RUNTIME_SA }, deleteOutcomeMeasure_1.deleteOutcomeMeasure);
+// Assessments
+exports.submitAssessmentFn = (0, https_1.onCall)({ region: REGION, cors: true, serviceAccount: RUNTIME_SA }, submitAssessment_1.submitAssessment);
+exports.getAssessmentPackFn = (0, https_1.onCall)({ region: REGION, cors: true, serviceAccount: RUNTIME_SA }, getAssessmentPack_1.getAssessmentPack);
+exports.generateAssessmentPdfFn = (0, https_1.onCall)({ region: REGION, cors: true, serviceAccount: RUNTIME_SA }, generateAssessmentPdf_1.generateAssessmentPdf);
+// Intake
+exports.submitIntakeSessionFn = (0, https_1.onCall)({ region: REGION, cors: true, serviceAccount: RUNTIME_SA }, submitIntakeSession_1.submitIntakeSession);
+// Audit report export
+exports.exportClosureOverrideAuditReportFn = (0, https_1.onCall)({ region: REGION, cors: true, serviceAccount: RUNTIME_SA }, exportClosureOverrideAuditReport_1.exportClosureOverrideAuditReport);
+// ─────────────────────────────
+// Triggers / background
+// ─────────────────────────────
+var onBookingRequestCreate_1 = require("./clinic/booking/onBookingRequestCreate");
+Object.defineProperty(exports, "onBookingRequestCreateV2", { enumerable: true, get: function () { return onBookingRequestCreate_1.onBookingRequestCreateV2; } });
+var onPublicBookingSettingsWrite_1 = require("./public/onPublicBookingSettingsWrite");
+Object.defineProperty(exports, "onPublicBookingSettingsWrite", { enumerable: true, get: function () { return onPublicBookingSettingsWrite_1.onPublicBookingSettingsWrite; } });
+var onAppointmentWrite_toBusyBlock_1 = require("./availability/onAppointmentWrite_toBusyBlock");
+Object.defineProperty(exports, "onAppointmentWrite_toBusyBlock", { enumerable: true, get: function () { return onAppointmentWrite_toBusyBlock_1.onAppointmentWrite_toBusyBlock; } });
+var practitionerPublicMirror_1 = require("./projections/practitionerPublicMirror");
+Object.defineProperty(exports, "mirrorPractitionerToPublic", { enumerable: true, get: function () { return practitionerPublicMirror_1.mirrorPractitionerToPublic; } });
+exports.getManageContextFn = bookingActions_1.getManageContext;
+exports.cancelBookingWithTokenFn = bookingActions_1.cancelBookingWithToken;
+exports.rescheduleBookingWithTokenFn = bookingActions_1.rescheduleBookingWithToken;
+var testCallable_1 = require("./testCallable");
+Object.defineProperty(exports, "testCallable", { enumerable: true, get: function () { return testCallable_1.testCallable; } });
+var provisionClinicDefaults_1 = require("./clinic/settings/provisionClinicDefaults");
+Object.defineProperty(exports, "onClinicCreatedProvisionDefaults", { enumerable: true, get: function () { return provisionClinicDefaults_1.onClinicCreatedProvisionDefaults; } });
+var backfillNotifications_1 = require("./clinic/settings/backfillNotifications");
+Object.defineProperty(exports, "backfillNotificationsSettings", { enumerable: true, get: function () { return backfillNotifications_1.backfillNotificationsSettings; } });
+var consumeIntakeInviteFn_1 = require("./intake/consumeIntakeInviteFn");
+Object.defineProperty(exports, "consumeIntakeInviteFn", { enumerable: true, get: function () { return consumeIntakeInviteFn_1.consumeIntakeInviteFn; } });
+// Callable bootstrap helper (AUTH)
+exports.bootstrapPublicBookingSettingsFn = (0, https_1.onCall)({ region: REGION, cors: true, serviceAccount: RUNTIME_SA }, bootstrapPublicBookingSettings_1.bootstrapPublicBookingSettings);
+// Other triggers
+var onClinicCreatedProvisionOwner_1 = require("./clinic/onClinicCreatedProvisionOwner");
+Object.defineProperty(exports, "onClinicCreatedProvisionOwnerMembership", { enumerable: true, get: function () { return onClinicCreatedProvisionOwner_1.onClinicCreatedProvisionOwnerMembership; } });
+//# sourceMappingURL=index.js.map
