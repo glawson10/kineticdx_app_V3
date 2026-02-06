@@ -3,6 +3,8 @@ import { Firestore } from "firebase-admin/firestore";
 import * as admin from "firebase-admin";
 
 export type AuditEventType =
+  | "clinicalNote.created"
+  | "clinicalNote.updated"
   | "note.created"
   | "note.signed"
   | "note.amended"

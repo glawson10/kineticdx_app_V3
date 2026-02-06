@@ -14,6 +14,8 @@ import '../../../models/appointment.dart';
 import '../../../models/service.dart';
 import 'draggable_appointment_block.dart';
 
+import '../../notes/data/notes_permissions.dart';
+import '../../notes/ui/note_editor_screen.dart';
 import '../../patients/patient_details_screen.dart';
 
 class BookingCalendarScreen extends StatefulWidget {
@@ -862,7 +864,12 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
       return;
     }
 
-    final action = await _showBookingActions(appt);
+    final clinicCtx = context.read<ClinicContext>();
+    final canCreateNote = canEditClinicalNotes(clinicCtx.session.permissions);
+    final action = await _showBookingActions(
+      appt,
+      canCreateNote: canCreateNote,
+    );
     if (!mounted || action == null) return;
 
     if (action == 'patient') {
@@ -873,6 +880,21 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
         PatientDetailsScreen.routeEdit(
           clinicId: clinicId,
           patientId: pid,
+        ),
+      );
+      return;
+    }
+
+    if (action == 'create_note') {
+      final pid = appt.patientId.trim();
+      if (pid.isEmpty) return;
+      await Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => NoteEditorScreen.create(
+            clinicId: clinicId,
+            patientId: pid,
+            appointmentId: appt.id,
+          ),
         ),
       );
       return;
@@ -980,7 +1002,10 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
     );
   }
 
-  Future<String?> _showBookingActions(Appointment appt) {
+  Future<String?> _showBookingActions(
+    Appointment appt, {
+    required bool canCreateNote,
+  }) {
     return showModalBottomSheet<String>(
       context: context,
       showDragHandle: true,
@@ -998,6 +1023,12 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
                 leading: const Icon(Icons.person_outline),
                 title: const Text('Patient details'),
                 onTap: () => Navigator.pop(context, 'patient'),
+              ),
+            if (appt.patientId.trim().isNotEmpty && canCreateNote)
+              ListTile(
+                leading: const Icon(Icons.note_add_outlined),
+                title: const Text('Create note'),
+                onTap: () => Navigator.pop(context, 'create_note'),
               ),
             const Divider(height: 1),
             ListTile(

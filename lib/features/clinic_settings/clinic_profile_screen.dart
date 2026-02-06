@@ -19,6 +19,7 @@ import '../clinic/settings/ui/clinic_opening_hours_screen.dart';
 
 // ✅ Staff settings UI
 import '../../staff/staff_settings_screen.dart';
+import '../notes/ui/notes_settings_screen.dart';
 
 /// Settings hub screen (inside Settings tab).
 /// - Clinic profile (edit)
@@ -56,6 +57,8 @@ class ClinicProfileScreen extends StatelessWidget {
     final session = clinicCtx.session;
     final canWriteSettings = session.permissions.has('settings.write');
     final canAudit = session.permissions.has('audit.read');
+    final canViewNotes = session.permissions.viewClinical;
+    final canManageNotes = session.permissions.settingsWrite;
 
     final canManageStaff = session.permissions.has('members.manage');
     final canReadMembers =
@@ -104,6 +107,29 @@ class ClinicProfileScreen extends StatelessWidget {
             enabled: canReadMembers,
             onTap: () => Navigator.of(context).push(
               MaterialPageRoute(builder: (_) => const StaffSettingsScreen()),
+            ),
+          ),
+
+          const Divider(height: 1),
+
+          // ─────────────────────────────
+          // Notes templates
+          // ─────────────────────────────
+          ListTile(
+            leading: const Icon(Icons.note_outlined),
+            title: const Text('Notes templates'),
+            subtitle: Text(
+              canViewNotes
+                  ? (canManageNotes
+                      ? 'View and manage templates'
+                      : 'View templates (read-only)')
+                  : 'No permission (clinical.read or notes.read required)',
+            ),
+            enabled: canViewNotes,
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => NotesSettingsScreen(clinicId: clinicId),
+              ),
             ),
           ),
 

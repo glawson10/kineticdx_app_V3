@@ -87,6 +87,16 @@ service cloud.firestore {
         allow create, update, delete: if hasPerm(clinicId, "settings.write");
       }
 
+      // Notes settings (Phase 5)
+      // clinics/{clinicId}/settings/notes
+      match /settings/notes {
+        allow read:
+          if hasPerm(clinicId, "clinical.read")
+          || hasPerm(clinicId, "notes.read")
+          || hasPerm(clinicId, "settings.read");
+        allow create, update, delete: if hasPerm(clinicId, "settings.write");
+      }
+
       // Members (canonical path)
       match /members/{memberUid} {
         allow read:
@@ -249,6 +259,21 @@ match /closures/{closureId} {
             || hasPerm(clinicId, "patients.read");
           allow create, update, delete: if hasPerm(clinicId, "patients.write");
         }
+      }
+
+      // ─────────────────────────────
+      // Phase 5 Clinical Notes (clinic-scoped)
+      // clinics/{clinicId}/clinicalNotes/{noteId}
+      // ─────────────────────────────
+      match /clinicalNotes/{noteId} {
+        allow read:
+          if hasPerm(clinicId, "clinical.read")
+          || hasPerm(clinicId, "notes.read");
+        allow create, update:
+          if hasPerm(clinicId, "clinical.write")
+          || hasPerm(clinicId, "notes.write.own")
+          || hasPerm(clinicId, "notes.write.any");
+        allow delete: if false;
       }
 
       // ─────────────────────────────

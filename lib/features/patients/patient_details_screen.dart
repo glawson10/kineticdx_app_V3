@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 
 import '../../app/clinic_context.dart';
 import '../../models/patient.dart';
+import '../notes/ui/patient_notes_tab.dart';
 import 'uploads/patient_uploads_tab.dart';
 
 // IMPORTANT: your functions are deployed in europe-west3 (REGION in index.ts)
@@ -520,19 +521,51 @@ class _PatientDetailsScreenState extends State<PatientDetailsScreen> {
     }
   }
 
+  bool _canReadNotes(BuildContext context) {
+    try {
+      final session = context.read<ClinicContext>().sessionOrNull;
+      if (session == null) return false;
+      return session.permissions.viewClinical;
+    } catch (_) {
+      return false;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final isEdit = widget.mode == PatientDetailsMode.edit;
     final showUploadsTab = isEdit && _canReadUploads(context);
+    final showNotesTab = isEdit && _canReadNotes(context);
 
     return StreamBuilder<bool>(
       stream: _watchIsOwnerOrManager(),
       builder: (context, permSnap) {
         final canDelete = permSnap.data == true;
 
-        if (isEdit && showUploadsTab) {
+        if (isEdit && (showUploadsTab || showNotesTab)) {
+          final tabs = <Tab>[
+            const Tab(text: 'Details'),
+            if (showUploadsTab) const Tab(text: 'Uploads'),
+            if (showNotesTab) const Tab(text: 'Notes'),
+          ];
+
+          final views = <Widget>[
+            _editModeBody(),
+            if (showUploadsTab)
+              PatientUploadsTab(
+                clinicId: widget.clinicId,
+                patientId: widget.patientId!,
+                canWrite: _canWriteUploads(context),
+              ),
+            if (showNotesTab)
+              PatientNotesTab(
+                clinicId: widget.clinicId,
+                patientId: widget.patientId!,
+              ),
+          ];
+
           return DefaultTabController(
-            length: 2,
+            length: tabs.length,
             child: Scaffold(
               appBar: AppBar(
                 title: const Text("Patient details"),
@@ -544,23 +577,9 @@ class _PatientDetailsScreenState extends State<PatientDetailsScreen> {
                       icon: const Icon(Icons.delete_outline),
                     ),
                 ],
-                bottom: TabBar(
-                  tabs: const [
-                    Tab(text: 'Details'),
-                    Tab(text: 'Uploads'),
-                  ],
-                ),
+                bottom: TabBar(tabs: tabs),
               ),
-              body: TabBarView(
-                children: [
-                  _editModeBody(),
-                  PatientUploadsTab(
-                    clinicId: widget.clinicId,
-                    patientId: widget.patientId!,
-                    canWrite: _canWriteUploads(context),
-                  ),
-                ],
-              ),
+              body: TabBarView(children: views),
             ),
           );
         }
