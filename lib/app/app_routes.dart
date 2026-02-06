@@ -32,6 +32,10 @@ class AppRoutes {
   /// Example: /intake/start?c=clinicId&t=inviteToken
   static const String intakeStart = '/intake/start';
 
+  /// ✅ General questionnaire token entry (public)
+  /// Example: /q/general/<token>
+  static const String generalQuestionnaireTokenBase = '/q/general';
+
   // ─────────────────────────────
   // Clinician (auth required)
   // ─────────────────────────────
