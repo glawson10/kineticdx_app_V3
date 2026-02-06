@@ -307,6 +307,7 @@ export { onBookingRequestCreateV2 } from "./clinic/booking/onBookingRequestCreat
 export { onPublicBookingSettingsWrite } from "./public/onPublicBookingSettingsWrite";
 export { onAppointmentWrite_toBusyBlock } from "./availability/onAppointmentWrite_toBusyBlock";
 export { mirrorPractitionerToPublic } from "./projections/practitionerPublicMirror";
+export { onClinicalNoteWrite } from "./clinic/notes/onClinicalNoteWrite";
 
 // ─────────────────────────────
 // Public booking (NO AUTH)

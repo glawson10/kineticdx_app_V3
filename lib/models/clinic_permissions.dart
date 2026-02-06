@@ -37,6 +37,13 @@ class ClinicPermissions {
   bool get notesWriteOwn => has('notes.write.own');
   bool get notesWriteAny => has('notes.write.any');
 
+  // ---------------------------------------------------------------------------
+  // Phase 5 helper flags (explicit, no role inference)
+  // ---------------------------------------------------------------------------
+  bool get viewClinical => clinicalRead || notesRead;
+  bool get editClinical => clinicalWrite || notesWriteOwn || notesWriteAny;
+  bool get manageClinic => settingsWrite;
+
   bool get registriesManage => has('registries.manage');
   bool get auditRead => has('audit.read');
 
