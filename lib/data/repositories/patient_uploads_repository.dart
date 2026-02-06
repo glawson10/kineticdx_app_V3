@@ -83,6 +83,8 @@ class PatientUploadsRepository {
       'createdAt': FieldValue.serverTimestamp(),
       'createdByUid': createdByUid,
       'status': 'active',
+      'notes': '',
+      'tags': <String>[],
     };
     await _uploadsRef(clinicId, patientId).doc(uploadId).set(meta);
     return uploadId;
@@ -94,6 +96,19 @@ class PatientUploadsRepository {
     final data = await ref.getData();
     if (data == null) throw StateError('No data at $storagePath');
     return data;
+  }
+
+  /// Download smaller bytes for thumbnails; returns null on error.
+  Future<Uint8List?> getThumbnailBytes({
+    required String storagePath,
+    int maxBytes = 5 * 1024 * 1024,
+  }) async {
+    try {
+      final ref = _storage.ref(storagePath);
+      return await ref.getData(maxBytes);
+    } catch (_) {
+      return null;
+    }
   }
 
   /// Delete: remove storage object and set Firestore status to "deleted".
@@ -122,5 +137,47 @@ class PatientUploadsRepository {
     final snap = await _uploadsRef(clinicId, patientId).doc(uploadId).get();
     if (!snap.exists) return null;
     return PatientUpload.fromFirestore(snap.id, snap.data()!);
+  }
+
+  /// Update notes and audit fields on an upload.
+  Future<void> updateNotes({
+    required String clinicId,
+    required String patientId,
+    required String uploadId,
+    required String notes,
+    required String updatedByUid,
+  }) async {
+    await _uploadsRef(clinicId, patientId).doc(uploadId).update({
+      'notes': notes,
+      'updatedAt': FieldValue.serverTimestamp(),
+      'updatedByUid': updatedByUid,
+    });
+  }
+
+  /// Update tags and audit fields on an upload.
+  Future<void> updateTags({
+    required String clinicId,
+    required String patientId,
+    required String uploadId,
+    required List<String> tags,
+    required String updatedByUid,
+  }) async {
+    await _uploadsRef(clinicId, patientId).doc(uploadId).update({
+      'tags': _normalizeTags(tags),
+      'updatedAt': FieldValue.serverTimestamp(),
+      'updatedByUid': updatedByUid,
+    });
+  }
+
+  static List<String> _normalizeTags(Iterable<String> raw) {
+    final allowed = kPatientUploadTags.toSet();
+    final out = <String>[];
+    for (final tag in raw) {
+      final clean = tag.trim();
+      if (clean.isEmpty) continue;
+      if (!allowed.contains(clean)) continue;
+      if (!out.contains(clean)) out.add(clean);
+    }
+    return out;
   }
 }
