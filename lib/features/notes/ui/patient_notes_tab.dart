@@ -7,7 +7,9 @@ import '../../../app/clinic_context.dart';
 import '../data/clinical_note.dart';
 import '../data/notes_paths.dart';
 import '../data/notes_permissions.dart';
+import '../data/notes_templates.dart';
 import 'note_editor_screen.dart';
+import 'soap_note_edit_screen.dart';
 
 class PatientNotesTab extends StatefulWidget {
   final String clinicId;
@@ -116,7 +118,7 @@ class _PatientNotesTabState extends State<PatientNotesTab> {
         if (notes.isEmpty) {
           return _EmptyNotesState(
             canCreate: canEdit,
-            onCreate: canEdit ? () => _createNote(context) : null,
+            onCreate: canEdit ? () => _showCreateMenu(context) : null,
           );
         }
 
@@ -172,6 +174,19 @@ class _PatientNotesTabState extends State<PatientNotesTab> {
   }
 
   Future<void> _createNote(BuildContext context) async {
+    final kind = await _loadDefaultInitialKind(context);
+    if (kind == 'initialAssessment') {
+      await Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => SoapNoteEditScreen(
+            clinicId: widget.clinicId,
+            patientId: widget.patientId,
+            noteId: null,
+          ),
+        ),
+      );
+      return;
+    }
     await Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => NoteEditorScreen.create(
@@ -180,6 +195,71 @@ class _PatientNotesTabState extends State<PatientNotesTab> {
         ),
       ),
     );
+  }
+
+  Future<void> _showCreateMenu(BuildContext context) async {
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.description_outlined),
+              title: const Text('Basic SOAP note'),
+              subtitle: const Text('Free-text subjective, objective, assessment, plan'),
+              onTap: () => Navigator.pop(ctx, 'basicSoap'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.assignment_outlined),
+              title: const Text('Initial Assessment'),
+              subtitle: const Text('Structured, region-specific initial assessment'),
+              onTap: () => Navigator.pop(ctx, 'initialAssessment'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.cancel),
+              title: const Text('Cancel'),
+              onTap: () => Navigator.pop(ctx, null),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (choice == 'basicSoap') {
+      await Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => NoteEditorScreen.create(
+            clinicId: widget.clinicId,
+            patientId: widget.patientId,
+          ),
+        ),
+      );
+    } else if (choice == 'initialAssessment') {
+      await Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => SoapNoteEditScreen(
+            clinicId: widget.clinicId,
+            patientId: widget.patientId,
+            noteId: null,
+          ),
+        ),
+      );
+    }
+  }
+
+  Future<String> _loadDefaultInitialKind(BuildContext context) async {
+    try {
+      final doc = await clinicNotesSettingsDoc(
+        FirebaseFirestore.instance,
+        widget.clinicId,
+      ).get();
+      if (!doc.exists) return 'basicSoap';
+      final settings = NotesSettings.fromMap(doc.data());
+      return settings.defaultInitialNoteKind;
+    } catch (_) {
+      return 'basicSoap';
+    }
   }
 
   String _typeLabel(String raw) {

@@ -62,8 +62,12 @@ class _TextQuestionState extends State<TextQuestion> {
           border: const OutlineInputBorder(),
         ),
         onChanged: (txt) {
+          // Allow natural typing including spaces; only use trim to decide
+          // whether the answer is "empty", not to mutate the live text.
           final trimmed = txt.trim();
-          widget.onChanged(trimmed.isEmpty ? null : AnswerValue.text(trimmed));
+          widget.onChanged(
+            trimmed.isEmpty ? null : AnswerValue.text(txt),
+          );
         },
       ),
     );

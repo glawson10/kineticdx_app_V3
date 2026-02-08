@@ -15,7 +15,10 @@ import '../../../models/service.dart';
 import 'draggable_appointment_block.dart';
 
 import '../../notes/data/notes_permissions.dart';
+import '../../notes/data/notes_templates.dart';
+import '../../notes/data/notes_paths.dart';
 import '../../notes/ui/note_editor_screen.dart';
+import '../../notes/ui/soap_note_edit_screen.dart';
 import '../../patients/patient_details_screen.dart';
 
 class BookingCalendarScreen extends StatefulWidget {
@@ -58,6 +61,20 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
     with SingleTickerProviderStateMixin {
   late DateTime _weekStart; // Monday
   bool _fitWeek = false;
+
+  Future<String> _loadDefaultInitialKind(String clinicId) async {
+    try {
+      final doc = await clinicNotesSettingsDoc(
+        FirebaseFirestore.instance,
+        clinicId,
+      ).get();
+      if (!doc.exists) return 'basicSoap';
+      final settings = NotesSettings.fromMap(doc.data());
+      return settings.defaultInitialNoteKind;
+    } catch (_) {
+      return 'basicSoap';
+    }
+  }
 
   // ✅ Practitioner filter
   String? _selectedPractitionerId; // null = all
@@ -888,15 +905,29 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
     if (action == 'create_note') {
       final pid = appt.patientId.trim();
       if (pid.isEmpty) return;
-      await Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (_) => NoteEditorScreen.create(
-            clinicId: clinicId,
-            patientId: pid,
-            appointmentId: appt.id,
+
+      final kind = await _loadDefaultInitialKind(clinicId);
+      if (kind == 'initialAssessment') {
+        await Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => SoapNoteEditScreen(
+              clinicId: clinicId,
+              patientId: pid,
+              noteId: null,
+            ),
           ),
-        ),
-      );
+        );
+      } else {
+        await Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => NoteEditorScreen.create(
+              clinicId: clinicId,
+              patientId: pid,
+              appointmentId: appt.id,
+            ),
+          ),
+        );
+      }
       return;
     }
 

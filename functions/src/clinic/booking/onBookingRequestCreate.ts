@@ -149,6 +149,17 @@ function buildIntakeStartUrl(params: {
     : `${base}/intake/start?c=${c}&t=${t}`;
 }
 
+function buildGeneralQuestionnaireUrl(params: {
+  baseUrl: string;
+  token: string;
+  useHashRouting?: boolean;
+}): string {
+  const base = normalizeBaseUrl(params.baseUrl);
+  const t = encodeURIComponent(params.token);
+  const useHash = params.useHashRouting !== false;
+  return useHash ? `${base}/#/q/general/${t}` : `${base}/q/general/${t}`;
+}
+
 // ─────────────────────────────────────────────────────────────
 // ✅ Intake invite helpers (token + hash + invite doc)
 // ─────────────────────────────────────────────────────────────
@@ -203,6 +214,51 @@ async function createIntakeInvite(params: {
   });
 
   return { inviteId: inviteRef.id, rawToken, expiresAt };
+}
+
+/**
+ * ✅ Create a general questionnaire link (similar to intake invite)
+ */
+async function createGeneralQuestionnaireLink(params: {
+  clinicId: string;
+  appointmentId: string;
+  patientId?: string;
+  patientEmailNorm?: string;
+  ttlDays?: number;
+}): Promise<{
+  linkId: string;
+  rawToken: string;
+  expiresAt: admin.firestore.Timestamp;
+}> {
+  const ttlDays = params.ttlDays ?? 7;
+  const rawToken = randomToken(32);
+  const tokenHash = sha256Base64Url(rawToken);
+
+  const linkRef = db
+    .collection(`clinics/${params.clinicId}/intakeLinks`)
+    .doc();
+
+  const expiresAt = admin.firestore.Timestamp.fromMillis(
+    Date.now() + ttlDays * 24 * 60 * 60 * 1000
+  );
+
+  await linkRef.set({
+    schemaVersion: 1,
+    clinicId: params.clinicId,
+    kind: "general",
+    tokenHash,
+    status: "active",
+    expiresAt,
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    usedAt: null,
+    intakeSessionId: null,
+    // Optional linkage
+    patientId: params.patientId ?? null,
+    patientEmailNorm: params.patientEmailNorm ?? null,
+    createdByUid: null, // System-created
+  });
+
+  return { linkId: linkRef.id, rawToken, expiresAt };
 }
 
 /**
@@ -625,6 +681,7 @@ async function sendBookingNotificationsBestEffort(args: {
   serviceName: string;
 
   preAssessmentUrl?: string;
+  generalQuestionnaireUrl?: string;
   whatsAppUrl?: string;
 
   localeHint?: string;
@@ -681,6 +738,7 @@ async function sendBookingNotificationsBestEffort(args: {
     googleCalendarUrl,
 
     preAssessmentUrl: safeStr(args.preAssessmentUrl),
+    generalQuestionnaireUrl: safeStr(args.generalQuestionnaireUrl),
     logoUrl: safeStr(args.logoUrl),
 
     clinicId: args.clinicId,
@@ -1404,6 +1462,7 @@ await apptRef.set(
     let inviteId = "";
     let preAssessmentUrl = "";
     let inviteExpiresAt: admin.firestore.Timestamp | null = null;
+    let generalQuestionnaireUrl = "";
 
     try {
       intakeSessionId = await createIntakeSessionForAppointment({
@@ -1433,6 +1492,39 @@ await apptRef.set(
         token: inv.rawToken,
         useHashRouting: true,
       });
+
+      // Create general questionnaire link
+      try {
+        const genQLink = await createGeneralQuestionnaireLink({
+          clinicId,
+          appointmentId,
+          patientId,
+          patientEmailNorm: pEmailNorm ? pEmailNorm : undefined,
+          ttlDays: 7,
+        });
+
+        generalQuestionnaireUrl = buildGeneralQuestionnaireUrl({
+          baseUrl,
+          token: genQLink.rawToken,
+          useHashRouting: true,
+        });
+
+        logger.info("General questionnaire link created", {
+          clinicId,
+          requestId,
+          appointmentId,
+          linkId: genQLink.linkId,
+          hasGeneralQuestionnaireUrl: !!generalQuestionnaireUrl,
+        });
+      } catch (genQErr: any) {
+        logger.error("General questionnaire link creation failed (continuing)", {
+          clinicId,
+          requestId,
+          appointmentId,
+          err: safeStr(genQErr?.message) || String(genQErr),
+        });
+        generalQuestionnaireUrl = "";
+      }
 
       // Persist on appointment + booking request
       await db
@@ -1472,6 +1564,7 @@ await apptRef.set(
         inviteId,
         baseUrl: normalizeBaseUrl(await readPublicBaseUrl(clinicId)),
         hasPreAssessmentUrl: !!preAssessmentUrl,
+        hasGeneralQuestionnaireUrl: !!generalQuestionnaireUrl,
       });
     } catch (e: any) {
       logger.error("Intake session/invite creation failed (continuing)", {
@@ -1481,6 +1574,7 @@ await apptRef.set(
         err: safeStr(e?.message) || String(e),
       });
       preAssessmentUrl = "";
+      generalQuestionnaireUrl = "";
     }
 
     // ─────────────────────────────
@@ -1508,6 +1602,7 @@ await apptRef.set(
         serviceName: apptServiceName,
 
         preAssessmentUrl,
+        generalQuestionnaireUrl,
         whatsAppUrl: "https://wa.me/+6421707687",
         localeHint: undefined,
       });

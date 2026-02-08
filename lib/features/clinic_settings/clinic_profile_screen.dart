@@ -20,6 +20,8 @@ import '../clinic/settings/ui/clinic_opening_hours_screen.dart';
 // ✅ Staff settings UI
 import '../../staff/staff_settings_screen.dart';
 import '../notes/ui/notes_settings_screen.dart';
+import '../settings/ui/clinical_test_registry_screen.dart';
+import '../settings/security_screen.dart';
 
 /// Settings hub screen (inside Settings tab).
 /// - Clinic profile (edit)
@@ -92,6 +94,20 @@ class ClinicProfileScreen extends StatelessWidget {
           const Divider(height: 1),
 
           // ─────────────────────────────
+          // Security (account-level MFA)
+          // ─────────────────────────────
+          ListTile(
+            leading: const Icon(Icons.security_outlined),
+            title: const Text('Security'),
+            subtitle: const Text('Two-step verification (MFA)'),
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const SecurityScreen()),
+            ),
+          ),
+
+          const Divider(height: 1),
+
+          // ─────────────────────────────
           // Staff
           // ─────────────────────────────
           ListTile(
@@ -129,6 +145,30 @@ class ClinicProfileScreen extends StatelessWidget {
             onTap: () => Navigator.of(context).push(
               MaterialPageRoute(
                 builder: (_) => NotesSettingsScreen(clinicId: clinicId),
+              ),
+            ),
+          ),
+
+          const Divider(height: 1),
+
+          // ─────────────────────────────
+          // Clinical test registry
+          // ─────────────────────────────
+          ListTile(
+            leading: const Icon(Icons.science_outlined),
+            title: const Text('Clinical test registry'),
+            subtitle: Text(
+              canViewNotes
+                  ? (canManageNotes
+                      ? 'Manage objective/special tests for this clinic'
+                      : 'View registry (read-only)')
+                  : 'No permission (clinical.read or notes.read required)',
+            ),
+            enabled: canViewNotes,
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) =>
+                    ClinicalTestRegistryScreen(clinicId: clinicId),
               ),
             ),
           ),

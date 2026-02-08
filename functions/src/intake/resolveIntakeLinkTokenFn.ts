@@ -63,11 +63,25 @@ export const resolveIntakeLinkTokenFn = onCall(
 
     const tokenHash = sha256Base64Url(token);
 
-    const q = await db
-      .collectionGroup("intakeLinks")
-      .where("tokenHash", "==", tokenHash)
-      .limit(1)
-      .get();
+    let q;
+    try {
+      q = await db
+        .collectionGroup("intakeLinks")
+        .where("tokenHash", "==", tokenHash)
+        .limit(1)
+        .get();
+    } catch (err: any) {
+      logger.error("resolveIntakeLinkTokenFn: intakeLinks query failed", {
+        code: (err as any)?.code,
+        message: (err as any)?.message,
+        details: (err as any)?.details,
+      });
+      throw new HttpsError(
+        "internal",
+        "Failed to look up questionnaire link.",
+        err
+      );
+    }
 
     if (q.empty) {
       throw new HttpsError("not-found", "Link not found.");

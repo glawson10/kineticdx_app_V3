@@ -185,8 +185,8 @@ class _PatientUploadsTabState extends State<PatientUploadsTab> {
                     } else {
                       _sortKey = key;
                       // Sensible defaults per key.
-                      _sortDescending =
-                          key == _UploadSortKey.date || key == _UploadSortKey.size;
+                      _sortDescending = key == _UploadSortKey.date ||
+                          key == _UploadSortKey.size;
                     }
                   });
                 },
@@ -605,8 +605,7 @@ class _PatientUploadsTabState extends State<PatientUploadsTab> {
                                         strokeWidth: 2),
                                   )
                                 : const Icon(Icons.save),
-                            label:
-                                Text(saving ? 'Saving...' : 'Save notes'),
+                            label: Text(saving ? 'Saving...' : 'Save notes'),
                           ),
                         ],
                       ),
@@ -742,8 +741,7 @@ class _PatientUploadsTabState extends State<PatientUploadsTab> {
                                         strokeWidth: 2),
                                   )
                                 : const Icon(Icons.save),
-                            label:
-                                Text(saving ? 'Saving...' : 'Save tags'),
+                            label: Text(saving ? 'Saving...' : 'Save tags'),
                           ),
                         ],
                       ),
@@ -1239,9 +1237,9 @@ class _UploadThumbnailState extends State<_UploadThumbnail> {
     try {
       doc = await PdfDocument.openData(bytes);
       page = await doc.getPage(1);
-      const targetWidth = 120;
+      const double targetWidth = 120.0;
       final scale = targetWidth / page.width;
-      final targetHeight = (page.height * scale).round();
+      final double targetHeight = page.height * scale;
       final pageImage = await page.render(
         width: targetWidth,
         height: targetHeight,
@@ -1364,8 +1362,7 @@ class _UploadThumbnailState extends State<_UploadThumbnail> {
               right: 4,
               bottom: 4,
               child: Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
                 decoration: BoxDecoration(
                   color: theme.colorScheme.primary,
                   borderRadius: BorderRadius.circular(4),

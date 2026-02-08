@@ -54,6 +54,12 @@ class _GeneralQuestionnaireTokenScreenState
       return 'This link is invalid.\n\nPlease use the full link from the email.';
     }
 
+    // Catch-all for internal/backend issues (eg. missing index, transient errors)
+    if (code == 'internal' || code == 'unknown') {
+      return 'We could not start your questionnaire right now.\n\n'
+          'Please try again in a few minutes. If the problem continues, contact the clinic so they can check their system.';
+    }
+
     return 'Server error.\n\ncode: ${e.code}\nmessage: ${e.message}\ndetails: ${e.details}';
   }
 

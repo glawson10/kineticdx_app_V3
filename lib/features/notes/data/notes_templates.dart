@@ -38,12 +38,16 @@ class NotesSettings {
   final List<NotesTemplate> templates;
   final DateTime? updatedAt;
   final String? updatedByUid;
+  /// Default note kind when creating a new initial note from the patient tab.
+  /// 'basicSoap' | 'initialAssessment'
+  final String defaultInitialNoteKind;
 
   const NotesSettings({
     required this.schemaVersion,
     required this.templates,
     required this.updatedAt,
     required this.updatedByUid,
+    required this.defaultInitialNoteKind,
   });
 
   static const NotesTemplate defaultTemplate = NotesTemplate(
@@ -63,6 +67,7 @@ class NotesSettings {
       templates: defaultTemplates(),
       updatedAt: null,
       updatedByUid: null,
+      defaultInitialNoteKind: 'basicSoap',
     );
   }
 
@@ -92,6 +97,8 @@ class NotesSettings {
       updatedByUid: (m['updatedByUid'] ?? '').toString().trim().isEmpty
           ? null
           : m['updatedByUid'].toString(),
+      defaultInitialNoteKind:
+          (m['defaultInitialNoteKind'] ?? 'basicSoap').toString(),
     );
   }
 
@@ -100,5 +107,15 @@ class NotesSettings {
       if (t.isDefault) return t;
     }
     return templates.isNotEmpty ? templates.first : defaultTemplate;
+  }
+
+  Map<String, dynamic> toMap() {
+    return {
+      'schemaVersion': schemaVersion,
+      'templates': templates.map((t) => t.toMap()).toList(),
+      'updatedAt': updatedAt,
+      'updatedByUid': updatedByUid,
+      'defaultInitialNoteKind': defaultInitialNoteKind,
+    };
   }
 }

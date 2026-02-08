@@ -259,6 +259,23 @@ match /closures/{closureId} {
             || hasPerm(clinicId, "patients.read");
           allow create, update, delete: if hasPerm(clinicId, "patients.write");
         }
+
+        // Structured SOAP notes (Initial Assessment, follow-ups)
+        // Path: clinics/{clinicId}/patients/{patientId}/soapNotes/{noteId}
+        match /soapNotes/{noteId} {
+          allow read:
+            if hasPerm(clinicId, "clinical.read")
+            || hasPerm(clinicId, "notes.read");
+
+          allow create, update:
+            if hasPerm(clinicId, "clinical.write")
+            || hasPerm(clinicId, "notes.write.own")
+            || hasPerm(clinicId, "notes.write.any");
+
+          // Notes are immutable after finalize at the application layer;
+          // hard deletes are not allowed from clients.
+          allow delete: if false;
+        }
       }
 
       // ─────────────────────────────
@@ -277,8 +294,9 @@ match /closures/{closureId} {
       }
 
       // ─────────────────────────────
-      // PUBLIC AVAILABILITY (read-only)
-      // clinics/{clinicId}/public/**/*
+      // PUBLIC (read-only, pre-auth)
+      // clinics/{clinicId}/public/profile = displayName, logoUrl, supportEmail for clinic login portals.
+      // No client writes; projection-only.
       // ─────────────────────────────
       match /public/{docId} {
         allow read: if true;

@@ -44,7 +44,8 @@ class _RegionSelectScreenState extends State<RegionSelectScreen>
     super.initState();
     _fadeController = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 450),
+      // Slightly slower fade so region change feels smoother.
+      duration: const Duration(milliseconds: 650),
     );
   }
 
@@ -140,18 +141,59 @@ class _RegionSelectScreenState extends State<RegionSelectScreen>
                 final height = constraints.maxHeight;
                 final width = constraints.maxWidth;
 
-                Color overlayColorFor(String overlayId) {
+                // Invariants:
+                // - Purely visual overlays; no Firestore or schema changes.
+                // - Region ids / flow wiring remain unchanged.
+
+              Color overlayColorFor(String overlayId) {
                   if (overlayId == _selectedOverlayId) {
-                    return theme.colorScheme.error.withOpacity(0.20);
+                  // Deeper, easier-to-see red for selection.
+                  return theme.colorScheme.error.withValues(alpha: 0.35);
                   }
                   if (overlayId == _hoveredOverlayId) {
-                    return theme.colorScheme.error.withOpacity(0.12);
+                  // Slightly stronger hover state.
+                  return theme.colorScheme.error.withValues(alpha: 0.22);
                   }
                   return Colors.transparent;
                 }
 
+                bool isOverlayActive(String overlayId) {
+                  return overlayId == _selectedOverlayId ||
+                      overlayId == _hoveredOverlayId;
+                }
+
+                Decoration regionDecoration(
+                  String overlayId, {
+                  BorderRadius? borderRadius,
+                }) {
+                  final baseColor = overlayColorFor(overlayId);
+                  if (baseColor.opacity == 0.0) {
+                    // Keep hit area but no visible fill when inactive.
+                    return BoxDecoration(
+                      color: Colors.transparent,
+                      borderRadius: borderRadius,
+                    );
+                  }
+
+                  return BoxDecoration(
+                    borderRadius: borderRadius,
+                    // Soft edge via radial gradient (center solid, edges fade out).
+                    gradient: RadialGradient(
+                      center: Alignment.center,
+                      radius: 0.85,
+                      colors: [
+                        baseColor,
+                        baseColor.withValues(alpha: 0.0),
+                      ],
+                      stops: const [0.0, 1.0],
+                    ),
+                  );
+                }
+
                 String _areaLabelFor(String? overlayId) {
-                  if (overlayId == null) return '—';
+                  // When the mouse is not over any region, show nothing.
+                  if (overlayId == null) return '';
+
                   switch (overlayId) {
                     case 'cervical.center':
                       return 'Neck';
@@ -184,7 +226,7 @@ class _RegionSelectScreenState extends State<RegionSelectScreen>
                     case 'ankle.left':
                       return 'Left ankle';
                     default:
-                      return '—';
+                      return '';
                   }
                 }
 
@@ -210,24 +252,30 @@ class _RegionSelectScreenState extends State<RegionSelectScreen>
                                 ),
                           ),
                           const SizedBox(height: 4),
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 12,
-                              vertical: 8,
-                            ),
-                            decoration: BoxDecoration(
-                              color: theme.colorScheme.surfaceContainerHighest
-                                  .withOpacity(0.9),
-                              border: Border.all(
-                                color:
-                                    theme.colorScheme.outline.withOpacity(0.5),
+                          AnimatedOpacity(
+                            // 0.2s slower fade for label in/out.
+                            duration: const Duration(milliseconds: 380),
+                            curve: Curves.easeInOut,
+                            opacity: _hoveredOverlayId == null ? 0.0 : 1.0,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 8,
                               ),
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            child: Text(
-                              _areaLabelFor(_hoveredOverlayId),
-                              style: theme.textTheme.bodyMedium ??
-                                  const TextStyle(fontSize: 14),
+                              decoration: BoxDecoration(
+                                color: theme.colorScheme.surfaceContainerHighest
+                                    .withValues(alpha: 0.9),
+                                border: Border.all(
+                                  color: theme.colorScheme.outline
+                                      .withValues(alpha: 0.5),
+                                ),
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: Text(
+                                _areaLabelFor(_hoveredOverlayId),
+                                style: theme.textTheme.bodyMedium ??
+                                    const TextStyle(fontSize: 14),
+                              ),
                             ),
                           ),
                         ],
@@ -249,7 +297,8 @@ class _RegionSelectScreenState extends State<RegionSelectScreen>
                       child: MouseRegion(
                         onEnter: (_) => setState(
                             () => _hoveredOverlayId = 'cervical.center'),
-                        onExit: (_) => setState(() => _hoveredOverlayId = null),
+                        onExit: (_) =>
+                            setState(() => _hoveredOverlayId = null),
                         child: GestureDetector(
                           onTap: () => _handleRegionTap(
                             context,
@@ -257,10 +306,16 @@ class _RegionSelectScreenState extends State<RegionSelectScreen>
                             side: 'side.unknown',
                             overlayId: 'cervical.center',
                           ),
-                          child: Container(
-                            decoration: BoxDecoration(
-                              color: overlayColorFor('cervical.center'),
-                              shape: BoxShape.rectangle,
+                          child: AnimatedOpacity(
+                            duration: const Duration(milliseconds: 380),
+                            curve: Curves.easeInOut,
+                            opacity:
+                                isOverlayActive('cervical.center') ? 1.0 : 0.0,
+                            child: Container(
+                              decoration: regionDecoration(
+                                'cervical.center',
+                                borderRadius: BorderRadius.circular(40),
+                              ),
                             ),
                           ),
                         ),
@@ -284,10 +339,16 @@ class _RegionSelectScreenState extends State<RegionSelectScreen>
                             side: 'side.unknown',
                             overlayId: 'thoracic.center',
                           ),
-                          child: Container(
-                            decoration: BoxDecoration(
-                              color: overlayColorFor('thoracic.center'),
-                              borderRadius: BorderRadius.circular(40),
+                          child: AnimatedOpacity(
+                            duration: const Duration(milliseconds: 380),
+                            curve: Curves.easeInOut,
+                            opacity:
+                                isOverlayActive('thoracic.center') ? 1.0 : 0.0,
+                            child: Container(
+                              decoration: regionDecoration(
+                                'thoracic.center',
+                                borderRadius: BorderRadius.circular(40),
+                              ),
                             ),
                           ),
                         ),
@@ -311,10 +372,16 @@ class _RegionSelectScreenState extends State<RegionSelectScreen>
                             side: 'side.unknown',
                             overlayId: 'lumbar.center',
                           ),
-                          child: Container(
-                            decoration: BoxDecoration(
-                              color: overlayColorFor('lumbar.center'),
-                              borderRadius: BorderRadius.circular(40),
+                          child: AnimatedOpacity(
+                            duration: const Duration(milliseconds: 380),
+                            curve: Curves.easeInOut,
+                            opacity:
+                                isOverlayActive('lumbar.center') ? 1.0 : 0.0,
+                            child: Container(
+                              decoration: regionDecoration(
+                                'lumbar.center',
+                                borderRadius: BorderRadius.circular(40),
+                              ),
                             ),
                           ),
                         ),
@@ -339,10 +406,16 @@ class _RegionSelectScreenState extends State<RegionSelectScreen>
                             side: 'side.right',
                             overlayId: 'shoulder.right',
                           ),
-                          child: Container(
-                            decoration: BoxDecoration(
-                              color: overlayColorFor('shoulder.right'),
-                              borderRadius: BorderRadius.circular(40),
+                          child: AnimatedOpacity(
+                            duration: const Duration(milliseconds: 380),
+                            curve: Curves.easeInOut,
+                            opacity:
+                                isOverlayActive('shoulder.right') ? 1.0 : 0.0,
+                            child: Container(
+                              decoration: regionDecoration(
+                                'shoulder.right',
+                                borderRadius: BorderRadius.circular(40),
+                              ),
                             ),
                           ),
                         ),
@@ -365,10 +438,16 @@ class _RegionSelectScreenState extends State<RegionSelectScreen>
                             side: 'side.left',
                             overlayId: 'shoulder.left',
                           ),
-                          child: Container(
-                            decoration: BoxDecoration(
-                              color: overlayColorFor('shoulder.left'),
-                              borderRadius: BorderRadius.circular(40),
+                          child: AnimatedOpacity(
+                            duration: const Duration(milliseconds: 380),
+                            curve: Curves.easeInOut,
+                            opacity:
+                                isOverlayActive('shoulder.left') ? 1.0 : 0.0,
+                            child: Container(
+                              decoration: regionDecoration(
+                                'shoulder.left',
+                                borderRadius: BorderRadius.circular(40),
+                              ),
                             ),
                           ),
                         ),
@@ -391,10 +470,16 @@ class _RegionSelectScreenState extends State<RegionSelectScreen>
                             side: 'side.right',
                             overlayId: 'elbow.right',
                           ),
-                          child: Container(
-                            decoration: BoxDecoration(
-                              color: overlayColorFor('elbow.right'),
-                              borderRadius: BorderRadius.circular(40),
+                          child: AnimatedOpacity(
+                            duration: const Duration(milliseconds: 380),
+                            curve: Curves.easeInOut,
+                            opacity:
+                                isOverlayActive('elbow.right') ? 1.0 : 0.0,
+                            child: Container(
+                              decoration: regionDecoration(
+                                'elbow.right',
+                                borderRadius: BorderRadius.circular(40),
+                              ),
                             ),
                           ),
                         ),
@@ -417,10 +502,16 @@ class _RegionSelectScreenState extends State<RegionSelectScreen>
                             side: 'side.left',
                             overlayId: 'elbow.left',
                           ),
-                          child: Container(
-                            decoration: BoxDecoration(
-                              color: overlayColorFor('elbow.left'),
-                              borderRadius: BorderRadius.circular(40),
+                          child: AnimatedOpacity(
+                            duration: const Duration(milliseconds: 380),
+                            curve: Curves.easeInOut,
+                            opacity:
+                                isOverlayActive('elbow.left') ? 1.0 : 0.0,
+                            child: Container(
+                              decoration: regionDecoration(
+                                'elbow.left',
+                                borderRadius: BorderRadius.circular(40),
+                              ),
                             ),
                           ),
                         ),
@@ -444,10 +535,16 @@ class _RegionSelectScreenState extends State<RegionSelectScreen>
                             side: 'side.right',
                             overlayId: 'wrist.right',
                           ),
-                          child: Container(
-                            decoration: BoxDecoration(
-                              color: overlayColorFor('wrist.right'),
-                              borderRadius: BorderRadius.circular(40),
+                          child: AnimatedOpacity(
+                            duration: const Duration(milliseconds: 380),
+                            curve: Curves.easeInOut,
+                            opacity:
+                                isOverlayActive('wrist.right') ? 1.0 : 0.0,
+                            child: Container(
+                              decoration: regionDecoration(
+                                'wrist.right',
+                                borderRadius: BorderRadius.circular(40),
+                              ),
                             ),
                           ),
                         ),
@@ -470,10 +567,16 @@ class _RegionSelectScreenState extends State<RegionSelectScreen>
                             side: 'side.left',
                             overlayId: 'wrist.left',
                           ),
-                          child: Container(
-                            decoration: BoxDecoration(
-                              color: overlayColorFor('wrist.left'),
-                              borderRadius: BorderRadius.circular(40),
+                          child: AnimatedOpacity(
+                            duration: const Duration(milliseconds: 380),
+                            curve: Curves.easeInOut,
+                            opacity:
+                                isOverlayActive('wrist.left') ? 1.0 : 0.0,
+                            child: Container(
+                              decoration: regionDecoration(
+                                'wrist.left',
+                                borderRadius: BorderRadius.circular(40),
+                              ),
                             ),
                           ),
                         ),
@@ -498,10 +601,16 @@ class _RegionSelectScreenState extends State<RegionSelectScreen>
                             side: 'side.right',
                             overlayId: 'hip.right',
                           ),
-                          child: Container(
-                            decoration: BoxDecoration(
-                              color: overlayColorFor('hip.right'),
-                              borderRadius: BorderRadius.circular(40),
+                          child: AnimatedOpacity(
+                            duration: const Duration(milliseconds: 380),
+                            curve: Curves.easeInOut,
+                            opacity:
+                                isOverlayActive('hip.right') ? 1.0 : 0.0,
+                            child: Container(
+                              decoration: regionDecoration(
+                                'hip.right',
+                                borderRadius: BorderRadius.circular(40),
+                              ),
                             ),
                           ),
                         ),
@@ -524,10 +633,15 @@ class _RegionSelectScreenState extends State<RegionSelectScreen>
                             side: 'side.left',
                             overlayId: 'hip.left',
                           ),
-                          child: Container(
-                            decoration: BoxDecoration(
-                              color: overlayColorFor('hip.left'),
-                              borderRadius: BorderRadius.circular(40),
+                          child: AnimatedOpacity(
+                            duration: const Duration(milliseconds: 180),
+                            curve: Curves.easeInOut,
+                            opacity: isOverlayActive('hip.left') ? 1.0 : 0.0,
+                            child: Container(
+                              decoration: regionDecoration(
+                                'hip.left',
+                                borderRadius: BorderRadius.circular(40),
+                              ),
                             ),
                           ),
                         ),
@@ -551,10 +665,16 @@ class _RegionSelectScreenState extends State<RegionSelectScreen>
                             side: 'side.right',
                             overlayId: 'knee.right',
                           ),
-                          child: Container(
-                            decoration: BoxDecoration(
-                              color: overlayColorFor('knee.right'),
-                              borderRadius: BorderRadius.circular(40),
+                          child: AnimatedOpacity(
+                            duration: const Duration(milliseconds: 180),
+                            curve: Curves.easeInOut,
+                            opacity:
+                                isOverlayActive('knee.right') ? 1.0 : 0.0,
+                            child: Container(
+                              decoration: regionDecoration(
+                                'knee.right',
+                                borderRadius: BorderRadius.circular(40),
+                              ),
                             ),
                           ),
                         ),
@@ -577,10 +697,15 @@ class _RegionSelectScreenState extends State<RegionSelectScreen>
                             side: 'side.left',
                             overlayId: 'knee.left',
                           ),
-                          child: Container(
-                            decoration: BoxDecoration(
-                              color: overlayColorFor('knee.left'),
-                              borderRadius: BorderRadius.circular(40),
+                          child: AnimatedOpacity(
+                            duration: const Duration(milliseconds: 180),
+                            curve: Curves.easeInOut,
+                            opacity: isOverlayActive('knee.left') ? 1.0 : 0.0,
+                            child: Container(
+                              decoration: regionDecoration(
+                                'knee.left',
+                                borderRadius: BorderRadius.circular(40),
+                              ),
                             ),
                           ),
                         ),
@@ -604,10 +729,16 @@ class _RegionSelectScreenState extends State<RegionSelectScreen>
                             side: 'side.right',
                             overlayId: 'ankle.right',
                           ),
-                          child: Container(
-                            decoration: BoxDecoration(
-                              color: overlayColorFor('ankle.right'),
-                              borderRadius: BorderRadius.circular(40),
+                          child: AnimatedOpacity(
+                            duration: const Duration(milliseconds: 180),
+                            curve: Curves.easeInOut,
+                            opacity:
+                                isOverlayActive('ankle.right') ? 1.0 : 0.0,
+                            child: Container(
+                              decoration: regionDecoration(
+                                'ankle.right',
+                                borderRadius: BorderRadius.circular(40),
+                              ),
                             ),
                           ),
                         ),
@@ -630,10 +761,15 @@ class _RegionSelectScreenState extends State<RegionSelectScreen>
                             side: 'side.left',
                             overlayId: 'ankle.left',
                           ),
-                          child: Container(
-                            decoration: BoxDecoration(
-                              color: overlayColorFor('ankle.left'),
-                              borderRadius: BorderRadius.circular(40),
+                          child: AnimatedOpacity(
+                            duration: const Duration(milliseconds: 180),
+                            curve: Curves.easeInOut,
+                            opacity: isOverlayActive('ankle.left') ? 1.0 : 0.0,
+                            child: Container(
+                              decoration: regionDecoration(
+                                'ankle.left',
+                                borderRadius: BorderRadius.circular(40),
+                              ),
                             ),
                           ),
                         ),

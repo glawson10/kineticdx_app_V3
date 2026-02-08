@@ -42,4 +42,8 @@ class AppRoutes {
 
   static const String clinicianLogin = '/clinician/login';
   static const String clinicianHome = '/clinician/home';
+
+  /// Clinic-specific login portal: /c/{clinicId}
+  /// Use path segments: ['c', clinicId].
+  static String clinicPortal(String clinicId) => '/c/${clinicId.trim()}';
 }

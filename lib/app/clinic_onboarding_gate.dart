@@ -14,7 +14,10 @@ import '../features/home/home_page.dart';
 import '../features/home/clinic_home_shell.dart';
 
 class ClinicOnboardingGate extends StatefulWidget {
-  const ClinicOnboardingGate({super.key});
+  const ClinicOnboardingGate({super.key, this.initialClinicId});
+
+  /// When set (e.g. from /c/{clinicId} portal), enter this clinic directly if user is a member.
+  final String? initialClinicId;
 
   @override
   State<ClinicOnboardingGate> createState() => _ClinicOnboardingGateState();
@@ -125,9 +128,18 @@ class _ClinicOnboardingGateState extends State<ClinicOnboardingGate> {
           );
         }
 
-        // Otherwise, decide once: auto-enter last clinic / single clinic / else show picker.
+        // Otherwise, decide once: portal clinic / last clinic / single clinic / else show picker.
         _scheduleDecisionOnce(() async {
           final uid = user.uid;
+          final initialId = widget.initialClinicId?.trim();
+
+          // 0) portal: if we came from /c/{clinicId}, enter that clinic if member
+          if (initialId != null &&
+              initialId.isNotEmpty &&
+              memberships.any((m) => m.clinicId == initialId)) {
+            await _enterClinic(uid: uid, clinicId: initialId);
+            return;
+          }
 
           // 1) prefer last clinic if still valid
           final last = await LastClinicStore.getLastClinic(uid);

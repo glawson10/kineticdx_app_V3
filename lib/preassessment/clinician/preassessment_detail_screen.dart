@@ -545,9 +545,8 @@ class _PreassessmentDetailScreenState extends State<PreassessmentDetailScreen> {
                                 padding: const EdgeInsets.symmetric(
                                     horizontal: 10, vertical: 6),
                                 decoration: BoxDecoration(
-                                  // ✅ use withOpacity for wider Flutter compatibility
                                   color: _triageColor(context, triageStatus)
-                                      .withOpacity(.12),
+                                      .withValues(alpha: 0.12),
                                   border: Border.all(
                                       color:
                                           _triageColor(context, triageStatus)),

@@ -25,7 +25,7 @@ class AnswerValue {
 
   factory AnswerValue.num(double value) => AnswerValue._('num', value);
 
-  factory AnswerValue.text(String value) => AnswerValue._('text', value.trim());
+  factory AnswerValue.text(String value) => AnswerValue._('text', value);
 
   /// Single choice optionId (stable string, not label)
   factory AnswerValue.single(String optionId) =>

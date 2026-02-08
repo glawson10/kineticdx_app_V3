@@ -38,6 +38,7 @@ import '../preassessment/screens/general_questionnaire_token_screen.dart';
 
 // Auth
 import '../features/auth/accept_invite_screen.dart';
+import '../features/auth/clinic_entry_screen.dart';
 
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
@@ -311,6 +312,17 @@ class MyApp extends StatelessWidget {
   // Router
   // ---------------------------------------------------------------------------
 
+  /// Returns clinicId if path is /c/{clinicId}, else null.
+  String? _clinicIdFromPortalPath(String normalizedPath) {
+    if (!normalizedPath.startsWith('/c/')) return null;
+    final segments = normalizedPath.split('/').where((s) => s.isNotEmpty).toList();
+    if (segments.length >= 2 && segments[0] == 'c') {
+      final id = segments[1].trim();
+      return id.isEmpty ? null : id;
+    }
+    return null;
+  }
+
   Route<dynamic> _onGenerateRoute(RouteSettings settings) {
     final routeUri = _routeUri(settings);
     final normalizedPath = _normalizePath(routeUri.path);
@@ -325,6 +337,15 @@ class MyApp extends StatelessWidget {
       _log('   base.uri: ${Uri.base}');
       _log('   base.fragment: ${Uri.base.fragment}');
       _log('   kReleaseMode=$kReleaseMode kDebugMode=$kDebugMode');
+    }
+
+    // Clinic-specific login portal: /c/{clinicId}
+    final portalClinicId = _clinicIdFromPortalPath(normalizedPath);
+    if (portalClinicId != null) {
+      return MaterialPageRoute(
+        settings: settings,
+        builder: (_) => AuthGate(clinicId: portalClinicId),
+      );
     }
 
     switch (normalizedPath) {
@@ -344,7 +365,7 @@ class MyApp extends StatelessWidget {
 
         return MaterialPageRoute(
           settings: settings,
-          builder: (_) => const AuthGate(),
+          builder: (_) => const ClinicEntryScreen(),
         );
       }
 

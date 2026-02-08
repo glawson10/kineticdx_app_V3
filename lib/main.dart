@@ -7,6 +7,7 @@ import 'firebase_options_dev.dart' as dev;
 import 'firebase_options_prod.dart' as prod;
 
 import 'app/app.dart';
+import 'services/deep_link_service.dart';
 
 const String _firebaseEnv =
     String.fromEnvironment('FIREBASE_ENV', defaultValue: 'prod');
@@ -31,6 +32,16 @@ Future<void> main() async {
 
   if (kIsWeb) {
     await FirebaseAuth.instance.setPersistence(Persistence.LOCAL);
+  }
+
+  // Complete email link sign-in if app was opened via magic link
+  final deepLink = DeepLinkService();
+  final linkResult = await deepLink.handleInitialLink();
+  if (linkResult is InitialLinkError && kDebugMode) {
+    debugPrint('Deep link sign-in: ${linkResult.message}');
+  }
+  if (linkResult is InitialLinkMissingEmail && kDebugMode) {
+    debugPrint('Email link opened but no stored email; user can request link again.');
   }
 
   debugPrint('================================================');

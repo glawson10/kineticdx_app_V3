@@ -5,8 +5,6 @@ exports.computeDecisionSupport = void 0;
 const https_1 = require("firebase-functions/v2/https");
 const firestore_1 = require("firebase-admin/firestore");
 const authz_1 = require("../authz");
-const schemaVersions_1 = require("../../schema/schemaVersions");
-const paths_1 = require("../paths");
 // Engines...
 const ankleAdapter_1 = require("./scoring/adapters/ankleAdapter");
 const buildAnkleSummary_1 = require("./scoring/builders/buildAnkleSummary");
@@ -145,63 +143,8 @@ function normalizeAnkleForSummary(raw) {
         triage: (_a = raw === null || raw === void 0 ? void 0 : raw.triage) !== null && _a !== void 0 ? _a : raw === null || raw === void 0 ? void 0 : raw.triageStatus,
     };
 }
-async function ensureAssessmentIdForIntake(params) {
-    var _a, _b, _c;
-    const { clinicId, intakeSessionId, flowId, answers, intake, uid } = params;
-    const existing = intake === null || intake === void 0 ? void 0 : intake.assessmentId;
-    const current = typeof existing === "string" ? existing.trim() : "";
-    if (current)
-        return current;
-    const db = (0, firestore_1.getFirestore)();
-    const id = db.collection("_").doc().id;
-    const ref = (0, paths_1.assessmentRef)(db, clinicId, id);
-    const now = firestore_1.FieldValue.serverTimestamp();
-    const doc = {
-        schemaVersion: (0, schemaVersions_1.schemaVersion)("assessment"),
-        clinicId,
-        packId: "standard_msk_v1",
-        // Optional links if present on intake
-        patientId: (_a = intake === null || intake === void 0 ? void 0 : intake.patientId) !== null && _a !== void 0 ? _a : null,
-        episodeId: (_b = intake === null || intake === void 0 ? void 0 : intake.episodeId) !== null && _b !== void 0 ? _b : null,
-        appointmentId: (_c = intake === null || intake === void 0 ? void 0 : intake.appointmentId) !== null && _c !== void 0 ? _c : null,
-        region: flowId,
-        consentGiven: true,
-        // Snapshot of intake answers at the time we first generated decision support.
-        // Phase 3 intake remains immutable; this is a separate assessment document.
-        answers: answers !== null && answers !== void 0 ? answers : {},
-        triageStatus: null,
-        pdf: {
-            status: "none",
-            storagePath: null,
-            url: null,
-            updatedAt: now,
-        },
-        status: "draft",
-        createdAt: now,
-        updatedAt: now,
-        createdByUid: uid !== null && uid !== void 0 ? uid : "system",
-        updatedByUid: uid !== null && uid !== void 0 ? uid : "system",
-        submittedAt: null,
-        finalizedAt: null,
-        // Helpful reverse-link
-        intakeSessionId,
-    };
-    await Promise.all([
-        ref.set(doc),
-        db
-            .collection("clinics")
-            .doc(clinicId)
-            .collection("intakeSessions")
-            .doc(intakeSessionId)
-            .set({
-            assessmentId: id,
-            updatedAt: now,
-        }, { merge: true }),
-    ]);
-    return id;
-}
 exports.computeDecisionSupport = (0, https_1.onCall)({ region: "europe-west3" }, async (req) => {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p;
+    var _a, _b, _c, _d, _e;
     const db = (0, firestore_1.getFirestore)();
     const clinicId = safeStr((_a = req.data) === null || _a === void 0 ? void 0 : _a.clinicId).trim();
     const intakeSessionId = safeStr((_b = req.data) === null || _b === void 0 ? void 0 : _b.intakeSessionId).trim();
@@ -212,7 +155,6 @@ exports.computeDecisionSupport = (0, https_1.onCall)({ region: "europe-west3" },
         if (!clinicId || !intakeSessionId) {
             throw new https_1.HttpsError("invalid-argument", "clinicId and intakeSessionId are required", { clinicId, intakeSessionId });
         }
-        const uid = req.auth.uid;
         // ✅ clinical read required
         await (0, authz_1.requireActiveMemberWithPerm)(db, clinicId, req.auth.uid, "clinical.read");
         const sessionRef = db
@@ -237,120 +179,69 @@ exports.computeDecisionSupport = (0, https_1.onCall)({ region: "europe-west3" },
             });
         }
         const flowId = safeStr(flow.flowId);
-        const status = safeStr(intake === null || intake === void 0 ? void 0 : intake.status);
-        if (status !== "submitted") {
-            throw new https_1.HttpsError("failed-precondition", "Decision support is only available for submitted intakes.", { clinicId, intakeSessionId, status });
-        }
-        const assessmentId = await ensureAssessmentIdForIntake({
-            clinicId,
-            intakeSessionId,
-            flowId,
-            answers,
-            intake,
-            uid,
-        });
         let summary;
         let engineDispatch = flowId;
         switch (flowId) {
             case "ankle": {
-                const legacyAnswers = (0, ankleAdapter_1.buildAnkleLegacyAnswers)(answers);
-                const raw = await (0, processAnkleAssessment_1.processAnkleAssessmentCore)({
-                    assessmentId,
-                    answers: legacyAnswers,
-                });
-                const clinician = (_c = raw === null || raw === void 0 ? void 0 : raw.clinicianSummary) !== null && _c !== void 0 ? _c : raw;
-                const rawForSummary = normalizeAnkleForSummary(clinician);
+                const raw = await computeAnkleResult(answers);
+                const rawForSummary = normalizeAnkleForSummary(raw);
                 summary = (0, buildAnkleSummary_1.buildAnkleSummary)(rawForSummary, answers);
                 engineDispatch = "ankle";
                 break;
             }
             case "cervical": {
                 const legacyAnswers = (0, cervicalAdapter_1.buildCervicalLegacyAnswers)(answers);
-                const rawResult = await (0, processCervicalAssessment_1.processCervicalAssessmentCore)({
-                    assessmentId,
-                    answers: legacyAnswers,
-                });
-                const clinician = (_d = rawResult === null || rawResult === void 0 ? void 0 : rawResult.clinicianSummary) !== null && _d !== void 0 ? _d : rawResult;
-                summary = (0, buildCervicalSummary_1.buildCervicalSummary)(clinician, answers);
+                const rawResult = (0, processCervicalAssessment_1.processCervicalAssessmentCore)(legacyAnswers);
+                summary = (0, buildCervicalSummary_1.buildCervicalSummary)(rawResult, answers);
                 engineDispatch = "cervical";
                 break;
             }
             case "elbow": {
                 const legacyAnswers = (0, elbowAdapter_1.buildElbowLegacyAnswers)(answers);
-                const rawResult = await (0, processElbowAssessment_1.processElbowAssessmentCore)({
-                    assessmentId,
-                    answers: legacyAnswers,
-                });
-                const clinician = (_e = rawResult === null || rawResult === void 0 ? void 0 : rawResult.clinicianSummary) !== null && _e !== void 0 ? _e : rawResult;
-                summary = (0, buildElbowSummary_1.buildElbowSummary)(clinician, answers);
+                const rawResult = (0, processElbowAssessment_1.processElbowAssessmentCore)(legacyAnswers);
+                summary = (0, buildElbowSummary_1.buildElbowSummary)(rawResult, answers);
                 engineDispatch = "elbow";
                 break;
             }
             case "hip": {
                 const legacyAnswers = (0, hipAdapter_1.buildHipLegacyAnswers)(answers);
-                const rawResult = await (0, processHipAssessment_1.processHipAssessmentCore)({
-                    assessmentId,
-                    answers: legacyAnswers,
-                });
-                const clinician = (_f = rawResult === null || rawResult === void 0 ? void 0 : rawResult.clinicianSummary) !== null && _f !== void 0 ? _f : rawResult;
-                summary = (0, buildHipSummary_1.buildHipSummary)(clinician, answers);
+                const rawResult = (0, processHipAssessment_1.processHipAssessmentCore)(legacyAnswers);
+                summary = (0, buildHipSummary_1.buildHipSummary)(rawResult, answers);
                 engineDispatch = "hip";
                 break;
             }
             case "knee": {
                 const legacyAnswers = (0, kneeAdapter_1.buildKneeLegacyAnswers)(answers);
-                const rawResult = await (0, processKneeAssessment_1.processKneeAssessmentCore)({
-                    assessmentId,
-                    answers: legacyAnswers,
-                });
-                const clinician = (_g = rawResult === null || rawResult === void 0 ? void 0 : rawResult.clinicianSummary) !== null && _g !== void 0 ? _g : rawResult;
-                summary = (0, buildKneeSummary_1.buildKneeSummary)(clinician, answers);
+                const rawResult = (0, processKneeAssessment_1.processKneeAssessmentCore)(legacyAnswers);
+                summary = (0, buildKneeSummary_1.buildKneeSummary)(rawResult, answers);
                 engineDispatch = "knee";
                 break;
             }
             case "lumbar": {
                 const answerMap = (0, lumbarAdapter_1.buildLumbarAnswerMap)(answers);
-                const rawResult = await (0, processLumbarAssessment_1.processLumbarAssessmentWriteCore)({
-                    assessmentId,
-                    answers: answerMap,
-                });
-                const clinician = (_h = rawResult === null || rawResult === void 0 ? void 0 : rawResult.clinicianSummary) !== null && _h !== void 0 ? _h : rawResult;
-                const coreResult = (0, processLumbarAssessment_1.processLumbarAssessmentCore)(answerMap);
-                // Prefer explicit coreResult for stability; clinician is stored on assessment.
-                summary = (0, buildLumbarSummary_1.buildLumbarSummary)(coreResult, answers);
+                const rawResult = (0, processLumbarAssessment_1.processLumbarAssessmentCore)(answerMap);
+                summary = (0, buildLumbarSummary_1.buildLumbarSummary)(rawResult, answers);
                 engineDispatch = "lumbar";
                 break;
             }
             case "shoulder": {
                 const rawForScorer = (0, shoulderAdapter_1.buildShoulderRawForScorer)(answers);
-                const rawResult = await (0, processShoulderAssessment_1.processShoulderAssessmentCore)({
-                    assessmentId,
-                    answers: rawForScorer,
-                });
-                const clinician = (_j = rawResult === null || rawResult === void 0 ? void 0 : rawResult.clinicianSummary) !== null && _j !== void 0 ? _j : rawResult;
-                summary = (0, buildShoulderSummary_1.buildShoulderSummary)(clinician, answers);
+                const rawResult = (0, processShoulderAssessment_1.processShoulderAssessmentCore)(rawForScorer);
+                summary = (0, buildShoulderSummary_1.buildShoulderSummary)(rawResult, answers);
                 engineDispatch = "shoulder";
                 break;
             }
             case "thoracic": {
                 const legacyAnswers = (0, thoracicAdapter_1.buildThoracicLegacyAnswers)(answers);
-                const rawResult = await (0, processThoracicAssessment_1.processThoracicAssessmentCore)({
-                    assessmentId,
-                    answers: legacyAnswers,
-                });
-                const clinician = (_k = rawResult === null || rawResult === void 0 ? void 0 : rawResult.clinicianSummary) !== null && _k !== void 0 ? _k : rawResult;
-                summary = (0, buildThoracicSummary_1.buildThoracicSummary)(clinician, answers);
+                const rawResult = (0, processThoracicAssessment_1.processThoracicAssessmentCore)(legacyAnswers);
+                summary = (0, buildThoracicSummary_1.buildThoracicSummary)(rawResult, answers);
                 engineDispatch = "thoracic";
                 break;
             }
             case "wrist": {
                 const legacyAnswers = (0, wristAdapter_1.buildWristLegacyAnswers)(answers);
-                const rawResult = await (0, processWristAssessment_1.processWristAssessmentCore)({
-                    assessmentId,
-                    answers: legacyAnswers,
-                });
-                const clinician = (_l = rawResult === null || rawResult === void 0 ? void 0 : rawResult.clinicianSummary) !== null && _l !== void 0 ? _l : rawResult;
-                summary = (0, buildWristSummary_1.buildWristSummary)(clinician, answers);
+                const rawResult = (0, processWristAssessment_1.processWristAssessmentCore)(legacyAnswers);
+                summary = (0, buildWristSummary_1.buildWristSummary)(rawResult, answers);
                 engineDispatch = "wrist";
                 break;
             }
@@ -398,7 +289,7 @@ exports.computeDecisionSupport = (0, https_1.onCall)({ region: "europe-west3" },
                     .doc(intakeSessionId)
                     .set({
                     status: "error",
-                    error: safeStr((_m = e === null || e === void 0 ? void 0 : e.message) !== null && _m !== void 0 ? _m : "Decision support failed"),
+                    error: safeStr((_c = e === null || e === void 0 ? void 0 : e.message) !== null && _c !== void 0 ? _c : "Decision support failed"),
                     generatedAt: firestore_1.FieldValue.serverTimestamp(),
                 }, { merge: true });
             }
@@ -408,9 +299,9 @@ exports.computeDecisionSupport = (0, https_1.onCall)({ region: "europe-west3" },
         }
         if (e instanceof https_1.HttpsError)
             throw e;
-        throw new https_1.HttpsError("internal", safeStr((_o = e === null || e === void 0 ? void 0 : e.message) !== null && _o !== void 0 ? _o : "Decision support failed"), {
+        throw new https_1.HttpsError("internal", safeStr((_d = e === null || e === void 0 ? void 0 : e.message) !== null && _d !== void 0 ? _d : "Decision support failed"), {
             name: e === null || e === void 0 ? void 0 : e.name,
-            stack: safeStr((_p = e === null || e === void 0 ? void 0 : e.stack) !== null && _p !== void 0 ? _p : "").split("\n").slice(0, 12).join("\n"),
+            stack: safeStr((_e = e === null || e === void 0 ? void 0 : e.stack) !== null && _e !== void 0 ? _e : "").split("\n").slice(0, 12).join("\n"),
         });
     }
 });

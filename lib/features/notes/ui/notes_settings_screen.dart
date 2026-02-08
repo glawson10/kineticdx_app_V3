@@ -43,9 +43,9 @@ class NotesSettingsScreen extends StatelessWidget {
             return const Center(child: CircularProgressIndicator());
           }
 
-          final settings = snap.data!.exists
-              ? NotesSettings.fromMap(snap.data!.data())
-              : NotesSettings.fallback();
+          final raw = snap.data!.data();
+          final settings =
+              snap.data!.exists ? NotesSettings.fromMap(raw) : NotesSettings.fallback();
 
           return ListView(
             padding: const EdgeInsets.all(16),
@@ -70,6 +70,44 @@ class NotesSettingsScreen extends StatelessWidget {
               if (settings.templates.isEmpty)
                 const Center(child: Text('No templates configured.')),
               const SizedBox(height: 8),
+              const Divider(),
+              const SizedBox(height: 8),
+              Text(
+                'Default initial note',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Controls which editor opens when creating a new initial note '
+                'from the patient Notes tab.',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+              const SizedBox(height: 8),
+              RadioListTile<String>(
+                title: const Text('Basic SOAP (free text)'),
+                value: 'basicSoap',
+                groupValue: settings.defaultInitialNoteKind,
+                onChanged: canManage
+                    ? (v) => _updateDefaultInitialKind(
+                          context,
+                          docRef,
+                          v ?? 'basicSoap',
+                        )
+                    : null,
+              ),
+              RadioListTile<String>(
+                title: const Text('Initial Assessment (structured)'),
+                value: 'initialAssessment',
+                groupValue: settings.defaultInitialNoteKind,
+                onChanged: canManage
+                    ? (v) => _updateDefaultInitialKind(
+                          context,
+                          docRef,
+                          v ?? 'initialAssessment',
+                        )
+                    : null,
+              ),
+              const SizedBox(height: 8),
               if (!canManage)
                 const Text(
                   'Read-only. Manage templates requires settings.write.',
@@ -79,6 +117,31 @@ class NotesSettingsScreen extends StatelessWidget {
           );
         },
       ),
+    );
+  }
+}
+
+Future<void> _updateDefaultInitialKind(
+  BuildContext context,
+  DocumentReference<Map<String, dynamic>> docRef,
+  String kind,
+) async {
+  try {
+    await docRef.set(
+      {
+        'defaultInitialNoteKind': kind,
+        'updatedAt': FieldValue.serverTimestamp(),
+      },
+      SetOptions(merge: true),
+    );
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Default initial note updated.')),
+    );
+  } catch (e) {
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Failed to update: $e')),
     );
   }
 }

@@ -73,8 +73,7 @@ class _StaffSettingsScreenState extends State<StaffSettingsScreen> {
 
               // DEV-only helper: if emailing disabled, show token in console
               if (!sent && token.isNotEmpty) {
-                // ignore: avoid_print
-                print('DEV invite token=$token');
+                debugPrint('DEV invite token=$token');
               }
             } catch (e) {
               setD(() => error = e.toString());

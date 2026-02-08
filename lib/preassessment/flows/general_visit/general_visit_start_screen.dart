@@ -15,6 +15,7 @@ import 'package:kineticdx_app_v3/preassessment/widgets/question_widgets/text_que
 
 import 'package:kineticdx_app_v3/preassessment/flows/review/review_screen.dart';
 import 'package:kineticdx_app_v3/preassessment/flows/general_visit/general_visit_v1_maps.dart';
+import 'package:kineticdx_app_v3/preassessment/flows/general_visit/general_visit_body_areas_question.dart';
 
 /// General visit questionnaire (generalVisit.v1)
 ///
@@ -53,7 +54,7 @@ class _GeneralVisitStartScreenState extends State<GeneralVisitStartScreen> {
       'generalVisit.goals.reasonForVisit': 'What made you book this visit?',
       'generalVisit.meta.concernClarity':
           'Is this one main concern or multiple?',
-      'generalVisit.history.bodyAreas': 'Which broad areas are involved?',
+      'generalVisit.history.bodyAreas': 'Which areas are involved?',
       'generalVisit.function.primaryImpact': 'What is the main impact for you?',
       'generalVisit.function.limitedActivities':
           'Which activities are currently affected? (optional)',
@@ -122,6 +123,18 @@ class _GeneralVisitStartScreenState extends State<GeneralVisitStartScreen> {
     final errKey = _errors[q.questionId];
     final errorText =
         errKey == null ? null : _t('preassessment.validation.$errKey');
+
+    // Custom renderer for bodyAreas: reuse the body-map style selector and
+    // write into the existing multiChoice question.
+    if (q.questionId == 'generalVisit.history.bodyAreas') {
+      return GeneralVisitBodyAreasQuestion(
+        q: q,
+        value: value,
+        onChanged: (v) => _setAnswer(draft, q.questionId, v),
+        errorText: errorText,
+        t: _t,
+      );
+    }
 
     switch (q.valueType) {
       case QuestionValueType.boolType:

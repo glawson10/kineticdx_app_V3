@@ -36,8 +36,8 @@ var __exportStar = (this && this.__exportStar) || function(m, exports) {
     for (var p in m) if (p !== "default" && !Object.prototype.hasOwnProperty.call(exports, p)) __createBinding(exports, m, p);
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.bootstrapPublicBookingSettingsFn = exports.consumeIntakeInviteFn = exports.backfillNotificationsSettings = exports.onClinicCreatedProvisionDefaults = exports.testCallable = exports.rescheduleBookingWithTokenFn = exports.cancelBookingWithTokenFn = exports.getManageContextFn = exports.listPublicSlotsFn = exports.mirrorPractitionerToPublic = exports.onClinicalNoteWrite = exports.onAppointmentWrite_toBusyBlock = exports.onPublicBookingSettingsWrite = exports.onBookingRequestCreateV2 = exports.exportClosureOverrideAuditReportFn = exports.submitIntakeSessionFn = exports.generateAssessmentPdfFn = exports.getAssessmentPackFn = exports.submitAssessmentFn = exports.deleteOutcomeMeasureFn = exports.upsertOutcomeMeasureFn = exports.deleteClinicalTestFn = exports.upsertClinicalTestFn = exports.amendClinicalNoteFn = exports.createClinicalNoteFn = exports.closeEpisodeFn = exports.updateEpisodeFn = exports.createEpisodeFn = exports.deletePatientFn = exports.mergePatientsFn = exports.updatePatientFn = exports.createPatientFn = exports.updateAppointmentStatusFn = exports.updateAppointmentFn = exports.deleteAppointmentFn = exports.createAppointmentFn = exports.deleteClosureFn = exports.createClosureFn = exports.setStaffAvailabilityDefaultFn = exports.upsertStaffProfileFn = exports.updateClinicWeeklyHoursFn = exports.syncMyDisplayNameFn = exports.setMembershipStatusFn = exports.updateClinicProfileFn = exports.acceptInviteFn = exports.inviteMemberFn = exports.updateMemberProfileFn = exports.clinicCreateFn = exports.getSchemaVersionsFn = exports.computeIntakeSummaryV2 = exports.BREVO_API_KEY = void 0;
-exports.onClinicCreatedProvisionOwnerMembership = exports.resolveIntakeSessionFromBookingRequestFn = exports.intakePdfOnSubmit = exports.createBookingRequestFn = void 0;
+exports.onClinicCreatedProvisionDefaults = exports.testCallable = exports.rescheduleBookingWithTokenFn = exports.cancelBookingWithTokenFn = exports.getManageContextFn = exports.listPublicSlotsFn = exports.onClinicalNoteWrite = exports.mirrorPractitionerToPublic = exports.onAppointmentWrite_toBusyBlock = exports.onPublicBookingSettingsWrite = exports.onBookingRequestCreateV2 = exports.exportClosureOverrideAuditReportFn = exports.resolveIntakeLinkTokenFn = exports.createGeneralQuestionnaireLinkFn = exports.submitIntakeSessionFn = exports.generateAssessmentPdfFn = exports.getAssessmentPackFn = exports.submitAssessmentFn = exports.deleteOutcomeMeasureFn = exports.upsertOutcomeMeasureFn = exports.deleteClinicalTestFn = exports.upsertClinicalTestFn = exports.amendClinicalNoteFn = exports.createClinicalNoteFn = exports.closeEpisodeFn = exports.updateEpisodeFn = exports.createEpisodeFn = exports.deletePatientFn = exports.mergePatientsFn = exports.updatePatientFn = exports.createPatientFn = exports.updateAppointmentStatusFn = exports.updateAppointmentFn = exports.deleteAppointmentFn = exports.createAppointmentFn = exports.deleteClosureFn = exports.createClosureFn = exports.setStaffAvailabilityDefaultFn = exports.upsertStaffProfileFn = exports.updateClinicWeeklyHoursFn = exports.syncMyDisplayNameFn = exports.setMembershipStatusFn = exports.updateClinicProfileFn = exports.acceptInviteFn = exports.inviteMemberFn = exports.updateMemberProfileFn = exports.clinicCreateFn = exports.getSchemaVersionsFn = exports.computeIntakeSummaryV2 = exports.BREVO_API_KEY = void 0;
+exports.onClinicCreatedProvisionOwnerMembership = exports.resolveIntakeSessionFromBookingRequestFn = exports.intakePdfOnSubmit = exports.createBookingRequestFn = exports.bootstrapPublicBookingSettingsFn = exports.consumeIntakeInviteFn = exports.backfillNotificationsSettings = void 0;
 // functions/src/index.ts
 const admin = __importStar(require("firebase-admin"));
 const https_1 = require("firebase-functions/v2/https");
@@ -119,6 +119,10 @@ const submitIntakeSession_1 = require("./clinic/intake/submitIntakeSession");
 var computeIntakeSummary_1 = require("./clinic/intake/computeIntakeSummary");
 Object.defineProperty(exports, "computeIntakeSummaryV2", { enumerable: true, get: function () { return computeIntakeSummary_1.computeIntakeSummaryV2; } });
 __exportStar(require("./clinic/intake/computeDecisionSupport"), exports);
+const createGeneralQuestionnaireLinkFn_1 = require("./intake/createGeneralQuestionnaireLinkFn");
+Object.defineProperty(exports, "createGeneralQuestionnaireLinkFn", { enumerable: true, get: function () { return createGeneralQuestionnaireLinkFn_1.createGeneralQuestionnaireLinkFn; } });
+const resolveIntakeLinkTokenFn_1 = require("./intake/resolveIntakeLinkTokenFn");
+Object.defineProperty(exports, "resolveIntakeLinkTokenFn", { enumerable: true, get: function () { return resolveIntakeLinkTokenFn_1.resolveIntakeLinkTokenFn; } });
 // ─────────────────────────────
 // Audit exports
 // ─────────────────────────────
@@ -190,10 +194,10 @@ var onPublicBookingSettingsWrite_1 = require("./public/onPublicBookingSettingsWr
 Object.defineProperty(exports, "onPublicBookingSettingsWrite", { enumerable: true, get: function () { return onPublicBookingSettingsWrite_1.onPublicBookingSettingsWrite; } });
 var onAppointmentWrite_toBusyBlock_1 = require("./availability/onAppointmentWrite_toBusyBlock");
 Object.defineProperty(exports, "onAppointmentWrite_toBusyBlock", { enumerable: true, get: function () { return onAppointmentWrite_toBusyBlock_1.onAppointmentWrite_toBusyBlock; } });
-var onClinicalNoteWrite_1 = require("./clinic/notes/onClinicalNoteWrite");
-Object.defineProperty(exports, "onClinicalNoteWrite", { enumerable: true, get: function () { return onClinicalNoteWrite_1.onClinicalNoteWrite; } });
 var practitionerPublicMirror_1 = require("./projections/practitionerPublicMirror");
 Object.defineProperty(exports, "mirrorPractitionerToPublic", { enumerable: true, get: function () { return practitionerPublicMirror_1.mirrorPractitionerToPublic; } });
+var onClinicalNoteWrite_1 = require("./clinic/notes/onClinicalNoteWrite");
+Object.defineProperty(exports, "onClinicalNoteWrite", { enumerable: true, get: function () { return onClinicalNoteWrite_1.onClinicalNoteWrite; } });
 exports.getManageContextFn = bookingActions_1.getManageContext;
 exports.cancelBookingWithTokenFn = bookingActions_1.cancelBookingWithToken;
 exports.rescheduleBookingWithTokenFn = bookingActions_1.rescheduleBookingWithToken;
