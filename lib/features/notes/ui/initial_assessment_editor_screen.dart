@@ -420,6 +420,10 @@ class _InitialAssessmentEditorScreenState
             _buildPainScoresSection(readOnly),
             const SizedBox(height: 24),
             
+            // Collapsible secondary history
+            _buildSecondaryHistorySection(readOnly),
+            const SizedBox(height: 24),
+            
             // Body chart
             _buildBodyChartSection(readOnly),
           ],
@@ -532,6 +536,81 @@ class _InitialAssessmentEditorScreenState
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildSecondaryHistorySection(bool readOnly) {
+    return Theme(
+      data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+      child: ExpansionTile(
+        tilePadding: EdgeInsets.zero,
+        childrenPadding: const EdgeInsets.only(top: 12),
+        title: Row(
+          children: [
+            Icon(
+              Icons.folder_outlined,
+              size: 18,
+              color: Theme.of(context).colorScheme.onSurface.withOpacity(0.6),
+            ),
+            const SizedBox(width: 8),
+            Text(
+              'Additional history',
+              style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ],
+        ),
+        children: [
+          TextField(
+            controller: TextEditingController(text: _note?.pastMedicalHistory ?? ''),
+            readOnly: readOnly,
+            minLines: 2,
+            maxLines: 4,
+            decoration: const InputDecoration(
+              labelText: 'Past medical history',
+              border: OutlineInputBorder(),
+              isDense: true,
+            ),
+            onChanged: (value) {
+              if (_note == null || readOnly) return;
+              // TODO: Update note with pastMedicalHistory
+            },
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: TextEditingController(text: _note?.meds ?? ''),
+            readOnly: readOnly,
+            minLines: 2,
+            maxLines: 4,
+            decoration: const InputDecoration(
+              labelText: 'Medications',
+              border: OutlineInputBorder(),
+              isDense: true,
+            ),
+            onChanged: (value) {
+              if (_note == null || readOnly) return;
+              // TODO: Update note with meds
+            },
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: TextEditingController(text: _note?.imaging ?? ''),
+            readOnly: readOnly,
+            minLines: 2,
+            maxLines: 4,
+            decoration: const InputDecoration(
+              labelText: 'Imaging',
+              border: OutlineInputBorder(),
+              isDense: true,
+            ),
+            onChanged: (value) {
+              if (_note == null || readOnly) return;
+              // TODO: Update note with imaging
+            },
+          ),
+        ],
+      ),
     );
   }
 
