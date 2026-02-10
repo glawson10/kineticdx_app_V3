@@ -39,7 +39,14 @@ class _InitialAssessmentEditorScreenState
 
   final TextEditingController _presentingComplaint = TextEditingController();
   final TextEditingController _primaryDiagnosis = TextEditingController();
+  final TextEditingController _assessmentSummary = TextEditingController();
+  final TextEditingController _contributingFactorsCtrl = TextEditingController();
+  final TextEditingController _differentialDiagnosesCtrl = TextEditingController();
   final TextEditingController _planSummary = TextEditingController();
+  final TextEditingController _educationAdvice = TextEditingController();
+  final TextEditingController _manualTherapy = TextEditingController();
+  final TextEditingController _followUp = TextEditingController();
+  final TextEditingController _homeAdvice = TextEditingController();
 
   BodyRegion _bodyRegion = BodyRegion.cervical;
 
@@ -52,7 +59,14 @@ class _InitialAssessmentEditorScreenState
   void dispose() {
     _presentingComplaint.dispose();
     _primaryDiagnosis.dispose();
+    _assessmentSummary.dispose();
+    _contributingFactorsCtrl.dispose();
+    _differentialDiagnosesCtrl.dispose();
     _planSummary.dispose();
+    _educationAdvice.dispose();
+    _manualTherapy.dispose();
+    _followUp.dispose();
+    _homeAdvice.dispose();
     super.dispose();
   }
 
@@ -187,7 +201,14 @@ class _InitialAssessmentEditorScreenState
     _bodyRegion = note.bodyRegion;
     _presentingComplaint.text = note.presentingComplaint;
     _primaryDiagnosis.text = note.primaryDiagnosis;
+    _assessmentSummary.text = note.clinicalReasoning;
+    _contributingFactorsCtrl.text = note.contributingFactors;
+    _differentialDiagnosesCtrl.text = note.differentialDiagnoses.join('\n');
     _planSummary.text = note.planSummary;
+    _educationAdvice.text = note.educationAdvice;
+    _manualTherapy.text = note.manualTherapy;
+    _followUp.text = note.followUp;
+    _homeAdvice.text = note.homeAdvice;
 
     final missing = _missingRequired(note);
 
@@ -496,58 +517,369 @@ class _InitialAssessmentEditorScreenState
   }
 
   Widget _buildAssessmentCard(bool readOnly) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Assessment',
-              style: Theme.of(context).textTheme.titleMedium,
+    final theme = Theme.of(context);
+    
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Clinical impression section
+        Card(
+          elevation: 0,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+            side: BorderSide(color: theme.dividerColor),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(Icons.psychology_outlined, size: 20, color: theme.primaryColor),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Clinical impression',
+                      style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: _primaryDiagnosis,
+                  readOnly: readOnly,
+                  style: const TextStyle(fontWeight: FontWeight.w600),
+                  decoration: const InputDecoration(
+                    labelText: 'Primary diagnosis *',
+                    hintText: 'e.g., Subacromial pain syndrome',
+                    border: OutlineInputBorder(),
+                    isDense: true,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _assessmentSummary,
+                  readOnly: readOnly,
+                  minLines: 5,
+                  maxLines: 8,
+                  decoration: const InputDecoration(
+                    labelText: 'Clinical reasoning',
+                    hintText: 'Based on subjective history, objective findings and response to testing...',
+                    helperText: 'Synthesize your clinical reasoning here',
+                    helperMaxLines: 2,
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+              ],
             ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _primaryDiagnosis,
-              readOnly: readOnly,
-              minLines: 1,
-              maxLines: 3,
-              decoration: const InputDecoration(
-                labelText: 'Primary diagnosis *',
-                border: OutlineInputBorder(),
-              ),
-            ),
-          ],
+          ),
         ),
-      ),
+        const SizedBox(height: 16),
+
+        // Contributing factors section
+        Card(
+          elevation: 0,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+            side: BorderSide(color: theme.dividerColor),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(Icons.search_outlined, size: 20, color: theme.primaryColor),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Contributing factors',
+                      style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _contributingFactorsCtrl,
+                  readOnly: readOnly,
+                  minLines: 3,
+                  maxLines: 5,
+                  decoration: const InputDecoration(
+                    hintText: 'Load management, movement pattern, strength deficit, psychosocial factors...',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 16),
+
+        // Differential diagnoses (optional, collapsible)
+        Card(
+          elevation: 0,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+            side: BorderSide(color: theme.dividerColor),
+          ),
+          child: Theme(
+            data: theme.copyWith(dividerColor: Colors.transparent),
+            child: ExpansionTile(
+              title: Row(
+                children: [
+                  Icon(Icons.list_alt_outlined, size: 20, color: theme.primaryColor),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Differential diagnoses',
+                    style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(width: 8),
+                  Text('(optional)', style: TextStyle(fontSize: 12, color: Colors.grey[600])),
+                ],
+              ),
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                  child: TextField(
+                    controller: _differentialDiagnosesCtrl,
+                    readOnly: readOnly,
+                    minLines: 4,
+                    maxLines: 6,
+                    decoration: const InputDecoration(
+                      labelText: 'Alternative diagnoses considered',
+                      hintText: 'List other conditions considered and why they were ruled out',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
     );
   }
 
   Widget _buildPlanCard(bool readOnly) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Plan',
-              style: Theme.of(context).textTheme.titleMedium,
+    final theme = Theme.of(context);
+    final note = _note;
+    
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Treatment today / Plan summary section
+        Card(
+          elevation: 0,
+          color: theme.colorScheme.primaryContainer.withOpacity(0.3),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+            side: BorderSide(color: theme.primaryColor.withOpacity(0.3)),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(Icons.healing_outlined, size: 20, color: theme.primaryColor),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Treatment & Management Plan',
+                      style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Overall treatment approach and management strategy',
+                  style: theme.textTheme.bodySmall?.copyWith(color: Colors.grey[700]),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _planSummary,
+                  readOnly: readOnly,
+                  minLines: 4,
+                  maxLines: 6,
+                  decoration: const InputDecoration(
+                    hintText: 'Manual therapy, exercise prescription, load management, education...',
+                    helperText: 'Include response to treatment (medico-legally important)',
+                    helperMaxLines: 2,
+                    border: OutlineInputBorder(),
+                    filled: true,
+                    fillColor: Colors.white,
+                  ),
+                ),
+              ],
             ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _planSummary,
-              readOnly: readOnly,
-              minLines: 3,
-              maxLines: 5,
-              decoration: const InputDecoration(
-                labelText: 'Plan summary *',
-                border: OutlineInputBorder(),
+          ),
+        ),
+        const SizedBox(height: 16),
+
+        // Manual therapy section
+        if (note != null && note.manualTherapy.isNotEmpty || !readOnly) ...[
+          Card(
+            elevation: 0,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+              side: BorderSide(color: theme.dividerColor),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(Icons.hands_home_work_outlined, size: 20, color: theme.primaryColor),
+                      const SizedBox(width: 8),
+                      Text(
+                        'Manual therapy',
+                        style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: _manualTherapy,
+                    readOnly: readOnly,
+                    minLines: 3,
+                    maxLines: 4,
+                    decoration: const InputDecoration(
+                      hintText: 'Techniques applied and patient response...',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                ],
               ),
             ),
-          ],
+          ),
+          const SizedBox(height: 16),
+        ],
+
+        // Home programme / Exercises section
+        Card(
+          elevation: 0,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+            side: BorderSide(color: theme.dividerColor),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(Icons.home_outlined, size: 20, color: theme.primaryColor),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Home programme & advice',
+                      style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _homeAdvice,
+                  readOnly: readOnly,
+                  minLines: 4,
+                  maxLines: 6,
+                  decoration: const InputDecoration(
+                    labelText: 'Exercise prescription & home advice',
+                    hintText: 'Exercise name, dosage (sets/reps), key cues, activity modifications...',
+                    helperText: 'Structure: exercise → dosage → cue',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+              ],
+            ),
+          ),
         ),
-      ),
+        const SizedBox(height: 16),
+
+        // Education & advice section
+        Card(
+          elevation: 0,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+            side: BorderSide(color: theme.dividerColor),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(Icons.school_outlined, size: 20, color: theme.primaryColor),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Education & advice',
+                      style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Red flags discussed, expectations set, load advice given...',
+                  style: theme.textTheme.bodySmall?.copyWith(color: Colors.grey[600], fontStyle: FontStyle.italic),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _educationAdvice,
+                  readOnly: readOnly,
+                  minLines: 4,
+                  maxLines: 6,
+                  decoration: const InputDecoration(
+                    hintText: 'Safety netting, activity modification, pain education, prognosis discussion...',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 16),
+
+        // Follow-up plan
+        Card(
+          elevation: 0,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+            side: BorderSide(color: theme.dividerColor),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(Icons.event_outlined, size: 20, color: theme.primaryColor),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Follow-up plan',
+                      style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _followUp,
+                  readOnly: readOnly,
+                  minLines: 2,
+                  maxLines: 3,
+                  decoration: const InputDecoration(
+                    hintText: 'Review in 1 week, discharge after 4 sessions, refer if no improvement...',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
     );
   }
 
@@ -563,6 +895,14 @@ class _InitialAssessmentEditorScreenState
       missing.add('plan summary');
     }
     return missing;
+  }
+
+  List<String> _splitList(String raw) {
+    return raw
+        .split(RegExp(r'[\n;,]'))
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toList();
   }
 
   Future<void> _save(InitialAssessmentNote note, String uid) async {
@@ -609,21 +949,21 @@ class _InitialAssessmentEditorScreenState
         regionSpecificObjective: note.regionSpecificObjective,
         specialTests: note.specialTests,
         primaryDiagnosis: _primaryDiagnosis.text.trim(),
-        differentialDiagnoses: note.differentialDiagnoses,
-        contributingFactors: note.contributingFactors,
-        clinicalReasoning: note.clinicalReasoning,
+        differentialDiagnoses: _splitList(_differentialDiagnosesCtrl.text),
+        contributingFactors: _contributingFactorsCtrl.text.trim(),
+        clinicalReasoning: _assessmentSummary.text.trim(),
         severity: note.severity,
         irritability: note.irritability,
         stage: note.stage,
         outcomeMeasures: note.outcomeMeasures,
         planSummary: _planSummary.text.trim(),
-        educationAdvice: note.educationAdvice,
+        educationAdvice: _educationAdvice.text.trim(),
         exercises: note.exercises,
-        manualTherapy: note.manualTherapy,
-        followUp: note.followUp,
+        manualTherapy: _manualTherapy.text.trim(),
+        followUp: _followUp.text.trim(),
         referrals: note.referrals,
         consentConfirmed: note.consentConfirmed,
-        homeAdvice: note.homeAdvice,
+        homeAdvice: _homeAdvice.text.trim(),
       );
       await _repo.updateInitialAssessment(
         note: updated,
