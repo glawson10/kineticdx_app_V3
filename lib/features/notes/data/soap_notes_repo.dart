@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 
 import '../../../models/clinical_tests.dart';
 import '../../../models/soap_note.dart';
+import 'body_chart.dart';
 import 'initial_assessment_note.dart';
 
 /// Clinic-scoped repository for structured SOAP notes.
@@ -184,6 +185,7 @@ class SoapNotesRepository {
         'imaging': '',
         'goals': '',
         'functionalLimitations': '',
+        'bodyChart': const BodyChartState.empty().toMap(),
       },
       'objective': <String, dynamic>{
         'observation': '',

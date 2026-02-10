@@ -45,6 +45,8 @@ flutter:
     - assets/fundamental_recovery.png
     - assets/intro_h264.mp4
     - assets/body_map_person.png
+    - assets/body_front.png
+    - assets/body_back.png
 
   fonts:
     - family: OpenSans

@@ -4,9 +4,11 @@ import 'package:provider/provider.dart';
 
 import '../../../app/clinic_context.dart';
 import '../../../models/clinical_tests.dart';
+import '../data/body_chart.dart';
 import '../data/initial_assessment_note.dart';
 import '../data/soap_notes_repo.dart';
 import '../data/notes_permissions.dart';
+import 'widgets/body_chart_editor.dart';
 import 'widgets/special_tests_picker.dart';
 
 /// Minimal Initial Assessment editor wired to clinic-scoped SOAP notes.
@@ -36,6 +38,7 @@ class _InitialAssessmentEditorScreenState
   InitialAssessmentNote? _note;
   bool _saving = false;
   bool _creating = false;
+  bool _isDrawingOnBodyChart = false;
 
   final TextEditingController _presentingComplaint = TextEditingController();
   final TextEditingController _primaryDiagnosis = TextEditingController();
@@ -238,6 +241,9 @@ class _InitialAssessmentEditorScreenState
           Expanded(
             child: ListView(
               padding: const EdgeInsets.all(16),
+              physics: _isDrawingOnBodyChart
+                  ? const NeverScrollableScrollPhysics()
+                  : null,
               children: [
                 _buildHeader(readOnly),
                 const SizedBox(height: 16),
@@ -317,6 +323,7 @@ class _InitialAssessmentEditorScreenState
                               goals: _note!.goals,
                               functionalLimitations:
                                   _note!.functionalLimitations,
+                              bodyChart: _note!.bodyChart,
                               observation: _note!.observation,
                               neuroScreenSummary: _note!.neuroScreenSummary,
                               functionalTests: _note!.functionalTests,
@@ -383,9 +390,111 @@ class _InitialAssessmentEditorScreenState
                 border: OutlineInputBorder(),
               ),
             ),
+            const SizedBox(height: 16),
+            _buildBodyChartSection(readOnly),
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildBodyChartSection(bool readOnly) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(Icons.draw, size: 20),
+            const SizedBox(width: 8),
+            Text(
+              'Body chart',
+              style: Theme.of(context).textTheme.titleSmall,
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        SizedBox(
+          height: 500, // Fixed height for the body chart editor
+          child: BodyChartEditor(
+            value: _note?.bodyChart ?? const BodyChartState.empty(),
+            readOnly: readOnly,
+            onChanged: (newBodyChart) {
+              if (_note == null) return;
+              setState(() {
+                _note = InitialAssessmentNote(
+                  id: _note!.id,
+                  clinicId: _note!.clinicId,
+                  patientId: _note!.patientId,
+                  noteType: _note!.noteType,
+                  bodyRegion: _note!.bodyRegion,
+                  status: _note!.status,
+                  createdAt: _note!.createdAt,
+                  updatedAt: _note!.updatedAt,
+                  finalizedAt: _note!.finalizedAt,
+                  createdByUid: _note!.createdByUid,
+                  updatedByUid: _note!.updatedByUid,
+                  presentingComplaint: _presentingComplaint.text,
+                  historyOfPresentingComplaint:
+                      _note!.historyOfPresentingComplaint,
+                  painIntensityNow: _note!.painIntensityNow,
+                  painIntensityBest: _note!.painIntensityBest,
+                  painIntensityWorst: _note!.painIntensityWorst,
+                  painIrritability: _note!.painIrritability,
+                  painNature: _note!.painNature,
+                  aggravatingFactors: _note!.aggravatingFactors,
+                  easingFactors: _note!.easingFactors,
+                  pattern24h: _note!.pattern24h,
+                  redFlags: _note!.redFlags,
+                  yellowFlags: _note!.yellowFlags,
+                  pastMedicalHistory: _note!.pastMedicalHistory,
+                  meds: _note!.meds,
+                  imaging: _note!.imaging,
+                  goals: _note!.goals,
+                  functionalLimitations: _note!.functionalLimitations,
+                  bodyChart: newBodyChart,
+                  observation: _note!.observation,
+                  neuroScreenSummary: _note!.neuroScreenSummary,
+                  functionalTests: _note!.functionalTests,
+                  palpation: _note!.palpation,
+                  rangeOfMotion: _note!.rangeOfMotion,
+                  strength: _note!.strength,
+                  neuroMyotomesSummary: _note!.neuroMyotomesSummary,
+                  neuroDermatomesSummary: _note!.neuroDermatomesSummary,
+                  neuroReflexesSummary: _note!.neuroReflexesSummary,
+                  regionSpecificObjective: _note!.regionSpecificObjective,
+                  specialTests: _note!.specialTests,
+                  primaryDiagnosis: _primaryDiagnosis.text,
+                  differentialDiagnoses: _note!.differentialDiagnoses,
+                  contributingFactors: _note!.contributingFactors,
+                  clinicalReasoning: _note!.clinicalReasoning,
+                  severity: _note!.severity,
+                  irritability: _note!.irritability,
+                  stage: _note!.stage,
+                  outcomeMeasures: _note!.outcomeMeasures,
+                  planSummary: _planSummary.text,
+                  educationAdvice: _note!.educationAdvice,
+                  exercises: _note!.exercises,
+                  manualTherapy: _note!.manualTherapy,
+                  followUp: _note!.followUp,
+                  referrals: _note!.referrals,
+                  consentConfirmed: _note!.consentConfirmed,
+                  homeAdvice: _note!.homeAdvice,
+                );
+              });
+            },
+            onInteractionStart: () {
+              setState(() {
+                _isDrawingOnBodyChart = true;
+              });
+            },
+            onInteractionEnd: () {
+              setState(() {
+                _isDrawingOnBodyChart = false;
+              });
+            },
+          ),
+        ),
+      ],
     );
   }
 
@@ -450,6 +559,7 @@ class _InitialAssessmentEditorScreenState
                                 goals: note.goals,
                                 functionalLimitations:
                                     note.functionalLimitations,
+                                bodyChart: note.bodyChart,
                                 observation: note.observation,
                                 neuroScreenSummary: note.neuroScreenSummary,
                                 functionalTests: note.functionalTests,
@@ -597,6 +707,7 @@ class _InitialAssessmentEditorScreenState
         imaging: note.imaging,
         goals: note.goals,
         functionalLimitations: note.functionalLimitations,
+        bodyChart: note.bodyChart,
         observation: note.observation,
         neuroScreenSummary: note.neuroScreenSummary,
         functionalTests: note.functionalTests,
