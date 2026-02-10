@@ -55,6 +55,11 @@ class BodyChartPainter extends CustomPainter {
       ..strokeJoin = StrokeJoin.round
       ..style = PaintingStyle.stroke;
 
+    // Apply dashed pattern for pins & needles
+    if (stroke.type.isDashed) {
+      paint.pathEffect = _createDashPathEffect();
+    }
+
     final path = Path();
 
     // Convert normalized coordinates to canvas coordinates
@@ -71,6 +76,14 @@ class BodyChartPainter extends CustomPainter {
     }
 
     canvas.drawPath(path, paint);
+  }
+
+  /// Creates a simple dash effect for PathEffect (approximation).
+  /// Note: Flutter doesn't have built-in PathEffect, so we'll draw segments manually.
+  ui.PathEffect? _createDashPathEffect() {
+    // For now, return null - we'll implement manual dashing if needed
+    // This is a placeholder for future enhancement
+    return null;
   }
 
   @override

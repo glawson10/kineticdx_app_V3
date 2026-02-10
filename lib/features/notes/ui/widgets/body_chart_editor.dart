@@ -27,7 +27,6 @@ class BodyChartEditor extends StatefulWidget {
 class _BodyChartEditorState extends State<BodyChartEditor> {
   BodyChartSide _currentSide = BodyChartSide.front;
   SymptomType _currentSymptomType = SymptomType.pain;
-  final double _strokeWidth = 4.0;
 
   @override
   Widget build(BuildContext context) {
@@ -35,49 +34,88 @@ class _BodyChartEditorState extends State<BodyChartEditor> {
         ? widget.value.frontStrokes
         : widget.value.backStrokes;
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        // Side selector (Front / Back)
-        _buildSideSelector(),
-        const SizedBox(height: 12),
-
-        // Symptom type picker
-        if (!widget.readOnly) _buildSymptomTypePicker(),
-        if (!widget.readOnly) const SizedBox(height: 12),
-
-        // Drawing canvas
-        Expanded(
-          child: Card(
-            clipBehavior: Clip.antiAlias,
-            child: AspectRatio(
-              aspectRatio: 0.5, // body charts are typically tall/narrow
-              child: BodyChartCanvas(
-                assetPath: _currentSide == BodyChartSide.front
-                    ? 'assets/body_front.png'
-                    : 'assets/body_back.png',
-                strokes: currentStrokes,
-                currentSymptomType: _currentSymptomType,
-                strokeWidth: _strokeWidth,
-                onStrokesChanged: (updatedStrokes) {
-                  if (widget.readOnly) return;
-                  final newState = _currentSide == BodyChartSide.front
-                      ? widget.value.copyWithFront(updatedStrokes)
-                      : widget.value.copyWithBack(updatedStrokes);
-                  widget.onChanged(newState);
-                },
-                onInteractionStart: widget.onInteractionStart,
-                onInteractionEnd: widget.onInteractionEnd,
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // Header
+            Row(
+              children: [
+                Icon(Icons.draw, size: 20, color: Theme.of(context).colorScheme.primary),
+                const SizedBox(width: 8),
+                Text(
+                  'Body chart',
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Mark areas of pain, stiffness or altered sensation',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: Theme.of(context).colorScheme.onSurface.withOpacity(0.6),
               ),
             ),
-          ),
+            const SizedBox(height: 16),
+
+            // Symptom type picker
+            if (!widget.readOnly) _buildSymptomTypePicker(),
+            if (!widget.readOnly) const SizedBox(height: 16),
+
+            // Side selector (Front / Back)
+            _buildSideSelector(),
+            const SizedBox(height: 16),
+
+            // Drawing canvas
+            Expanded(
+              child: Container(
+                decoration: BoxDecoration(
+                  border: Border.all(
+                    color: Theme.of(context).colorScheme.outline.withOpacity(0.2),
+                  ),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: AspectRatio(
+                    aspectRatio: 0.5, // body charts are typically tall/narrow
+                    child: BodyChartCanvas(
+                      assetPath: _currentSide == BodyChartSide.front
+                          ? 'assets/body_front.png'
+                          : 'assets/body_back.png',
+                      strokes: currentStrokes,
+                      currentSymptomType: _currentSymptomType,
+                      onStrokesChanged: (updatedStrokes) {
+                        if (widget.readOnly) return;
+                        final newState = _currentSide == BodyChartSide.front
+                            ? widget.value.copyWithFront(updatedStrokes)
+                            : widget.value.copyWithBack(updatedStrokes);
+                        widget.onChanged(newState);
+                      },
+                      onInteractionStart: widget.onInteractionStart,
+                      onInteractionEnd: widget.onInteractionEnd,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+
+            const SizedBox(height: 12),
+
+            // Color legend
+            _buildLegend(),
+
+            const SizedBox(height: 12),
+
+            // Undo / Clear buttons
+            if (!widget.readOnly) _buildActionButtons(currentStrokes),
+          ],
         ),
-
-        const SizedBox(height: 12),
-
-        // Undo / Clear buttons
-        if (!widget.readOnly) _buildActionButtons(currentStrokes),
-      ],
+      ),
     );
   }
 
@@ -122,16 +160,48 @@ class _BodyChartEditorState extends State<BodyChartEditor> {
               });
             }
           },
-          avatar: isSelected
-              ? null
-              : CircleAvatar(
-                  backgroundColor: Color(type.colorValue),
-                  radius: 8,
-                ),
-          selectedColor: Color(type.colorValue).withOpacity(0.3),
+          avatar: Container(
+            width: 16,
+            height: 16,
+            decoration: BoxDecoration(
+              color: Color(type.colorValue),
+              shape: BoxShape.circle,
+            ),
+          ),
+          selectedColor: Color(type.colorValue).withOpacity(0.2),
           labelStyle: TextStyle(
             color: isSelected ? Color(type.colorValue) : null,
+            fontWeight: isSelected ? FontWeight.w500 : FontWeight.normal,
           ),
+        );
+      }).toList(),
+    );
+  }
+
+  Widget _buildLegend() {
+    return Wrap(
+      spacing: 16,
+      runSpacing: 8,
+      children: SymptomType.values.map((type) {
+        return Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 20,
+              height: type.strokeWidth,
+              decoration: BoxDecoration(
+                color: Color(type.colorValue),
+                borderRadius: BorderRadius.circular(type.strokeWidth / 2),
+              ),
+            ),
+            const SizedBox(width: 6),
+            Text(
+              type.label,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: Theme.of(context).colorScheme.onSurface.withOpacity(0.7),
+              ),
+            ),
+          ],
         );
       }).toList(),
     );

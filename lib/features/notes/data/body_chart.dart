@@ -24,18 +24,37 @@ extension SymptomTypeExt on SymptomType {
     }
   }
 
-  /// Color for rendering this symptom type.
+  /// Color for rendering this symptom type (muted for clinical feel).
   int get colorValue {
     switch (this) {
       case SymptomType.pain:
-        return 0xFFE53935; // Red
+        return 0xFFD32F2F; // Muted red
       case SymptomType.stiffness:
-        return 0xFF1E88E5; // Blue
+        return 0xFF1976D2; // Muted blue
       case SymptomType.numbness:
-        return 0xFFFDD835; // Yellow
+        return 0xFFFBC02D; // Muted yellow
       case SymptomType.pinsNeedles:
-        return 0xFF8E24AA; // Purple
+        return 0xFF7B1FA2; // Muted purple
     }
+  }
+
+  /// Stroke width for this symptom type (clinical differentiation).
+  double get strokeWidth {
+    switch (this) {
+      case SymptomType.pain:
+        return 5.0; // Medium
+      case SymptomType.stiffness:
+        return 7.0; // Thick
+      case SymptomType.numbness:
+        return 3.0; // Thin
+      case SymptomType.pinsNeedles:
+        return 4.0; // Medium-thin (will be dotted)
+    }
+  }
+
+  /// Whether this symptom type should be drawn with a dotted/dashed pattern.
+  bool get isDashed {
+    return this == SymptomType.pinsNeedles;
   }
 }
 

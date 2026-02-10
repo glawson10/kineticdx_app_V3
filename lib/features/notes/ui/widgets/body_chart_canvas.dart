@@ -15,7 +15,6 @@ class BodyChartCanvas extends StatefulWidget {
   final String assetPath;
   final List<BodyChartStroke> strokes;
   final SymptomType currentSymptomType;
-  final double strokeWidth;
   final ValueChanged<List<BodyChartStroke>> onStrokesChanged;
   final VoidCallback? onInteractionStart;
   final VoidCallback? onInteractionEnd;
@@ -25,7 +24,6 @@ class BodyChartCanvas extends StatefulWidget {
     required this.assetPath,
     required this.strokes,
     required this.currentSymptomType,
-    required this.strokeWidth,
     required this.onStrokesChanged,
     this.onInteractionStart,
     this.onInteractionEnd,
@@ -99,7 +97,7 @@ class _BodyChartCanvasState extends State<BodyChartCanvas> {
     _currentStroke = BodyChartStroke(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
       type: widget.currentSymptomType,
-      width: widget.strokeWidth,
+      width: widget.currentSymptomType.strokeWidth,
       points: [
         BodyChartStrokePoint(
           xNorm: xNorm,

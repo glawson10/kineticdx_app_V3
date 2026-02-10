@@ -399,23 +399,9 @@ class _InitialAssessmentEditorScreenState
   }
 
   Widget _buildBodyChartSection(bool readOnly) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            Icon(Icons.draw, size: 20),
-            const SizedBox(width: 8),
-            Text(
-              'Body chart',
-              style: Theme.of(context).textTheme.titleSmall,
-            ),
-          ],
-        ),
-        const SizedBox(height: 12),
-        SizedBox(
-          height: 500, // Fixed height for the body chart editor
-          child: BodyChartEditor(
+    return SizedBox(
+      height: 500, // Fixed height for the body chart editor
+      child: BodyChartEditor(
             value: _note?.bodyChart ?? const BodyChartState.empty(),
             readOnly: readOnly,
             onChanged: (newBodyChart) {
@@ -493,9 +479,7 @@ class _InitialAssessmentEditorScreenState
               });
             },
           ),
-        ),
-      ],
-    );
+        );
   }
 
   Widget _buildSpecialTestsCard(
