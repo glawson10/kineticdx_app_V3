@@ -261,7 +261,7 @@ class _GeneralVisitBodyAreasQuestionState
             final width = constraints.maxWidth;
 
             // Centered content: chart + list side by side, aligned with body regions
-            const double maxContentWidth = 720;
+            const double maxContentWidth = 360;
             final contentWidth = width > maxContentWidth ? maxContentWidth : width;
             final chartWidth = contentWidth * 0.48;
             final listWidth = contentWidth * 0.52;
