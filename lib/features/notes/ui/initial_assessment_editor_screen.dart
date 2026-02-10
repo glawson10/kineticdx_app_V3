@@ -371,30 +371,152 @@ class _InitialAssessmentEditorScreenState
   Widget _buildSubjectiveCard(bool readOnly) {
     return Card(
       child: Padding(
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
               'Subjective',
-              style: Theme.of(context).textTheme.titleMedium,
+              style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                fontWeight: FontWeight.w400,
+              ),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 20),
+            
+            // Presenting complaint
             TextField(
               controller: _presentingComplaint,
               readOnly: readOnly,
-              minLines: 1,
-              maxLines: 3,
-              decoration: const InputDecoration(
+              minLines: 2,
+              maxLines: 4,
+              decoration: InputDecoration(
                 labelText: 'Presenting complaint *',
-                border: OutlineInputBorder(),
+                helperText: 'In the patient\'s own words',
+                helperStyle: TextStyle(
+                  color: Theme.of(context).colorScheme.onSurface.withOpacity(0.5),
+                  fontSize: 12,
+                ),
+                border: const OutlineInputBorder(),
               ),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 24),
+            
+            // Pain scores
+            _buildPainScoresSection(readOnly),
+            const SizedBox(height: 24),
+            
+            // Body chart
             _buildBodyChartSection(readOnly),
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildPainScoresSection(bool readOnly) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Pain',
+          style: Theme.of(context).textTheme.titleMedium?.copyWith(
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+        const SizedBox(height: 12),
+        
+        // Pain intensity sliders
+        _buildPainSlider('Now', _note?.painIntensityNow ?? 0, readOnly, (value) {
+          if (_note == null || readOnly) return;
+          setState(() {
+            _note = _copyNoteWithPainIntensityNow(_note!, value);
+          });
+        }),
+        const SizedBox(height: 12),
+        _buildPainSlider('Best', _note?.painIntensityBest ?? 0, readOnly, (value) {
+          if (_note == null || readOnly) return;
+          setState(() {
+            _note = _copyNoteWithPainIntensityBest(_note!, value);
+          });
+        }),
+        const SizedBox(height: 12),
+        _buildPainSlider('Worst', _note?.painIntensityWorst ?? 0, readOnly, (value) {
+          if (_note == null || readOnly) return;
+          setState(() {
+            _note = _copyNoteWithPainIntensityWorst(_note!, value);
+          });
+        }),
+        const SizedBox(height: 16),
+        
+        // Irritability
+        Text(
+          'Irritability',
+          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+        const SizedBox(height: 8),
+        SegmentedButton<String>(
+          segments: const [
+            ButtonSegment(value: 'low', label: Text('Low')),
+            ButtonSegment(value: 'mod', label: Text('Moderate')),
+            ButtonSegment(value: 'high', label: Text('High')),
+          ],
+          selected: {_note?.painIrritability.isEmpty ?? true ? 'low' : _note!.painIrritability},
+          onSelectionChanged: readOnly ? null : (Set<String> selected) {
+            if (_note == null) return;
+            setState(() {
+              _note = _copyNoteWithPainIrritability(_note!, selected.first);
+            });
+          },
+        ),
+      ],
+    );
+  }
+
+  Widget _buildPainSlider(String label, int value, bool readOnly, ValueChanged<int> onChanged) {
+    return Row(
+      children: [
+        SizedBox(
+          width: 60,
+          child: Text(
+            label,
+            style: Theme.of(context).textTheme.bodyMedium,
+          ),
+        ),
+        Expanded(
+          child: Slider(
+            value: value.toDouble(),
+            min: 0,
+            max: 10,
+            divisions: 10,
+            onChanged: readOnly ? null : (v) => onChanged(v.round()),
+          ),
+        ),
+        const SizedBox(width: 12),
+        Container(
+          width: 40,
+          height: 32,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.surfaceVariant,
+            borderRadius: BorderRadius.circular(6),
+          ),
+          child: Text(
+            '$value',
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ),
+        const SizedBox(width: 4),
+        Text(
+          '/10',
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+            color: Theme.of(context).colorScheme.onSurface.withOpacity(0.6),
+          ),
+        ),
+      ],
     );
   }
 
@@ -794,6 +916,250 @@ class _InitialAssessmentEditorScreenState
       case BodyRegion.other:
         return 'Other';
     }
+  }
+
+  InitialAssessmentNote _copyNoteWithPainIntensityNow(InitialAssessmentNote note, int value) {
+    return InitialAssessmentNote(
+      id: note.id,
+      clinicId: note.clinicId,
+      patientId: note.patientId,
+      noteType: note.noteType,
+      bodyRegion: note.bodyRegion,
+      status: note.status,
+      createdAt: note.createdAt,
+      updatedAt: note.updatedAt,
+      finalizedAt: note.finalizedAt,
+      createdByUid: note.createdByUid,
+      updatedByUid: note.updatedByUid,
+      presentingComplaint: note.presentingComplaint,
+      historyOfPresentingComplaint: note.historyOfPresentingComplaint,
+      painIntensityNow: value,
+      painIntensityBest: note.painIntensityBest,
+      painIntensityWorst: note.painIntensityWorst,
+      painIrritability: note.painIrritability,
+      painNature: note.painNature,
+      aggravatingFactors: note.aggravatingFactors,
+      easingFactors: note.easingFactors,
+      pattern24h: note.pattern24h,
+      redFlags: note.redFlags,
+      yellowFlags: note.yellowFlags,
+      pastMedicalHistory: note.pastMedicalHistory,
+      meds: note.meds,
+      imaging: note.imaging,
+      goals: note.goals,
+      functionalLimitations: note.functionalLimitations,
+      bodyChart: note.bodyChart,
+      observation: note.observation,
+      neuroScreenSummary: note.neuroScreenSummary,
+      functionalTests: note.functionalTests,
+      palpation: note.palpation,
+      rangeOfMotion: note.rangeOfMotion,
+      strength: note.strength,
+      neuroMyotomesSummary: note.neuroMyotomesSummary,
+      neuroDermatomesSummary: note.neuroDermatomesSummary,
+      neuroReflexesSummary: note.neuroReflexesSummary,
+      regionSpecificObjective: note.regionSpecificObjective,
+      specialTests: note.specialTests,
+      primaryDiagnosis: note.primaryDiagnosis,
+      differentialDiagnoses: note.differentialDiagnoses,
+      contributingFactors: note.contributingFactors,
+      clinicalReasoning: note.clinicalReasoning,
+      severity: note.severity,
+      irritability: note.irritability,
+      stage: note.stage,
+      outcomeMeasures: note.outcomeMeasures,
+      planSummary: note.planSummary,
+      educationAdvice: note.educationAdvice,
+      exercises: note.exercises,
+      manualTherapy: note.manualTherapy,
+      followUp: note.followUp,
+      referrals: note.referrals,
+      consentConfirmed: note.consentConfirmed,
+      homeAdvice: note.homeAdvice,
+    );
+  }
+
+  InitialAssessmentNote _copyNoteWithPainIntensityBest(InitialAssessmentNote note, int value) {
+    return InitialAssessmentNote(
+      id: note.id,
+      clinicId: note.clinicId,
+      patientId: note.patientId,
+      noteType: note.noteType,
+      bodyRegion: note.bodyRegion,
+      status: note.status,
+      createdAt: note.createdAt,
+      updatedAt: note.updatedAt,
+      finalizedAt: note.finalizedAt,
+      createdByUid: note.createdByUid,
+      updatedByUid: note.updatedByUid,
+      presentingComplaint: note.presentingComplaint,
+      historyOfPresentingComplaint: note.historyOfPresentingComplaint,
+      painIntensityNow: note.painIntensityNow,
+      painIntensityBest: value,
+      painIntensityWorst: note.painIntensityWorst,
+      painIrritability: note.painIrritability,
+      painNature: note.painNature,
+      aggravatingFactors: note.aggravatingFactors,
+      easingFactors: note.easingFactors,
+      pattern24h: note.pattern24h,
+      redFlags: note.redFlags,
+      yellowFlags: note.yellowFlags,
+      pastMedicalHistory: note.pastMedicalHistory,
+      meds: note.meds,
+      imaging: note.imaging,
+      goals: note.goals,
+      functionalLimitations: note.functionalLimitations,
+      bodyChart: note.bodyChart,
+      observation: note.observation,
+      neuroScreenSummary: note.neuroScreenSummary,
+      functionalTests: note.functionalTests,
+      palpation: note.palpation,
+      rangeOfMotion: note.rangeOfMotion,
+      strength: note.strength,
+      neuroMyotomesSummary: note.neuroMyotomesSummary,
+      neuroDermatomesSummary: note.neuroDermatomesSummary,
+      neuroReflexesSummary: note.neuroReflexesSummary,
+      regionSpecificObjective: note.regionSpecificObjective,
+      specialTests: note.specialTests,
+      primaryDiagnosis: note.primaryDiagnosis,
+      differentialDiagnoses: note.differentialDiagnoses,
+      contributingFactors: note.contributingFactors,
+      clinicalReasoning: note.clinicalReasoning,
+      severity: note.severity,
+      irritability: note.irritability,
+      stage: note.stage,
+      outcomeMeasures: note.outcomeMeasures,
+      planSummary: note.planSummary,
+      educationAdvice: note.educationAdvice,
+      exercises: note.exercises,
+      manualTherapy: note.manualTherapy,
+      followUp: note.followUp,
+      referrals: note.referrals,
+      consentConfirmed: note.consentConfirmed,
+      homeAdvice: note.homeAdvice,
+    );
+  }
+
+  InitialAssessmentNote _copyNoteWithPainIntensityWorst(InitialAssessmentNote note, int value) {
+    return InitialAssessmentNote(
+      id: note.id,
+      clinicId: note.clinicId,
+      patientId: note.patientId,
+      noteType: note.noteType,
+      bodyRegion: note.bodyRegion,
+      status: note.status,
+      createdAt: note.createdAt,
+      updatedAt: note.updatedAt,
+      finalizedAt: note.finalizedAt,
+      createdByUid: note.createdByUid,
+      updatedByUid: note.updatedByUid,
+      presentingComplaint: note.presentingComplaint,
+      historyOfPresentingComplaint: note.historyOfPresentingComplaint,
+      painIntensityNow: note.painIntensityNow,
+      painIntensityBest: note.painIntensityBest,
+      painIntensityWorst: value,
+      painIrritability: note.painIrritability,
+      painNature: note.painNature,
+      aggravatingFactors: note.aggravatingFactors,
+      easingFactors: note.easingFactors,
+      pattern24h: note.pattern24h,
+      redFlags: note.redFlags,
+      yellowFlags: note.yellowFlags,
+      pastMedicalHistory: note.pastMedicalHistory,
+      meds: note.meds,
+      imaging: note.imaging,
+      goals: note.goals,
+      functionalLimitations: note.functionalLimitations,
+      bodyChart: note.bodyChart,
+      observation: note.observation,
+      neuroScreenSummary: note.neuroScreenSummary,
+      functionalTests: note.functionalTests,
+      palpation: note.palpation,
+      rangeOfMotion: note.rangeOfMotion,
+      strength: note.strength,
+      neuroMyotomesSummary: note.neuroMyotomesSummary,
+      neuroDermatomesSummary: note.neuroDermatomesSummary,
+      neuroReflexesSummary: note.neuroReflexesSummary,
+      regionSpecificObjective: note.regionSpecificObjective,
+      specialTests: note.specialTests,
+      primaryDiagnosis: note.primaryDiagnosis,
+      differentialDiagnoses: note.differentialDiagnoses,
+      contributingFactors: note.contributingFactors,
+      clinicalReasoning: note.clinicalReasoning,
+      severity: note.severity,
+      irritability: note.irritability,
+      stage: note.stage,
+      outcomeMeasures: note.outcomeMeasures,
+      planSummary: note.planSummary,
+      educationAdvice: note.educationAdvice,
+      exercises: note.exercises,
+      manualTherapy: note.manualTherapy,
+      followUp: note.followUp,
+      referrals: note.referrals,
+      consentConfirmed: note.consentConfirmed,
+      homeAdvice: note.homeAdvice,
+    );
+  }
+
+  InitialAssessmentNote _copyNoteWithPainIrritability(InitialAssessmentNote note, String value) {
+    return InitialAssessmentNote(
+      id: note.id,
+      clinicId: note.clinicId,
+      patientId: note.patientId,
+      noteType: note.noteType,
+      bodyRegion: note.bodyRegion,
+      status: note.status,
+      createdAt: note.createdAt,
+      updatedAt: note.updatedAt,
+      finalizedAt: note.finalizedAt,
+      createdByUid: note.createdByUid,
+      updatedByUid: note.updatedByUid,
+      presentingComplaint: note.presentingComplaint,
+      historyOfPresentingComplaint: note.historyOfPresentingComplaint,
+      painIntensityNow: note.painIntensityNow,
+      painIntensityBest: note.painIntensityBest,
+      painIntensityWorst: note.painIntensityWorst,
+      painIrritability: value,
+      painNature: note.painNature,
+      aggravatingFactors: note.aggravatingFactors,
+      easingFactors: note.easingFactors,
+      pattern24h: note.pattern24h,
+      redFlags: note.redFlags,
+      yellowFlags: note.yellowFlags,
+      pastMedicalHistory: note.pastMedicalHistory,
+      meds: note.meds,
+      imaging: note.imaging,
+      goals: note.goals,
+      functionalLimitations: note.functionalLimitations,
+      bodyChart: note.bodyChart,
+      observation: note.observation,
+      neuroScreenSummary: note.neuroScreenSummary,
+      functionalTests: note.functionalTests,
+      palpation: note.palpation,
+      rangeOfMotion: note.rangeOfMotion,
+      strength: note.strength,
+      neuroMyotomesSummary: note.neuroMyotomesSummary,
+      neuroDermatomesSummary: note.neuroDermatomesSummary,
+      neuroReflexesSummary: note.neuroReflexesSummary,
+      regionSpecificObjective: note.regionSpecificObjective,
+      specialTests: note.specialTests,
+      primaryDiagnosis: note.primaryDiagnosis,
+      differentialDiagnoses: note.differentialDiagnoses,
+      contributingFactors: note.contributingFactors,
+      clinicalReasoning: note.clinicalReasoning,
+      severity: note.severity,
+      irritability: note.irritability,
+      stage: note.stage,
+      outcomeMeasures: note.outcomeMeasures,
+      planSummary: note.planSummary,
+      educationAdvice: note.educationAdvice,
+      exercises: note.exercises,
+      manualTherapy: note.manualTherapy,
+      followUp: note.followUp,
+      referrals: note.referrals,
+      consentConfirmed: note.consentConfirmed,
+      homeAdvice: note.homeAdvice,
+    );
   }
 }
 
