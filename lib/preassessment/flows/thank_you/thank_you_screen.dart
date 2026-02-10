@@ -38,24 +38,6 @@ class ThankYouScreen extends StatelessWidget {
     }
   }
 
-  Future<void> _copyReference(BuildContext context) async {
-    final id = (intakeSessionId ?? '').trim();
-    if (id.isEmpty) return;
-
-    await Clipboard.setData(ClipboardData(text: id));
-    if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Reference copied to clipboard.')),
-      );
-    }
-  }
-
-  void _selfBooking(BuildContext context) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Self booking is coming soon.')),
-    );
-  }
-
   void _close(BuildContext context) {
     if (isWebRuntime) {
       // NOTE: browsers usually only allow window.close() for windows opened by script.
@@ -70,10 +52,6 @@ class ThankYouScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final id = (intakeSessionId ?? '').trim();
-
-    // Only show close on web (still may no-op depending on browser rules)
-    final showClose = isWebRuntime;
 
     return Scaffold(
       appBar: AppBar(
@@ -112,43 +90,6 @@ class ThankYouScreen extends StatelessWidget {
                       textAlign: TextAlign.center,
                       style: TextStyle(height: 1.35),
                     ),
-                    if (id.isNotEmpty) ...[
-                      const SizedBox(height: 14),
-                      Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: theme.colorScheme.surfaceContainerHighest
-                              .withValues(alpha: 0.6),
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        child: Column(
-                          children: [
-                            Text(
-                              'Reference',
-                              style: theme.textTheme.labelLarge,
-                            ),
-                            const SizedBox(height: 6),
-                            SelectableText(
-                              id,
-                              textAlign: TextAlign.center,
-                              style: theme.textTheme.bodyMedium?.copyWith(
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                            const SizedBox(height: 8),
-                            SizedBox(
-                              width: double.infinity,
-                              child: OutlinedButton.icon(
-                                onPressed: () => _copyReference(context),
-                                icon: const Icon(Icons.copy_rounded),
-                                label: const Text('Copy reference'),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
                     const SizedBox(height: 18),
                     SizedBox(
                       width: double.infinity,
@@ -161,22 +102,13 @@ class ThankYouScreen extends StatelessWidget {
                     const SizedBox(height: 10),
                     SizedBox(
                       width: double.infinity,
-                      child: OutlinedButton.icon(
-                        onPressed: () => _selfBooking(context),
-                        icon: const Icon(Icons.calendar_month_rounded),
-                        label: const Text('Self booking'),
+                      child: TextButton.icon(
+                        onPressed: () => _close(context),
+                        icon: const Icon(Icons.close_rounded),
+                        label: const Text('Close'),
                       ),
                     ),
-                    if (showClose) ...[
-                      const SizedBox(height: 10),
-                      SizedBox(
-                        width: double.infinity,
-                        child: TextButton.icon(
-                          onPressed: () => _close(context),
-                          icon: const Icon(Icons.close_rounded),
-                          label: const Text('Close'),
-                        ),
-                      ),
+                    if (isWebRuntime) ...[
                       const SizedBox(height: 6),
                       Text(
                         'If “Close” doesn’t work, you can safely close this tab.',

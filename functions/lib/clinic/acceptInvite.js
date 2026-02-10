@@ -133,8 +133,9 @@ async function acceptInvite(req) {
         inviteId: inviteSnap.id,
         status: safeStr(invite.status),
     });
-    // Validate invite state
-    if (safeStr(invite.status) !== "pending") {
+    // Validate invite state (accept both "pending" and "active" for backwards compat)
+    const inviteStatus = safeStr(invite.status);
+    if (inviteStatus !== "pending" && inviteStatus !== "active") {
         throw new https_1.HttpsError("failed-precondition", "Invite already used or revoked.");
     }
     if (!invite.expiresAt || typeof invite.expiresAt.toMillis !== "function") {
@@ -150,14 +151,21 @@ async function acceptInvite(req) {
     const roleId = safeStr(invite.roleId);
     if (!roleId)
         throw new https_1.HttpsError("invalid-argument", "Invite roleId missing.");
-    // Load role permissions
-    const roleRef = db.collection("clinics").doc(clinicId).collection("roles").doc(roleId);
-    const roleSnap = await roleRef.get();
-    if (!roleSnap.exists) {
-        throw new https_1.HttpsError("invalid-argument", "Role no longer exists.");
+    // Permissions: invite.permissions override (from inviteUser) else role template
+    const invitePerms = invite.permissions;
+    let flattened;
+    if (invitePerms && typeof invitePerms === "object" && Object.keys(invitePerms).length > 0) {
+        flattened = (0, authz_1.flattenPermissions)(invitePerms);
     }
-    const rolePermissions = ((_c = (_b = roleSnap.data()) === null || _b === void 0 ? void 0 : _b.permissions) !== null && _c !== void 0 ? _c : {});
-    const flattened = (0, authz_1.flattenPermissions)(rolePermissions);
+    else {
+        const roleRef = db.collection("clinics").doc(clinicId).collection("roles").doc(roleId);
+        const roleSnap = await roleRef.get();
+        if (!roleSnap.exists) {
+            throw new https_1.HttpsError("invalid-argument", "Role no longer exists.");
+        }
+        const rolePermissions = ((_c = (_b = roleSnap.data()) === null || _b === void 0 ? void 0 : _b.permissions) !== null && _c !== void 0 ? _c : {});
+        flattened = (0, authz_1.flattenPermissions)(rolePermissions);
+    }
     const now = admin.firestore.FieldValue.serverTimestamp();
     // ✅ CANONICAL membership path = /members
     const canonicalMembershipRef = db

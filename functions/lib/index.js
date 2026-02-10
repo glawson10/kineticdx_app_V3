@@ -36,8 +36,8 @@ var __exportStar = (this && this.__exportStar) || function(m, exports) {
     for (var p in m) if (p !== "default" && !Object.prototype.hasOwnProperty.call(exports, p)) __createBinding(exports, m, p);
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.onClinicCreatedProvisionDefaults = exports.testCallable = exports.rescheduleBookingWithTokenFn = exports.cancelBookingWithTokenFn = exports.getManageContextFn = exports.listPublicSlotsFn = exports.onClinicalNoteWrite = exports.mirrorPractitionerToPublic = exports.onAppointmentWrite_toBusyBlock = exports.onPublicBookingSettingsWrite = exports.onBookingRequestCreateV2 = exports.exportClosureOverrideAuditReportFn = exports.resolveIntakeLinkTokenFn = exports.createGeneralQuestionnaireLinkFn = exports.submitIntakeSessionFn = exports.generateAssessmentPdfFn = exports.getAssessmentPackFn = exports.submitAssessmentFn = exports.deleteOutcomeMeasureFn = exports.upsertOutcomeMeasureFn = exports.deleteClinicalTestFn = exports.upsertClinicalTestFn = exports.amendClinicalNoteFn = exports.createClinicalNoteFn = exports.closeEpisodeFn = exports.updateEpisodeFn = exports.createEpisodeFn = exports.deletePatientFn = exports.mergePatientsFn = exports.updatePatientFn = exports.createPatientFn = exports.updateAppointmentStatusFn = exports.updateAppointmentFn = exports.deleteAppointmentFn = exports.createAppointmentFn = exports.deleteClosureFn = exports.createClosureFn = exports.setStaffAvailabilityDefaultFn = exports.upsertStaffProfileFn = exports.updateClinicWeeklyHoursFn = exports.syncMyDisplayNameFn = exports.setMembershipStatusFn = exports.updateClinicProfileFn = exports.acceptInviteFn = exports.inviteMemberFn = exports.updateMemberProfileFn = exports.clinicCreateFn = exports.getSchemaVersionsFn = exports.computeIntakeSummaryV2 = exports.BREVO_API_KEY = void 0;
-exports.onClinicCreatedProvisionOwnerMembership = exports.resolveIntakeSessionFromBookingRequestFn = exports.intakePdfOnSubmit = exports.createBookingRequestFn = exports.bootstrapPublicBookingSettingsFn = exports.consumeIntakeInviteFn = exports.backfillNotificationsSettings = void 0;
+exports.testCallable = exports.rescheduleBookingWithTokenFn = exports.cancelBookingWithTokenFn = exports.getManageContextFn = exports.listPublicSlotsFn = exports.onClinicalNoteWrite = exports.mirrorPractitionerToPublic = exports.onAppointmentWrite_toBusyBlock = exports.onPublicBookingSettingsWrite = exports.onBookingRequestCreateV2 = exports.exportClosureOverrideAuditReportFn = exports.resolveIntakeLinkTokenFn = exports.createGeneralQuestionnaireLinkFn = exports.submitIntakeSessionFn = exports.generateAssessmentPdfFn = exports.getAssessmentPackFn = exports.submitAssessmentFn = exports.deleteOutcomeMeasureFn = exports.upsertOutcomeMeasureFn = exports.deleteClinicalTestFn = exports.upsertClinicalTestFn = exports.amendClinicalNoteFn = exports.createClinicalNoteFn = exports.closeEpisodeFn = exports.updateEpisodeFn = exports.createEpisodeFn = exports.deletePatientFn = exports.mergePatientsFn = exports.updatePatientFn = exports.createPatientFn = exports.updateAppointmentStatusFn = exports.updateAppointmentFn = exports.deleteAppointmentFn = exports.createAppointmentFn = exports.deleteClosureFn = exports.createClosureFn = exports.setStaffAvailabilityDefaultFn = exports.upsertStaffProfileFn = exports.updateClinicWeeklyHoursFn = exports.syncMyDisplayNameFn = exports.updateMemberFn = exports.setMembershipStatusFn = exports.updateClinicProfileFn = exports.acceptInviteFn = exports.inviteMemberFn = exports.updateMemberProfileFn = exports.clinicCreateFn = exports.getSchemaVersionsFn = exports.computeIntakeSummaryV2 = exports.BREVO_API_KEY = void 0;
+exports.onClinicCreatedProvisionOwnerMembership = exports.resolveIntakeSessionFromBookingRequestFn = exports.intakePdfOnSubmit = exports.createBookingRequestFn = exports.bootstrapPublicBookingSettingsFn = exports.consumeIntakeInviteFn = exports.backfillNotificationsSettings = exports.onClinicCreatedProvisionDefaults = void 0;
 // functions/src/index.ts
 const admin = __importStar(require("firebase-admin"));
 const https_1 = require("firebase-functions/v2/https");
@@ -51,10 +51,6 @@ if (!admin.apps.length)
 // Region (single source of truth)
 // ─────────────────────────────
 const REGION = "europe-west3";
-// ─────────────────────────────
-// Runtime service account (workaround)
-// ─────────────────────────────
-const RUNTIME_SA = "326894670032-compute@developer.gserviceaccount.com";
 // ─────────────────────────────
 // Secrets (MUST be declared in index for v2 analysis)
 // ─────────────────────────────
@@ -71,6 +67,7 @@ const inviteMember_1 = require("./clinic/inviteMember");
 const acceptInvite_1 = require("./clinic/acceptInvite");
 const updateClinicProfile_1 = require("./clinic/updateClinicProfile");
 const setMembershipStatus_1 = require("./clinic/setMembershipStatus");
+const updateMember_1 = require("./clinic/updateMember");
 const syncMyDisplayName_1 = require("./clinic/syncMyDisplayName");
 const updateMemberProfile_1 = require("./clinic/updateMemberProfile");
 const upsertStaffProfile_1 = require("./clinic/staff/upsertStaffProfile");
@@ -138,14 +135,15 @@ const bookingActions_1 = require("./public/bookingActions");
 // Callable exports
 // ─────────────────────────────
 // Debug / platform
-exports.getSchemaVersionsFn = (0, https_1.onCall)({ region: REGION, cors: true, serviceAccount: RUNTIME_SA }, async () => ({ ok: true, versions: schemaVersions_1.SCHEMA_VERSIONS }));
+exports.getSchemaVersionsFn = (0, https_1.onCall)({ region: REGION, cors: true }, async () => ({ ok: true, versions: schemaVersions_1.SCHEMA_VERSIONS }));
 // Clinic
-exports.clinicCreateFn = (0, https_1.onCall)({ region: REGION, cors: true, serviceAccount: RUNTIME_SA }, createClinic_1.createClinic);
-exports.updateMemberProfileFn = (0, https_1.onCall)({ region: REGION, cors: true, serviceAccount: RUNTIME_SA }, updateMemberProfile_1.updateMemberProfile);
-exports.inviteMemberFn = (0, https_1.onCall)({ region: REGION, cors: true, secrets: [exports.BREVO_API_KEY], serviceAccount: RUNTIME_SA }, inviteMember_1.inviteMember);
-exports.acceptInviteFn = (0, https_1.onCall)({ region: REGION, cors: true, serviceAccount: RUNTIME_SA }, acceptInvite_1.acceptInvite);
-exports.updateClinicProfileFn = (0, https_1.onCall)({ region: REGION, cors: true, serviceAccount: RUNTIME_SA }, updateClinicProfile_1.updateClinicProfile);
-exports.setMembershipStatusFn = (0, https_1.onCall)({ region: REGION, cors: true, serviceAccount: RUNTIME_SA }, setMembershipStatus_1.setMembershipStatus);
+exports.clinicCreateFn = (0, https_1.onCall)({ region: REGION, cors: true }, createClinic_1.createClinic);
+exports.updateMemberProfileFn = (0, https_1.onCall)({ region: REGION, cors: true }, updateMemberProfile_1.updateMemberProfile);
+exports.inviteMemberFn = (0, https_1.onCall)({ region: REGION, cors: true, secrets: [exports.BREVO_API_KEY] }, inviteMember_1.inviteMember);
+exports.acceptInviteFn = (0, https_1.onCall)({ region: REGION, cors: true }, acceptInvite_1.acceptInvite);
+exports.updateClinicProfileFn = (0, https_1.onCall)({ region: REGION, cors: true }, updateClinicProfile_1.updateClinicProfile);
+exports.setMembershipStatusFn = (0, https_1.onCall)({ region: REGION, cors: true }, setMembershipStatus_1.setMembershipStatus);
+exports.updateMemberFn = (0, https_1.onCall)({ region: REGION, cors: true }, updateMember_1.updateMember);
 exports.syncMyDisplayNameFn = (0, https_1.onCall)({ region: REGION, cors: true }, (req) => (0, syncMyDisplayName_1.syncMyDisplayName)(req));
 var updateClinicWeeklyHours_1 = require("./clinic/settings/updateClinicWeeklyHours");
 Object.defineProperty(exports, "updateClinicWeeklyHoursFn", { enumerable: true, get: function () { return updateClinicWeeklyHours_1.updateClinicWeeklyHoursFn; } });
@@ -153,38 +151,38 @@ Object.defineProperty(exports, "updateClinicWeeklyHoursFn", { enumerable: true, 
 exports.upsertStaffProfileFn = (0, https_1.onCall)({ region: REGION, cors: true }, upsertStaffProfile_1.upsertStaffProfile);
 exports.setStaffAvailabilityDefaultFn = (0, https_1.onCall)({ region: REGION, cors: true }, setStaffAvailabilityDefault_1.setStaffAvailabilityDefault);
 // Closures
-exports.createClosureFn = (0, https_1.onCall)({ region: REGION, cors: true, serviceAccount: RUNTIME_SA }, createClosure_1.createClosure);
-exports.deleteClosureFn = (0, https_1.onCall)({ region: REGION, cors: true, serviceAccount: RUNTIME_SA }, deleteClosure_1.deleteClosure);
+exports.createClosureFn = (0, https_1.onCall)({ region: REGION, cors: true }, createClosure_1.createClosure);
+exports.deleteClosureFn = (0, https_1.onCall)({ region: REGION, cors: true }, deleteClosure_1.deleteClosure);
 // Booking
-exports.createAppointmentFn = (0, https_1.onCall)({ region: REGION, cors: true, serviceAccount: RUNTIME_SA }, createAppointment_1.createAppointment);
-exports.deleteAppointmentFn = (0, https_1.onCall)({ region: REGION, cors: true, serviceAccount: RUNTIME_SA }, deleteAppointment_1.deleteAppointment);
-exports.updateAppointmentFn = (0, https_1.onCall)({ region: REGION, cors: true, serviceAccount: RUNTIME_SA }, updateAppointment_1.updateAppointment);
-exports.updateAppointmentStatusFn = (0, https_1.onCall)({ region: REGION, cors: true, serviceAccount: RUNTIME_SA }, updateAppointmentStatus_1.updateAppointmentStatus);
+exports.createAppointmentFn = (0, https_1.onCall)({ region: REGION, cors: true }, createAppointment_1.createAppointment);
+exports.deleteAppointmentFn = (0, https_1.onCall)({ region: REGION, cors: true }, deleteAppointment_1.deleteAppointment);
+exports.updateAppointmentFn = (0, https_1.onCall)({ region: REGION, cors: true }, updateAppointment_1.updateAppointment);
+exports.updateAppointmentStatusFn = (0, https_1.onCall)({ region: REGION, cors: true }, updateAppointmentStatus_1.updateAppointmentStatus);
 // Patients
-exports.createPatientFn = (0, https_1.onCall)({ region: REGION, cors: true, serviceAccount: RUNTIME_SA }, createPatient_1.createPatient);
-exports.updatePatientFn = (0, https_1.onCall)({ region: REGION, cors: true, serviceAccount: RUNTIME_SA }, updatePatient_1.updatePatient);
-exports.mergePatientsFn = (0, https_1.onCall)({ region: REGION, cors: true, serviceAccount: RUNTIME_SA }, mergePatients_1.mergePatients);
-exports.deletePatientFn = (0, https_1.onCall)({ region: REGION, cors: true, serviceAccount: RUNTIME_SA }, deletePatient_1.deletePatient);
+exports.createPatientFn = (0, https_1.onCall)({ region: REGION, cors: true }, createPatient_1.createPatient);
+exports.updatePatientFn = (0, https_1.onCall)({ region: REGION, cors: true }, updatePatient_1.updatePatient);
+exports.mergePatientsFn = (0, https_1.onCall)({ region: REGION, cors: true }, mergePatients_1.mergePatients);
+exports.deletePatientFn = (0, https_1.onCall)({ region: REGION, cors: true }, deletePatient_1.deletePatient);
 // Episodes
-exports.createEpisodeFn = (0, https_1.onCall)({ region: REGION, cors: true, serviceAccount: RUNTIME_SA }, createEpisode_1.createEpisode);
-exports.updateEpisodeFn = (0, https_1.onCall)({ region: REGION, cors: true, serviceAccount: RUNTIME_SA }, updateEpisode_1.updateEpisode);
-exports.closeEpisodeFn = (0, https_1.onCall)({ region: REGION, cors: true, serviceAccount: RUNTIME_SA }, closeEpisode_1.closeEpisode);
+exports.createEpisodeFn = (0, https_1.onCall)({ region: REGION, cors: true }, createEpisode_1.createEpisode);
+exports.updateEpisodeFn = (0, https_1.onCall)({ region: REGION, cors: true }, updateEpisode_1.updateEpisode);
+exports.closeEpisodeFn = (0, https_1.onCall)({ region: REGION, cors: true }, closeEpisode_1.closeEpisode);
 // Clinical notes
-exports.createClinicalNoteFn = (0, https_1.onCall)({ region: REGION, cors: true, serviceAccount: RUNTIME_SA }, createClinicalNote_1.createClinicalNote);
-exports.amendClinicalNoteFn = (0, https_1.onCall)({ region: REGION, cors: true, serviceAccount: RUNTIME_SA }, amendClinicalNote_1.amendClinicalNote);
+exports.createClinicalNoteFn = (0, https_1.onCall)({ region: REGION, cors: true }, createClinicalNote_1.createClinicalNote);
+exports.amendClinicalNoteFn = (0, https_1.onCall)({ region: REGION, cors: true }, amendClinicalNote_1.amendClinicalNote);
 // Registries
-exports.upsertClinicalTestFn = (0, https_1.onCall)({ region: REGION, cors: true, serviceAccount: RUNTIME_SA }, upsertClinicalTest_1.upsertClinicalTest);
-exports.deleteClinicalTestFn = (0, https_1.onCall)({ region: REGION, cors: true, serviceAccount: RUNTIME_SA }, deleteClinicalTest_1.deleteClinicalTest);
-exports.upsertOutcomeMeasureFn = (0, https_1.onCall)({ region: REGION, cors: true, serviceAccount: RUNTIME_SA }, upsertOutcomeMeasure_1.upsertOutcomeMeasure);
-exports.deleteOutcomeMeasureFn = (0, https_1.onCall)({ region: REGION, cors: true, serviceAccount: RUNTIME_SA }, deleteOutcomeMeasure_1.deleteOutcomeMeasure);
+exports.upsertClinicalTestFn = (0, https_1.onCall)({ region: REGION, cors: true }, upsertClinicalTest_1.upsertClinicalTest);
+exports.deleteClinicalTestFn = (0, https_1.onCall)({ region: REGION, cors: true }, deleteClinicalTest_1.deleteClinicalTest);
+exports.upsertOutcomeMeasureFn = (0, https_1.onCall)({ region: REGION, cors: true }, upsertOutcomeMeasure_1.upsertOutcomeMeasure);
+exports.deleteOutcomeMeasureFn = (0, https_1.onCall)({ region: REGION, cors: true }, deleteOutcomeMeasure_1.deleteOutcomeMeasure);
 // Assessments
-exports.submitAssessmentFn = (0, https_1.onCall)({ region: REGION, cors: true, serviceAccount: RUNTIME_SA }, submitAssessment_1.submitAssessment);
-exports.getAssessmentPackFn = (0, https_1.onCall)({ region: REGION, cors: true, serviceAccount: RUNTIME_SA }, getAssessmentPack_1.getAssessmentPack);
-exports.generateAssessmentPdfFn = (0, https_1.onCall)({ region: REGION, cors: true, serviceAccount: RUNTIME_SA }, generateAssessmentPdf_1.generateAssessmentPdf);
+exports.submitAssessmentFn = (0, https_1.onCall)({ region: REGION, cors: true }, submitAssessment_1.submitAssessment);
+exports.getAssessmentPackFn = (0, https_1.onCall)({ region: REGION, cors: true }, getAssessmentPack_1.getAssessmentPack);
+exports.generateAssessmentPdfFn = (0, https_1.onCall)({ region: REGION, cors: true }, generateAssessmentPdf_1.generateAssessmentPdf);
 // Intake
-exports.submitIntakeSessionFn = (0, https_1.onCall)({ region: REGION, cors: true, serviceAccount: RUNTIME_SA }, submitIntakeSession_1.submitIntakeSession);
+exports.submitIntakeSessionFn = (0, https_1.onCall)({ region: REGION, cors: true }, submitIntakeSession_1.submitIntakeSession);
 // Audit
-exports.exportClosureOverrideAuditReportFn = (0, https_1.onCall)({ region: REGION, cors: true, serviceAccount: RUNTIME_SA }, exportClosureOverrideAuditReport_1.exportClosureOverrideAuditReport);
+exports.exportClosureOverrideAuditReportFn = (0, https_1.onCall)({ region: REGION, cors: true }, exportClosureOverrideAuditReport_1.exportClosureOverrideAuditReport);
 // ─────────────────────────────
 // Triggers / background
 // ─────────────────────────────
@@ -209,7 +207,7 @@ var backfillNotifications_1 = require("./clinic/settings/backfillNotifications")
 Object.defineProperty(exports, "backfillNotificationsSettings", { enumerable: true, get: function () { return backfillNotifications_1.backfillNotificationsSettings; } });
 var consumeIntakeInviteFn_1 = require("./intake/consumeIntakeInviteFn");
 Object.defineProperty(exports, "consumeIntakeInviteFn", { enumerable: true, get: function () { return consumeIntakeInviteFn_1.consumeIntakeInviteFn; } });
-exports.bootstrapPublicBookingSettingsFn = (0, https_1.onCall)({ region: REGION, cors: true, serviceAccount: RUNTIME_SA }, bootstrapPublicBookingSettings_1.bootstrapPublicBookingSettings);
+exports.bootstrapPublicBookingSettingsFn = (0, https_1.onCall)({ region: REGION, cors: true }, bootstrapPublicBookingSettings_1.bootstrapPublicBookingSettings);
 var createBookingRequestFn_1 = require("./clinic/booking/createBookingRequestFn");
 Object.defineProperty(exports, "createBookingRequestFn", { enumerable: true, get: function () { return createBookingRequestFn_1.createBookingRequestFn; } });
 var intakePdfOnSubmit_1 = require("./preassessment/intakePdfOnSubmit");

@@ -130,21 +130,17 @@ function mapSummaryToDecisionSupport(summary) {
 /**
  * Ankle result helper:
  * - await the async ankle engine
- * - normalize triageStatus -> triage for buildAnkleSummary()
+ * - Returns raw summary object (or extracts from wrapped response)
  */
 async function computeAnkleResult(answers) {
-    const legacyAnswers = (0, ankleAdapter_1.buildAnkleLegacyAnswers)(answers);
-    return await (0, processAnkleAssessment_1.processAnkleAssessmentCore)(legacyAnswers);
-}
-function normalizeAnkleForSummary(raw) {
     var _a;
-    return {
-        ...raw,
-        triage: (_a = raw === null || raw === void 0 ? void 0 : raw.triage) !== null && _a !== void 0 ? _a : raw === null || raw === void 0 ? void 0 : raw.triageStatus,
-    };
+    const legacyAnswers = (0, ankleAdapter_1.buildAnkleLegacyAnswers)(answers);
+    const result = await (0, processAnkleAssessment_1.processAnkleAssessmentCore)(legacyAnswers);
+    // If wrapped (has clinicianSummary), extract it; otherwise use result directly
+    return (_a = result === null || result === void 0 ? void 0 : result.clinicianSummary) !== null && _a !== void 0 ? _a : result;
 }
 exports.computeDecisionSupport = (0, https_1.onCall)({ region: "europe-west3" }, async (req) => {
-    var _a, _b, _c, _d, _e;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m;
     const db = (0, firestore_1.getFirestore)();
     const clinicId = safeStr((_a = req.data) === null || _a === void 0 ? void 0 : _a.clinicId).trim();
     const intakeSessionId = safeStr((_b = req.data) === null || _b === void 0 ? void 0 : _b.intakeSessionId).trim();
@@ -184,36 +180,43 @@ exports.computeDecisionSupport = (0, https_1.onCall)({ region: "europe-west3" },
         switch (flowId) {
             case "ankle": {
                 const raw = await computeAnkleResult(answers);
-                const rawForSummary = normalizeAnkleForSummary(raw);
-                summary = (0, buildAnkleSummary_1.buildAnkleSummary)(rawForSummary, answers);
+                summary = (0, buildAnkleSummary_1.buildAnkleSummary)(raw, answers);
                 engineDispatch = "ankle";
                 break;
             }
             case "cervical": {
                 const legacyAnswers = (0, cervicalAdapter_1.buildCervicalLegacyAnswers)(answers);
-                const rawResult = (0, processCervicalAssessment_1.processCervicalAssessmentCore)(legacyAnswers);
-                summary = (0, buildCervicalSummary_1.buildCervicalSummary)(rawResult, answers);
+                const rawResult = await (0, processCervicalAssessment_1.processCervicalAssessmentCore)(legacyAnswers);
+                // Extract raw summary if wrapped
+                const raw = (_c = rawResult === null || rawResult === void 0 ? void 0 : rawResult.clinicianSummary) !== null && _c !== void 0 ? _c : rawResult;
+                summary = (0, buildCervicalSummary_1.buildCervicalSummary)(raw, answers);
                 engineDispatch = "cervical";
                 break;
             }
             case "elbow": {
                 const legacyAnswers = (0, elbowAdapter_1.buildElbowLegacyAnswers)(answers);
-                const rawResult = (0, processElbowAssessment_1.processElbowAssessmentCore)(legacyAnswers);
-                summary = (0, buildElbowSummary_1.buildElbowSummary)(rawResult, answers);
+                const rawResult = await (0, processElbowAssessment_1.processElbowAssessmentCore)(legacyAnswers);
+                // Extract raw summary if wrapped
+                const raw = (_d = rawResult === null || rawResult === void 0 ? void 0 : rawResult.clinicianSummary) !== null && _d !== void 0 ? _d : rawResult;
+                summary = (0, buildElbowSummary_1.buildElbowSummary)(raw, answers);
                 engineDispatch = "elbow";
                 break;
             }
             case "hip": {
                 const legacyAnswers = (0, hipAdapter_1.buildHipLegacyAnswers)(answers);
-                const rawResult = (0, processHipAssessment_1.processHipAssessmentCore)(legacyAnswers);
-                summary = (0, buildHipSummary_1.buildHipSummary)(rawResult, answers);
+                const rawResult = await (0, processHipAssessment_1.processHipAssessmentCore)(legacyAnswers);
+                // Extract raw summary if wrapped
+                const raw = (_e = rawResult === null || rawResult === void 0 ? void 0 : rawResult.clinicianSummary) !== null && _e !== void 0 ? _e : rawResult;
+                summary = (0, buildHipSummary_1.buildHipSummary)(raw, answers);
                 engineDispatch = "hip";
                 break;
             }
             case "knee": {
                 const legacyAnswers = (0, kneeAdapter_1.buildKneeLegacyAnswers)(answers);
-                const rawResult = (0, processKneeAssessment_1.processKneeAssessmentCore)(legacyAnswers);
-                summary = (0, buildKneeSummary_1.buildKneeSummary)(rawResult, answers);
+                const rawResult = await (0, processKneeAssessment_1.processKneeAssessmentCore)(legacyAnswers);
+                // Extract raw summary if wrapped
+                const raw = (_f = rawResult === null || rawResult === void 0 ? void 0 : rawResult.clinicianSummary) !== null && _f !== void 0 ? _f : rawResult;
+                summary = (0, buildKneeSummary_1.buildKneeSummary)(raw, answers);
                 engineDispatch = "knee";
                 break;
             }
@@ -226,22 +229,28 @@ exports.computeDecisionSupport = (0, https_1.onCall)({ region: "europe-west3" },
             }
             case "shoulder": {
                 const rawForScorer = (0, shoulderAdapter_1.buildShoulderRawForScorer)(answers);
-                const rawResult = (0, processShoulderAssessment_1.processShoulderAssessmentCore)(rawForScorer);
-                summary = (0, buildShoulderSummary_1.buildShoulderSummary)(rawResult, answers);
+                const rawResult = await (0, processShoulderAssessment_1.processShoulderAssessmentCore)(rawForScorer);
+                // Extract raw summary if wrapped
+                const raw = (_g = rawResult === null || rawResult === void 0 ? void 0 : rawResult.clinicianSummary) !== null && _g !== void 0 ? _g : rawResult;
+                summary = (0, buildShoulderSummary_1.buildShoulderSummary)(raw, answers);
                 engineDispatch = "shoulder";
                 break;
             }
             case "thoracic": {
                 const legacyAnswers = (0, thoracicAdapter_1.buildThoracicLegacyAnswers)(answers);
-                const rawResult = (0, processThoracicAssessment_1.processThoracicAssessmentCore)(legacyAnswers);
-                summary = (0, buildThoracicSummary_1.buildThoracicSummary)(rawResult, answers);
+                const rawResult = await (0, processThoracicAssessment_1.processThoracicAssessmentCore)(legacyAnswers);
+                // Thoracic returns { ok: true, summary } shape
+                const raw = (_h = rawResult === null || rawResult === void 0 ? void 0 : rawResult.summary) !== null && _h !== void 0 ? _h : rawResult;
+                summary = (0, buildThoracicSummary_1.buildThoracicSummary)(raw, answers);
                 engineDispatch = "thoracic";
                 break;
             }
             case "wrist": {
                 const legacyAnswers = (0, wristAdapter_1.buildWristLegacyAnswers)(answers);
-                const rawResult = (0, processWristAssessment_1.processWristAssessmentCore)(legacyAnswers);
-                summary = (0, buildWristSummary_1.buildWristSummary)(rawResult, answers);
+                const rawResult = await (0, processWristAssessment_1.processWristAssessmentCore)(legacyAnswers);
+                // Extract raw summary if wrapped
+                const raw = (_j = rawResult === null || rawResult === void 0 ? void 0 : rawResult.clinicianSummary) !== null && _j !== void 0 ? _j : rawResult;
+                summary = (0, buildWristSummary_1.buildWristSummary)(raw, answers);
                 engineDispatch = "wrist";
                 break;
             }
@@ -289,7 +298,7 @@ exports.computeDecisionSupport = (0, https_1.onCall)({ region: "europe-west3" },
                     .doc(intakeSessionId)
                     .set({
                     status: "error",
-                    error: safeStr((_c = e === null || e === void 0 ? void 0 : e.message) !== null && _c !== void 0 ? _c : "Decision support failed"),
+                    error: safeStr((_k = e === null || e === void 0 ? void 0 : e.message) !== null && _k !== void 0 ? _k : "Decision support failed"),
                     generatedAt: firestore_1.FieldValue.serverTimestamp(),
                 }, { merge: true });
             }
@@ -299,9 +308,9 @@ exports.computeDecisionSupport = (0, https_1.onCall)({ region: "europe-west3" },
         }
         if (e instanceof https_1.HttpsError)
             throw e;
-        throw new https_1.HttpsError("internal", safeStr((_d = e === null || e === void 0 ? void 0 : e.message) !== null && _d !== void 0 ? _d : "Decision support failed"), {
+        throw new https_1.HttpsError("internal", safeStr((_l = e === null || e === void 0 ? void 0 : e.message) !== null && _l !== void 0 ? _l : "Decision support failed"), {
             name: e === null || e === void 0 ? void 0 : e.name,
-            stack: safeStr((_e = e === null || e === void 0 ? void 0 : e.stack) !== null && _e !== void 0 ? _e : "").split("\n").slice(0, 12).join("\n"),
+            stack: safeStr((_m = e === null || e === void 0 ? void 0 : e.stack) !== null && _m !== void 0 ? _m : "").split("\n").slice(0, 12).join("\n"),
         });
     }
 });

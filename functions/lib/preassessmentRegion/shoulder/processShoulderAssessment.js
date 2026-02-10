@@ -228,26 +228,34 @@ function buildSummary(answers) {
 }
 async function processShoulderAssessmentCore(data, _ctx) {
     const assessmentId = data === null || data === void 0 ? void 0 : data.assessmentId;
-    const answers = Array.isArray(data === null || data === void 0 ? void 0 : data.answers) ? data.answers : [];
-    if (!assessmentId) {
-        throw new functions.https.HttpsError("invalid-argument", "assessmentId is required");
-    }
+    // Support both { answers: [...] } and direct array
+    const answers = Array.isArray(data === null || data === void 0 ? void 0 : data.answers)
+        ? data.answers
+        : Array.isArray(data)
+            ? data
+            : [];
     const summary = buildSummary(answers);
-    await db
-        .collection("assessments")
-        .doc(assessmentId)
-        .set({
-        triageStatus: summary.triage,
-        topDifferentials: summary.topDifferentials,
-        clinicianSummary: summary,
-        triageRegion: "shoulder",
-        updatedAt: firestore_1.FieldValue.serverTimestamp(),
-    }, { merge: true });
-    return {
-        triageStatus: summary.triage,
-        topDifferentials: summary.topDifferentials,
-        clinicianSummary: summary,
-    };
+    // Only write to Firestore if assessmentId is provided
+    if (assessmentId) {
+        await db
+            .collection("assessments")
+            .doc(assessmentId)
+            .set({
+            triageStatus: summary.triage,
+            topDifferentials: summary.topDifferentials,
+            clinicianSummary: summary,
+            triageRegion: "shoulder",
+            updatedAt: firestore_1.FieldValue.serverTimestamp(),
+        }, { merge: true });
+        // Return wrapped shape for backward compatibility with callable
+        return {
+            triageStatus: summary.triage,
+            topDifferentials: summary.topDifferentials,
+            clinicianSummary: summary,
+        };
+    }
+    // Return raw summary object for decision support / summary builders
+    return summary;
 }
 // -------------------------------
 // Firebase callable wrapper

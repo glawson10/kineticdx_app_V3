@@ -30,19 +30,19 @@ class BoolQuestion extends StatelessWidget {
           RadioListTile<bool>(
             value: true,
             groupValue: current,
-            title: Text(t('common.yes')),
+            title: const Text('Yes'),
             onChanged: (_) => onChanged(AnswerValue.bool(true)),
           ),
           RadioListTile<bool>(
             value: false,
             groupValue: current,
-            title: Text(t('common.no')),
+            title: const Text('No'),
             onChanged: (_) => onChanged(AnswerValue.bool(false)),
           ),
           if (!q.required)
             TextButton(
               onPressed: () => onChanged(null),
-              child: Text(t('common.clear')),
+              child: const Text('Clear'),
             ),
         ],
       ),

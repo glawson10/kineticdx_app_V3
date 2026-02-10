@@ -12,11 +12,13 @@
 //   (use initialValue + onChanged instead to avoid rebuild/controller churn)
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '/shared/widgets/weekly_hours_editor.dart';
 
+import '../../app/callable_error_mapping.dart';
 import '../../app/clinic_context.dart';
 import '../../data/repositories/staff_repository.dart';
 import '../../data/repositories/staff_profile_repository.dart';
@@ -298,20 +300,32 @@ class _StaffMemberScreenState extends State<StaffMemberScreen>
                 canManage: canManage,
                 allowSuspend: allowSuspend,
                 onSuspend: () async {
-                  await staffRepo.setMembershipStatus(
-                    clinicId: clinicId,
-                    memberUid: widget.memberUid,
-                    status: 'suspended',
-                  );
-                  _toast('Member suspended');
+                  try {
+                    await staffRepo.setMembershipStatus(
+                      clinicId: clinicId,
+                      memberUid: widget.memberUid,
+                      status: 'suspended',
+                    );
+                    _toast('Member suspended');
+                  } on FirebaseFunctionsException catch (e) {
+                    _toast(messageForCallableError(e, fallback: 'Failed to suspend.'));
+                  } catch (e) {
+                    _toast(messageForCallableError(e, fallback: 'Failed to suspend.'));
+                  }
                 },
                 onActivate: () async {
-                  await staffRepo.setMembershipStatus(
-                    clinicId: clinicId,
-                    memberUid: widget.memberUid,
-                    status: 'active',
-                  );
-                  _toast('Member activated');
+                  try {
+                    await staffRepo.setMembershipStatus(
+                      clinicId: clinicId,
+                      memberUid: widget.memberUid,
+                      status: 'active',
+                    );
+                    _toast('Member activated');
+                  } on FirebaseFunctionsException catch (e) {
+                    _toast(messageForCallableError(e, fallback: 'Failed to activate.'));
+                  } catch (e) {
+                    _toast(messageForCallableError(e, fallback: 'Failed to activate.'));
+                  }
                 },
               ),
               const Divider(height: 1),

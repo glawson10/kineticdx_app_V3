@@ -1,0 +1,15 @@
+---
+description: Staff / Invites / Permissions — authority and execution order
+globs: "**/staff/**/*,**/membership*/**/*,**/invites/**/*,firestore.rules,**/callables/**/*membership*
+alwaysApply: false
+---
+
+# Staff / Invites / Permissions (V3)
+
+This area is governed by the **authoritative spec**: `docs/CURSOR_SYSTEM_PROMPT_STAFF_INVITES_PERMISSIONS.md`.
+
+- That doc is the single source of truth. If a request conflicts with it, stop and explain why.
+- **Execution order:** Propose file list → Cloud Functions first → Firestore rules → Flutter UI. Never refactor unrelated code.
+- If ambiguous, ask before changing architecture.
+
+When starting a new chat for this feature, paste the full contents of that doc as the system prompt.

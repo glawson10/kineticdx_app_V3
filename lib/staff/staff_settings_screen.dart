@@ -1,13 +1,13 @@
-// lib/features/clinic/settings/ui/staff_settings_screen.dart
+// lib/staff/staff_settings_screen.dart
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '/app/callable_error_mapping.dart';
 import '/app/clinic_context.dart';
-import '/features/auth/permission_guard.dart';
 import '/data/repositories/staff_repository.dart';
-
-// ✅ Adjust path to wherever this screen actually lives in your project
+import '/features/auth/permission_guard.dart';
 import '/staff/screens/staff_member_screen.dart';
 
 class StaffSettingsScreen extends StatefulWidget {
@@ -56,7 +56,7 @@ class _StaffSettingsScreenState extends State<StaffSettingsScreen> {
               );
 
               final sent = data['sent'] == true;
-              final token = (data['token'] ?? '').toString();
+              final inviteLink = (data['inviteLink'] ?? data['token'] ?? '').toString();
 
               if (ctx.mounted) Navigator.of(ctx).pop();
               if (!mounted) return;
@@ -65,18 +65,18 @@ class _StaffSettingsScreenState extends State<StaffSettingsScreen> {
                 SnackBar(
                   content: Text(
                     sent
-                        ? '✅ Invite email sent'
-                        : '⚠️ Invite created but email not sent (check notifications config)',
+                        ? 'Invite email sent.'
+                        : 'Invite created but email not sent. Share the invite link with the recipient.',
                   ),
                 ),
               );
-
-              // DEV-only helper: if emailing disabled, show token in console
-              if (!sent && token.isNotEmpty) {
-                debugPrint('DEV invite token=$token');
+              if (!sent && inviteLink.isNotEmpty) {
+                debugPrint('Invite link (share with recipient): $inviteLink');
               }
+            } on FirebaseFunctionsException catch (e) {
+              setD(() => error = messageForCallableError(e, fallback: 'Failed to send invite.'));
             } catch (e) {
-              setD(() => error = e.toString());
+              setD(() => error = messageForCallableError(e, fallback: 'Failed to send invite.'));
             } finally {
               setD(() => loading = false);
             }
@@ -94,16 +94,14 @@ class _StaffSettingsScreenState extends State<StaffSettingsScreen> {
                 ),
                 const SizedBox(height: 12),
                 DropdownButtonFormField<String>(
-                  initialValue: roleId,
+                  value: roleId,
                   items: const [
+                    DropdownMenuItem(value: 'owner', child: Text('Owner')),
                     DropdownMenuItem(value: 'manager', child: Text('Manager')),
-                    DropdownMenuItem(
-                        value: 'clinician', child: Text('Clinician')),
-                    DropdownMenuItem(
-                        value: 'reception', child: Text('Reception')),
+                    DropdownMenuItem(value: 'clinician', child: Text('Clinician')),
+                    DropdownMenuItem(value: 'reception', child: Text('Reception')),
                     DropdownMenuItem(value: 'billing', child: Text('Billing')),
-                    DropdownMenuItem(
-                        value: 'readOnly', child: Text('Read only')),
+                    DropdownMenuItem(value: 'readOnly', child: Text('Read only')),
                   ],
                   onChanged: (v) => setD(() => roleId = v ?? roleId),
                   decoration: const InputDecoration(labelText: 'Role'),
@@ -154,12 +152,17 @@ class _StaffSettingsScreenState extends State<StaffSettingsScreen> {
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('✅ Status updated to $next')),
+        SnackBar(content: Text('Status updated to $next')),
+      );
+    } on FirebaseFunctionsException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(messageForCallableError(e, fallback: 'Failed to update status.'))),
       );
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('❌ Failed to update status: $e')),
+        SnackBar(content: Text(messageForCallableError(e, fallback: 'Failed to update status.'))),
       );
     }
   }

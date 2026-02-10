@@ -46,4 +46,8 @@ class AppRoutes {
   /// Clinic-specific login portal: /c/{clinicId}
   /// Use path segments: ['c', clinicId].
   static String clinicPortal(String clinicId) => '/c/${clinicId.trim()}';
+
+  /// Accept invite (auth required). Token in query: ?token=...
+  /// Supports composite token: clinicId.rawToken
+  static const String acceptInvite = '/invite/accept';
 }

@@ -22,6 +22,9 @@ String resolvePreassessmentLabel(String flowId, String key) {
     'common.back': 'Back',
     'common.submit': 'Submit',
     'common.review': 'Review',
+    'common.clear': 'Clear',
+    'common.value': 'Value',
+    'common.typeHere': 'Type here…',
 
     // Common validation keys we’ve seen leak into the UI
     'preassessment.validation.fixErrors':
@@ -30,6 +33,20 @@ String resolvePreassessmentLabel(String flowId, String key) {
     'preassessment.validation.selectOne': 'Please select one option.',
     'preassessment.validation.selectAtLeastOne':
         'Please select at least one option.',
+
+    // Goals screen (shared across flows)
+    'preassessment.goals.title': 'Your goals for this visit',
+    'preassessment.goals.subtitle':
+        'Tell us what you’d like to get out of this visit. You can list up to three goals.',
+    'preassessment.goals.goal1.label': 'Goal 1',
+    'preassessment.goals.goal2.label': 'Goal 2',
+    'preassessment.goals.goal3.label': 'Goal 3',
+
+    // Optional free-text more-info section
+    'preassessment.moreInfo.title': 'Anything else we should know?',
+    'preassessment.moreInfo.subtitle':
+        'Optional: add any other details you’d like to share with your clinician.',
+    'preassessment.moreInfo.label': 'More information',
   };
 
   // Try shared first

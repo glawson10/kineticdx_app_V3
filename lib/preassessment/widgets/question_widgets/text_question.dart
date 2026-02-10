@@ -48,6 +48,10 @@ class _TextQuestionState extends State<TextQuestion> {
   @override
   Widget build(BuildContext context) {
     final maxLen = widget.q.text?.maxLength;
+    // Remove placeholder for "What made you book this visit?" question
+    final hintText = widget.q.questionId == 'generalVisit.goals.reasonForVisit'
+        ? ''
+        : widget.t('common.typeHere');
 
     return QuestionCard(
       title: widget.t(widget.q.promptKey),
@@ -58,7 +62,7 @@ class _TextQuestionState extends State<TextQuestion> {
         minLines: 2,
         maxLines: 6,
         decoration: InputDecoration(
-          hintText: widget.t('common.typeHere'),
+          hintText: hintText,
           border: const OutlineInputBorder(),
         ),
         onChanged: (txt) {

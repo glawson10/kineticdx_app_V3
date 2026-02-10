@@ -2,8 +2,9 @@ import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
+import '../../app/callable_error_mapping.dart';
 import '../../app/pending_invite_store.dart';
-import '/app/clinic_onboarding_gate.dart'; // adjust import if needed
+import '/app/clinic_onboarding_gate.dart';
 
 class AcceptInviteScreen extends StatefulWidget {
   const AcceptInviteScreen({super.key});
@@ -222,6 +223,11 @@ class _AcceptInviteScreenState extends State<AcceptInviteScreen> {
 
     if (refreshed != null && !refreshed.emailVerified) {
       // Don’t accept invites for unverified accounts (recommended)
+      if (!mounted) return;
+      setState(() {
+        _error =
+            "Email not verified yet. After clicking the link in the email, wait a moment or sign out and sign back in with this account, then tap \"I've verified\" again.";
+      });
       return;
     }
 
@@ -264,10 +270,9 @@ class _AcceptInviteScreenState extends State<AcceptInviteScreen> {
         (route) => false,
       );
     } on FirebaseFunctionsException catch (e) {
-      setState(
-          () => _error = '${e.code}: ${e.message ?? e.details ?? ''}'.trim());
+      setState(() => _error = messageForCallableError(e, fallback: 'Failed to accept invite.'));
     } catch (e) {
-      setState(() => _error = 'Failed to accept invite: $e');
+      setState(() => _error = messageForCallableError(e, fallback: 'Failed to accept invite.'));
     } finally {
       if (mounted) setState(() => _submitting = false);
     }
@@ -338,16 +343,7 @@ class _AcceptInviteScreenState extends State<AcceptInviteScreen> {
                         onPressed: _submitting
                             ? null
                             : () async {
-                                final messenger = ScaffoldMessenger.of(context);
                                 await _maybeCompleteInvite();
-                                if (!mounted) return;
-                                if (_auth.currentUser?.emailVerified != true) {
-                                  messenger.showSnackBar(
-                                    const SnackBar(
-                                      content: Text('Still not verified yet.'),
-                                    ),
-                                  );
-                                }
                               },
                         child: const Text("I've verified"),
                       ),

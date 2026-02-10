@@ -166,7 +166,7 @@ async function sendBrevoInviteEmail(args) {
     });
 }
 async function inviteMember(req) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p, _q, _r, _s, _t, _u;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p, _q, _r, _s, _t, _u, _v;
     if (!req.auth)
         throw new https_1.HttpsError("unauthenticated", "Sign in required.");
     // ✅ DEBUG: confirm function entry + inputs
@@ -228,8 +228,20 @@ async function inviteMember(req) {
         throw new https_1.HttpsError("permission-denied", "Insufficient permissions.");
     }
     // ─────────────────────────────────────────────────────────────
-    // Validate role exists
+    // Resolve permissions: optional override, else from role
     // ─────────────────────────────────────────────────────────────
+    const permissionsOverride = (_o = req.data) === null || _o === void 0 ? void 0 : _o.permissions;
+    let invitePermissions;
+    if (permissionsOverride && typeof permissionsOverride === "object") {
+        invitePermissions = {};
+        for (const k of Object.keys(permissionsOverride)) {
+            if (permissionsOverride[k] === true)
+                invitePermissions[k] = true;
+        }
+        logger_1.logger.info("[inviteMember] using permissions override", {
+            keys: Object.keys(invitePermissions),
+        });
+    }
     const roleRef = db.collection("clinics").doc(clinicId).collection("roles").doc(roleId);
     logger_1.logger.info("[inviteMember] role lookup", { roleRef: roleRef.path, roleId });
     const roleSnap = await roleRef.get();
@@ -238,7 +250,7 @@ async function inviteMember(req) {
         throw new https_1.HttpsError("invalid-argument", "Role does not exist.");
     }
     // ─────────────────────────────────────────────────────────────
-    // Create invite token (store hash only)
+    // Create invite token (store hash only; raw token never stored)
     // ─────────────────────────────────────────────────────────────
     const rawToken = (0, hash_1.generateToken)();
     const tokenHash = (0, hash_1.hashToken)(rawToken);
@@ -251,16 +263,20 @@ async function inviteMember(req) {
         inviteRoleId: roleId,
         expiresAtMs: expiresAt.toMillis(),
     });
-    await inviteRef.set({
+    const inviteData = {
         clinicId,
         email,
         roleId,
+        role: roleId,
         tokenHash,
-        status: "pending",
+        status: "active",
         createdByUid: uid,
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
         expiresAt,
-    });
+    };
+    if (invitePermissions)
+        inviteData.permissions = invitePermissions;
+    await inviteRef.set(inviteData);
     logger_1.logger.info("[inviteMember] invite doc written", {
         clinicId,
         inviteId: inviteRef.id,
@@ -271,23 +287,23 @@ async function inviteMember(req) {
     const clinicRef = db.collection("clinics").doc(clinicId);
     logger_1.logger.info("[inviteMember] loading clinic doc", { clinicRef: clinicRef.path });
     const clinicSnap = await clinicRef.get();
-    const clinicData = ((_o = clinicSnap.data()) !== null && _o !== void 0 ? _o : {});
+    const clinicData = ((_p = clinicSnap.data()) !== null && _p !== void 0 ? _p : {});
     logger_1.logger.info("[inviteMember] clinic loaded", {
         clinicId,
         clinicDocExists: clinicSnap.exists,
-        hasProfileName: !!((_p = clinicData === null || clinicData === void 0 ? void 0 : clinicData.profile) === null || _p === void 0 ? void 0 : _p.name),
-        hasLogoUrl: !!((clinicData === null || clinicData === void 0 ? void 0 : clinicData.logoUrl) || ((_q = clinicData === null || clinicData === void 0 ? void 0 : clinicData.profile) === null || _q === void 0 ? void 0 : _q.logoUrl)),
+        hasProfileName: !!((_q = clinicData === null || clinicData === void 0 ? void 0 : clinicData.profile) === null || _q === void 0 ? void 0 : _q.name),
+        hasLogoUrl: !!((clinicData === null || clinicData === void 0 ? void 0 : clinicData.logoUrl) || ((_r = clinicData === null || clinicData === void 0 ? void 0 : clinicData.profile) === null || _r === void 0 ? void 0 : _r.logoUrl)),
     });
-    const clinicName = safeStr((_r = clinicData === null || clinicData === void 0 ? void 0 : clinicData.profile) === null || _r === void 0 ? void 0 : _r.name) || safeStr(clinicData === null || clinicData === void 0 ? void 0 : clinicData.name) || clinicId;
-    const clinicLogoUrl = safeStr(clinicData === null || clinicData === void 0 ? void 0 : clinicData.logoUrl) || safeStr((_s = clinicData === null || clinicData === void 0 ? void 0 : clinicData.profile) === null || _s === void 0 ? void 0 : _s.logoUrl) || "";
+    const clinicName = safeStr((_s = clinicData === null || clinicData === void 0 ? void 0 : clinicData.profile) === null || _s === void 0 ? void 0 : _s.name) || safeStr(clinicData === null || clinicData === void 0 ? void 0 : clinicData.name) || clinicId;
+    const clinicLogoUrl = safeStr(clinicData === null || clinicData === void 0 ? void 0 : clinicData.logoUrl) || safeStr((_t = clinicData === null || clinicData === void 0 ? void 0 : clinicData.profile) === null || _t === void 0 ? void 0 : _t.logoUrl) || "";
     const inviterEmailLocal = safeStr(memberData.invitedEmail)
         ? safeStr(memberData.invitedEmail).split("@")[0]
         : "";
     const inviterName = safeStr(memberData.displayName) ||
         safeStr(memberData.fullName) ||
         inviterEmailLocal ||
-        safeStr((_t = req.auth.token) === null || _t === void 0 ? void 0 : _t.name) ||
-        safeStr((_u = req.auth.token) === null || _u === void 0 ? void 0 : _u.displayName) ||
+        safeStr((_u = req.auth.token) === null || _u === void 0 ? void 0 : _u.name) ||
+        safeStr((_v = req.auth.token) === null || _v === void 0 ? void 0 : _v.displayName) ||
         "A team member";
     logger_1.logger.info("[inviteMember] derived email params (pre-config)", {
         clinicId,
@@ -332,14 +348,20 @@ async function inviteMember(req) {
         ? `${cfg.inviteBaseUrl}&token=${encodeURIComponent(compositeToken)}`
         : `${cfg.inviteBaseUrl}?token=${encodeURIComponent(compositeToken)}`;
     logger_1.logger.info("[inviteMember] acceptInviteUrl built", { clinicId, acceptInviteUrl });
+    const inviteLink = `${clinicId}.${rawToken}`;
     if (cfg.enabled !== true) {
         logger_1.logger.warn("[inviteMember] Invite emailing disabled; invite created but email not sent", {
             clinicId,
             email,
             templateId,
         });
-        // NOTE: returning rawToken can be handy in dev; remove if you don't want it exposed.
-        return { success: true, inviteId: inviteRef.id, sent: false, token: rawToken, expiresAt };
+        return {
+            success: true,
+            inviteId: inviteRef.id,
+            inviteLink,
+            sent: false,
+            expiresAt,
+        };
     }
     const params = {
         clinic_name: clinicName,
@@ -368,6 +390,12 @@ async function inviteMember(req) {
         inviteId: inviteRef.id,
         sent: true,
     });
-    return { success: true, inviteId: inviteRef.id, sent: true, expiresAt };
+    return {
+        success: true,
+        inviteId: inviteRef.id,
+        inviteLink,
+        sent: true,
+        expiresAt,
+    };
 }
 //# sourceMappingURL=inviteMember.js.map

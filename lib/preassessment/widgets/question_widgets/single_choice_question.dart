@@ -39,7 +39,7 @@ class SingleChoiceQuestion extends StatelessWidget {
           if (!q.required)
             TextButton(
               onPressed: () => onChanged(null),
-              child: Text(t('common.clear')),
+              child: const Text('Clear'),
             ),
         ],
       ),

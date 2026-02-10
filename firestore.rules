@@ -97,7 +97,7 @@ service cloud.firestore {
         allow create, update, delete: if hasPerm(clinicId, "settings.write");
       }
 
-      // Members (canonical path)
+      // Members (canonical path). Writes are function-only (invite accept, update, suspend).
       match /members/{memberUid} {
         allow read:
           if hasPerm(clinicId, "members.read")
@@ -105,7 +105,7 @@ service cloud.firestore {
         allow write: if false;
       }
 
-      // Memberships (legacy path - allow reads during migration)
+      // Memberships (legacy path). Writes are function-only.
       match /memberships/{memberUid} {
         allow read:
           if hasPerm(clinicId, "members.read")
@@ -119,7 +119,7 @@ service cloud.firestore {
         allow write: if false;
       }
 
-      // Invites
+      // Invites. Read: manageMembers only. Writes are function-only (inviteUser, acceptInvite).
       match /invites/{inviteId} {
         allow read: if hasPerm(clinicId, "members.manage");
         allow write: if false;

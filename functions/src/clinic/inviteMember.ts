@@ -13,6 +13,8 @@ type InviteMemberInput = {
   clinicId: string;
   email: string;
   roleId: string; // role template id (e.g. "clinician", "reception", etc.)
+  /** Optional override: if set, stored on invite and used on accept instead of role template. */
+  permissions?: Record<string, boolean>;
 };
 
 type AnyMap = Record<string, any>;
@@ -244,10 +246,22 @@ export async function inviteMember(req: CallableRequest<InviteMemberInput>) {
   }
 
   // ─────────────────────────────────────────────────────────────
-  // Validate role exists
+  // Resolve permissions: optional override, else from role
   // ─────────────────────────────────────────────────────────────
-  const roleRef = db.collection("clinics").doc(clinicId).collection("roles").doc(roleId);
+  const permissionsOverride = req.data?.permissions as Record<string, boolean> | undefined;
+  let invitePermissions: Record<string, boolean> | undefined;
 
+  if (permissionsOverride && typeof permissionsOverride === "object") {
+    invitePermissions = {};
+    for (const k of Object.keys(permissionsOverride)) {
+      if (permissionsOverride[k] === true) invitePermissions[k] = true;
+    }
+    logger.info("[inviteMember] using permissions override", {
+      keys: Object.keys(invitePermissions),
+    });
+  }
+
+  const roleRef = db.collection("clinics").doc(clinicId).collection("roles").doc(roleId);
   logger.info("[inviteMember] role lookup", { roleRef: roleRef.path, roleId });
   const roleSnap = await roleRef.get();
   if (!roleSnap.exists) {
@@ -256,7 +270,7 @@ export async function inviteMember(req: CallableRequest<InviteMemberInput>) {
   }
 
   // ─────────────────────────────────────────────────────────────
-  // Create invite token (store hash only)
+  // Create invite token (store hash only; raw token never stored)
   // ─────────────────────────────────────────────────────────────
   const rawToken = generateToken();
   const tokenHash = hashToken(rawToken);
@@ -272,16 +286,19 @@ export async function inviteMember(req: CallableRequest<InviteMemberInput>) {
     expiresAtMs: expiresAt.toMillis(),
   });
 
-  await inviteRef.set({
+  const inviteData: AnyMap = {
     clinicId,
     email,
     roleId,
+    role: roleId,
     tokenHash,
-    status: "pending",
+    status: "active",
     createdByUid: uid,
     createdAt: admin.firestore.FieldValue.serverTimestamp(),
     expiresAt,
-  });
+  };
+  if (invitePermissions) inviteData.permissions = invitePermissions;
+  await inviteRef.set(inviteData);
 
   logger.info("[inviteMember] invite doc written", {
     clinicId,
@@ -375,15 +392,21 @@ export async function inviteMember(req: CallableRequest<InviteMemberInput>) {
 
   logger.info("[inviteMember] acceptInviteUrl built", { clinicId, acceptInviteUrl });
 
+  const inviteLink = `${clinicId}.${rawToken}`;
+
   if (cfg.enabled !== true) {
     logger.warn("[inviteMember] Invite emailing disabled; invite created but email not sent", {
       clinicId,
       email,
       templateId,
     });
-
-    // NOTE: returning rawToken can be handy in dev; remove if you don't want it exposed.
-    return { success: true, inviteId: inviteRef.id, sent: false, token: rawToken, expiresAt };
+    return {
+      success: true,
+      inviteId: inviteRef.id,
+      inviteLink,
+      sent: false,
+      expiresAt,
+    };
   }
 
   const params = {
@@ -417,5 +440,11 @@ export async function inviteMember(req: CallableRequest<InviteMemberInput>) {
     sent: true,
   });
 
-  return { success: true, inviteId: inviteRef.id, sent: true, expiresAt };
+  return {
+    success: true,
+    inviteId: inviteRef.id,
+    inviteLink,
+    sent: true,
+    expiresAt,
+  };
 }

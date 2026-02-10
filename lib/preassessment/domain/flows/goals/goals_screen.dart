@@ -118,7 +118,7 @@ class _GoalsScreenState extends State<GoalsScreen> {
             controller: _goal1,
             decoration: InputDecoration(
               labelText: t('preassessment.goals.goal1.label'),
-              hintText: t('preassessment.goals.goal1.hint'),
+              hintText: 'Goal 1',
               border: const OutlineInputBorder(),
             ),
             textInputAction: TextInputAction.next,
@@ -129,7 +129,7 @@ class _GoalsScreenState extends State<GoalsScreen> {
             controller: _goal2,
             decoration: InputDecoration(
               labelText: t('preassessment.goals.goal2.label'),
-              hintText: t('preassessment.goals.goal2.hint'),
+              hintText: 'Goal 2',
               border: const OutlineInputBorder(),
             ),
             textInputAction: TextInputAction.next,
@@ -140,7 +140,7 @@ class _GoalsScreenState extends State<GoalsScreen> {
             controller: _goal3,
             decoration: InputDecoration(
               labelText: t('preassessment.goals.goal3.label'),
-              hintText: t('preassessment.goals.goal3.hint'),
+              hintText: 'Goal 3',
               border: const OutlineInputBorder(),
             ),
             textInputAction: TextInputAction.next,
@@ -163,7 +163,7 @@ class _GoalsScreenState extends State<GoalsScreen> {
             maxLines: 6,
             decoration: InputDecoration(
               labelText: t('preassessment.moreInfo.label'),
-              hintText: t('preassessment.moreInfo.hint'),
+              hintText: 'Is there any further information you wish to share?',
               border: const OutlineInputBorder(),
               alignLabelWithHint: true,
             ),

@@ -167,32 +167,28 @@ class _ReviewScreenState extends State<ReviewScreen> {
     switch (q.valueType) {
       case QuestionValueType.boolType:
         final b = v.asBool;
-        if (b == null) return _safeText('common.unknown', fallback: 'Unknown');
-        return b
-            ? _safeText('common.yes', fallback: 'Yes')
-            : _safeText('common.no', fallback: 'No');
+        if (b == null) return 'Unknown';
+        return b ? 'Yes' : 'No';
 
       case QuestionValueType.intType:
         final i = v.asInt;
-        return i?.toString() ??
-            _safeText('common.unknown', fallback: 'Unknown');
+        return i?.toString() ?? 'Unknown';
 
       case QuestionValueType.numType:
         final n = v.asNum;
-        return n?.toString() ??
-            _safeText('common.unknown', fallback: 'Unknown');
+        return n?.toString() ?? 'Unknown';
 
       case QuestionValueType.textType:
         final s = v.asText;
         if (s == null || s.trim().isEmpty) {
-          return _safeText('common.none', fallback: 'None');
+          return 'None';
         }
         return s.trim();
 
       case QuestionValueType.singleChoice:
         final id = v.asSingle;
         if (id == null || id.isEmpty) {
-          return _safeText('common.none', fallback: 'None');
+          return 'None';
         }
         final opt = q.options.where((o) => o.id == id).toList();
         if (opt.isEmpty) return id;
@@ -201,7 +197,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
       case QuestionValueType.multiChoice:
         final ids = v.asMulti;
         if (ids == null || ids.isEmpty) {
-          return _safeText('common.none', fallback: 'None');
+          return 'None';
         }
         final labels = ids.map((id) {
           final opt = q.options.where((o) => o.id == id).toList();
@@ -211,11 +207,11 @@ class _ReviewScreenState extends State<ReviewScreen> {
         return labels.join(', ');
 
       case QuestionValueType.dateType:
-        return v.asDate ?? _safeText('common.none', fallback: 'None');
+        return v.asDate ?? 'None';
 
       case QuestionValueType.mapType:
         final m = v.asMap;
-        if (m == null) return _safeText('common.none', fallback: 'None');
+        if (m == null) return 'None';
         return m.toString();
     }
   }
@@ -498,13 +494,6 @@ class _ReviewScreenState extends State<ReviewScreen> {
             ),
             const SizedBox(height: 12),
           ],
-          Padding(
-            padding: const EdgeInsets.only(bottom: 10),
-            child: Text(
-              'sessionId: ${s.sessionId}',
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-          ),
           _SectionCard(
             title: _safeText('preassessment.review.consentTitle',
                 fallback: 'Consent'),
@@ -569,7 +558,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
                 _kv(
                   _safeText('preassessment.review.dob',
                       fallback: 'Date of birth'),
-                  dobIso ?? _safeText('common.none', fallback: 'None'),
+                  dobIso ?? 'None',
                 ),
               ],
             ),
@@ -664,7 +653,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
                           : _safeText(q.promptKey, fallback: qid);
 
                       final value = (q == null || ans == null)
-                          ? _safeText('common.none', fallback: 'None')
+                          ? 'None'
                           : _formatAnswer(q: q, v: ans);
 
                       return Padding(

@@ -570,31 +570,38 @@ export async function processElbowAssessmentCore(
   _ctx?: functions.https.CallableContext
 ) {
     const assessmentId: string | undefined = data?.assessmentId;
-    const answers: Answer[] = Array.isArray(data?.answers) ? data.answers : [];
-
-    if (!assessmentId) {
-      throw new functions.https.HttpsError("invalid-argument", "assessmentId is required");
-    }
+    // Support both { answers: [...] } and direct array
+    const answers: Answer[] = Array.isArray(data?.answers) 
+      ? data.answers 
+      : Array.isArray(data) 
+      ? data 
+      : [];
 
     const summary = buildSummary(answers);
 
-    const ref = db.collection("assessments").doc(assessmentId);
-    await ref.set(
-      {
+    // Only write to Firestore if assessmentId is provided
+    if (assessmentId) {
+      const ref = db.collection("assessments").doc(assessmentId);
+      await ref.set(
+        {
+          triageStatus: summary.triage,
+          topDifferentials: summary.topDifferentials,
+          clinicianSummary: summary,
+          triageRegion: "elbow",
+          updatedAt: FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+      // Return wrapped shape for backward compatibility with callable
+      return {
         triageStatus: summary.triage,
         topDifferentials: summary.topDifferentials,
         clinicianSummary: summary,
-        triageRegion: "elbow",
-        updatedAt: FieldValue.serverTimestamp(),
-      },
-      { merge: true }
-    );
+      };
+    }
 
-    return {
-      triageStatus: summary.triage,
-      topDifferentials: summary.topDifferentials,
-      clinicianSummary: summary,
-    };
+    // Return raw summary object for decision support / summary builders
+    return summary;
   }
 // -------------------------------
 // Firebase callable wrapper

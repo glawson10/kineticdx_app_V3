@@ -15,11 +15,6 @@ if (!admin.apps.length) admin.initializeApp();
 const REGION = "europe-west3";
 
 // ─────────────────────────────
-// Runtime service account (workaround)
-// ─────────────────────────────
-const RUNTIME_SA = "326894670032-compute@developer.gserviceaccount.com";
-
-// ─────────────────────────────
 // Secrets (MUST be declared in index for v2 analysis)
 // ─────────────────────────────
 export const BREVO_API_KEY = defineSecret("BREVO_API_KEY");
@@ -37,6 +32,7 @@ import { inviteMember } from "./clinic/inviteMember";
 import { acceptInvite } from "./clinic/acceptInvite";
 import { updateClinicProfile } from "./clinic/updateClinicProfile";
 import { setMembershipStatus } from "./clinic/setMembershipStatus";
+import { updateMember } from "./clinic/updateMember";
 import { syncMyDisplayName } from "./clinic/syncMyDisplayName";
 import { updateMemberProfile } from "./clinic/updateMemberProfile";
 import { upsertStaffProfile } from "./clinic/staff/upsertStaffProfile";
@@ -119,39 +115,44 @@ import {
 
 // Debug / platform
 export const getSchemaVersionsFn = onCall(
-  { region: REGION, cors: true, serviceAccount: RUNTIME_SA },
+  { region: REGION, cors: true },
   async () => ({ ok: true, versions: SCHEMA_VERSIONS })
 );
 
 // Clinic
 export const clinicCreateFn = onCall(
-  { region: REGION, cors: true, serviceAccount: RUNTIME_SA },
+  { region: REGION, cors: true },
   createClinic
 );
 
 export const updateMemberProfileFn = onCall(
-  { region: REGION, cors: true, serviceAccount: RUNTIME_SA },
+  { region: REGION, cors: true },
   updateMemberProfile
 );
 
 export const inviteMemberFn = onCall(
-  { region: REGION, cors: true, secrets: [BREVO_API_KEY], serviceAccount: RUNTIME_SA },
+  { region: REGION, cors: true, secrets: [BREVO_API_KEY] },
   inviteMember
 );
 
 export const acceptInviteFn = onCall(
-  { region: REGION, cors: true, serviceAccount: RUNTIME_SA },
+  { region: REGION, cors: true },
   acceptInvite
 );
 
 export const updateClinicProfileFn = onCall(
-  { region: REGION, cors: true, serviceAccount: RUNTIME_SA },
+  { region: REGION, cors: true },
   updateClinicProfile
 );
 
 export const setMembershipStatusFn = onCall(
-  { region: REGION, cors: true, serviceAccount: RUNTIME_SA },
+  { region: REGION, cors: true },
   setMembershipStatus
+);
+
+export const updateMemberFn = onCall(
+  { region: REGION, cors: true },
+  updateMember
 );
 
 export const syncMyDisplayNameFn = onCall(
@@ -175,131 +176,131 @@ export const setStaffAvailabilityDefaultFn = onCall(
 
 // Closures
 export const createClosureFn = onCall(
-  { region: REGION, cors: true, serviceAccount: RUNTIME_SA },
+  { region: REGION, cors: true },
   createClosure
 );
 
 export const deleteClosureFn = onCall(
-  { region: REGION, cors: true, serviceAccount: RUNTIME_SA },
+  { region: REGION, cors: true },
   deleteClosure
 );
 
 // Booking
 export const createAppointmentFn = onCall(
-  { region: REGION, cors: true, serviceAccount: RUNTIME_SA },
+  { region: REGION, cors: true },
   createAppointment
 );
 
 export const deleteAppointmentFn = onCall(
-  { region: REGION, cors: true, serviceAccount: RUNTIME_SA },
+  { region: REGION, cors: true },
   deleteAppointment
 );
 
 export const updateAppointmentFn = onCall(
-  { region: REGION, cors: true, serviceAccount: RUNTIME_SA },
+  { region: REGION, cors: true },
   updateAppointment
 );
 
 export const updateAppointmentStatusFn = onCall(
-  { region: REGION, cors: true, serviceAccount: RUNTIME_SA },
+  { region: REGION, cors: true },
   updateAppointmentStatus
 );
 
 // Patients
 export const createPatientFn = onCall(
-  { region: REGION, cors: true, serviceAccount: RUNTIME_SA },
+  { region: REGION, cors: true },
   createPatient
 );
 
 export const updatePatientFn = onCall(
-  { region: REGION, cors: true, serviceAccount: RUNTIME_SA },
+  { region: REGION, cors: true },
   updatePatient
 );
 
 export const mergePatientsFn = onCall(
-  { region: REGION, cors: true, serviceAccount: RUNTIME_SA },
+  { region: REGION, cors: true },
   mergePatients
 );
 
 export const deletePatientFn = onCall(
-  { region: REGION, cors: true, serviceAccount: RUNTIME_SA },
+  { region: REGION, cors: true },
   deletePatient
 );
 
 // Episodes
 export const createEpisodeFn = onCall(
-  { region: REGION, cors: true, serviceAccount: RUNTIME_SA },
+  { region: REGION, cors: true },
   createEpisode
 );
 
 export const updateEpisodeFn = onCall(
-  { region: REGION, cors: true, serviceAccount: RUNTIME_SA },
+  { region: REGION, cors: true },
   updateEpisode
 );
 
 export const closeEpisodeFn = onCall(
-  { region: REGION, cors: true, serviceAccount: RUNTIME_SA },
+  { region: REGION, cors: true },
   closeEpisode
 );
 
 // Clinical notes
 export const createClinicalNoteFn = onCall(
-  { region: REGION, cors: true, serviceAccount: RUNTIME_SA },
+  { region: REGION, cors: true },
   createClinicalNote
 );
 
 export const amendClinicalNoteFn = onCall(
-  { region: REGION, cors: true, serviceAccount: RUNTIME_SA },
+  { region: REGION, cors: true },
   amendClinicalNote
 );
 
 // Registries
 export const upsertClinicalTestFn = onCall(
-  { region: REGION, cors: true, serviceAccount: RUNTIME_SA },
+  { region: REGION, cors: true },
   upsertClinicalTest
 );
 
 export const deleteClinicalTestFn = onCall(
-  { region: REGION, cors: true, serviceAccount: RUNTIME_SA },
+  { region: REGION, cors: true },
   deleteClinicalTest
 );
 
 export const upsertOutcomeMeasureFn = onCall(
-  { region: REGION, cors: true, serviceAccount: RUNTIME_SA },
+  { region: REGION, cors: true },
   upsertOutcomeMeasure
 );
 
 export const deleteOutcomeMeasureFn = onCall(
-  { region: REGION, cors: true, serviceAccount: RUNTIME_SA },
+  { region: REGION, cors: true },
   deleteOutcomeMeasure
 );
 
 // Assessments
 export const submitAssessmentFn = onCall(
-  { region: REGION, cors: true, serviceAccount: RUNTIME_SA },
+  { region: REGION, cors: true },
   submitAssessment
 );
 
 export const getAssessmentPackFn = onCall(
-  { region: REGION, cors: true, serviceAccount: RUNTIME_SA },
+  { region: REGION, cors: true },
   getAssessmentPack
 );
 
 export const generateAssessmentPdfFn = onCall(
-  { region: REGION, cors: true, serviceAccount: RUNTIME_SA },
+  { region: REGION, cors: true },
   generateAssessmentPdf
 );
 
 // Intake
 export const submitIntakeSessionFn = onCall(
-  { region: REGION, cors: true, serviceAccount: RUNTIME_SA },
+  { region: REGION, cors: true },
   submitIntakeSession
 );
 export { createGeneralQuestionnaireLinkFn, resolveIntakeLinkTokenFn };
 
 // Audit
 export const exportClosureOverrideAuditReportFn = onCall(
-  { region: REGION, cors: true, serviceAccount: RUNTIME_SA },
+  { region: REGION, cors: true },
   exportClosureOverrideAuditReport
 );
 
@@ -326,7 +327,7 @@ export { backfillNotificationsSettings } from "./clinic/settings/backfillNotific
 export { consumeIntakeInviteFn } from "./intake/consumeIntakeInviteFn";
 
 export const bootstrapPublicBookingSettingsFn = onCall(
-  { region: REGION, cors: true, serviceAccount: RUNTIME_SA },
+  { region: REGION, cors: true },
   bootstrapPublicBookingSettings
 );
 export { createBookingRequestFn } from "./clinic/booking/createBookingRequestFn";

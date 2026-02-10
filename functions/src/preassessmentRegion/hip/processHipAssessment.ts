@@ -572,37 +572,41 @@ export async function processHipAssessmentCore(
   _ctx?: functions.https.CallableContext
 ) {
     const assessmentId: string | undefined = data?.assessmentId;
-    const answers: Answer[] = Array.isArray(data?.answers) ? data.answers : [];
-
-    if (!assessmentId) {
-      throw new functions.https.HttpsError(
-        "invalid-argument",
-        "assessmentId is required"
-      );
-    }
+    // Support both { answers: [...] } and direct array
+    const answers: Answer[] = Array.isArray(data?.answers) 
+      ? data.answers 
+      : Array.isArray(data) 
+      ? data 
+      : [];
 
     const summary = buildSummary(answers);
 
-    await db
-      .collection("assessments")
-      .doc(assessmentId)
-      .set(
-        {
-          triageStatus: summary.triage,
-          topDifferentials: summary.topDifferentials,
-          clinicianSummary: summary,
-          triageRegion: "hip",
-          updatedAt: FieldValue.serverTimestamp(),
-        },
-        { merge: true }
-      );
+    // Only write to Firestore if assessmentId is provided
+    if (assessmentId) {
+      await db
+        .collection("assessments")
+        .doc(assessmentId)
+        .set(
+          {
+            triageStatus: summary.triage,
+            topDifferentials: summary.topDifferentials,
+            clinicianSummary: summary,
+            triageRegion: "hip",
+            updatedAt: FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        );
+      // Return wrapped shape for backward compatibility with callable
+      return {
+        triageStatus: summary.triage,
+        topDifferentials: summary.topDifferentials,
+        clinicianSummary: summary,
+      };
+    }
 
-    return {
-      triageStatus: summary.triage,
-      topDifferentials: summary.topDifferentials,
-      clinicianSummary: summary,
-    };
-  }
+    // Return raw summary object for decision support / summary builders
+    return summary;
+}
 
   // -------------------------------
   // Firebase callable wrapper

@@ -49,7 +49,7 @@ class _GeneralVisitBodyAreasQuestionState
   void initState() {
     super.initState();
     _selected = (widget.value?.asMulti ?? const <String>[]).toSet();
-    _selectedOverlays = <String>{};
+    _selectedOverlays = _overlaysFromSelected(_selected);
   }
 
   @override
@@ -58,7 +58,17 @@ class _GeneralVisitBodyAreasQuestionState
     final next = (widget.value?.asMulti ?? const <String>[]).toSet();
     if (!setEquals(_selected, next)) {
       _selected = next;
+      _selectedOverlays = _overlaysFromSelected(_selected);
     }
+  }
+
+  /// When loading from saved value we only have optionIds; show all overlays for each (both sides).
+  Set<String> _overlaysFromSelected(Set<String> optionIds) {
+    final out = <String>{};
+    for (final optionId in optionIds) {
+      out.addAll(_overlayIdsForOptionId(optionId));
+    }
+    return out;
   }
 
   String _optionIdForOverlay(String overlayId) {
@@ -122,40 +132,78 @@ class _GeneralVisitBodyAreasQuestionState
     });
   }
 
-  String _areaLabelFor(String? overlayId) {
-    switch (overlayId) {
-      case 'cervical.center':
-        return 'Neck';
-      case 'thoracic.center':
-        return 'Mid back';
-      case 'lumbar.center':
-        return 'Lower back';
-      case 'shoulder.right':
-      case 'shoulder.left':
-        return 'Shoulder';
-      case 'elbow.right':
-      case 'elbow.left':
-        return 'Elbow';
-      case 'wrist.right':
-      case 'wrist.left':
-        return 'Wrist / hand';
-      case 'hip.right':
-      case 'hip.left':
-        return 'Hip';
-      case 'knee.right':
-      case 'knee.left':
-        return 'Knee';
-      case 'ankle.right':
-      case 'ankle.left':
-        return 'Ankle / foot';
+  /// Overlay IDs that map to this optionId (for syncing list selection with chart).
+  List<String> _overlayIdsForOptionId(String optionId) {
+    switch (optionId) {
+      case 'area.neck':
+        return ['cervical.center'];
+      case 'area.upperBack':
+        return ['thoracic.center'];
+      case 'area.lowerBack':
+        return ['lumbar.center'];
+      case 'area.shoulder':
+        return ['shoulder.left', 'shoulder.right'];
+      case 'area.elbow':
+        return ['elbow.left', 'elbow.right'];
+      case 'area.wristHand':
+        return ['wrist.left', 'wrist.right'];
+      case 'area.hip':
+        return ['hip.left', 'hip.right'];
+      case 'area.knee':
+        return ['knee.left', 'knee.right'];
+      case 'area.ankleFoot':
+        return ['ankle.left', 'ankle.right'];
       default:
-        return '';
+        return [];
     }
   }
+
+  void _onSelectFromList(String overlayId) {
+    final optionId = _optionIdForOverlay(overlayId);
+    if (optionId.isEmpty) return;
+    setState(() {
+      if (_selectedOverlays.contains(overlayId)) {
+        _selectedOverlays.remove(overlayId);
+      } else {
+        _selectedOverlays.add(overlayId);
+      }
+      // Keep optionId in _selected if any overlay for that option is selected.
+      final hasAny = _selectedOverlays
+          .any((o) => _optionIdForOverlay(o) == optionId);
+      if (hasAny) {
+        _selected.add(optionId);
+      } else {
+        _selected.remove(optionId);
+      }
+      widget.onChanged(
+        _selected.isEmpty ? null : AnswerValue.multi(_selected.toList()),
+      );
+    });
+  }
+
+  /// List entries: label, optionId, and overlayId. Selecting a row toggles only that overlay (left or right).
+  static const List<({String label, String optionId, String overlayId})> _areaListEntries = [
+    (label: 'Neck', optionId: 'area.neck', overlayId: 'cervical.center'),
+    (label: 'Mid back', optionId: 'area.upperBack', overlayId: 'thoracic.center'),
+    (label: 'Lower back', optionId: 'area.lowerBack', overlayId: 'lumbar.center'),
+    (label: 'Shoulder (left)', optionId: 'area.shoulder', overlayId: 'shoulder.left'),
+    (label: 'Shoulder (right)', optionId: 'area.shoulder', overlayId: 'shoulder.right'),
+    (label: 'Elbow (left)', optionId: 'area.elbow', overlayId: 'elbow.left'),
+    (label: 'Elbow (right)', optionId: 'area.elbow', overlayId: 'elbow.right'),
+    (label: 'Wrist / hand (left)', optionId: 'area.wristHand', overlayId: 'wrist.left'),
+    (label: 'Wrist / hand (right)', optionId: 'area.wristHand', overlayId: 'wrist.right'),
+    (label: 'Hip (left)', optionId: 'area.hip', overlayId: 'hip.left'),
+    (label: 'Hip (right)', optionId: 'area.hip', overlayId: 'hip.right'),
+    (label: 'Knee (left)', optionId: 'area.knee', overlayId: 'knee.left'),
+    (label: 'Knee (right)', optionId: 'area.knee', overlayId: 'knee.right'),
+    (label: 'Ankle / foot (left)', optionId: 'area.ankleFoot', overlayId: 'ankle.left'),
+    (label: 'Ankle / foot (right)', optionId: 'area.ankleFoot', overlayId: 'ankle.right'),
+  ];
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final isMobile = MediaQuery.of(context).size.width < 600;
 
     Color overlayColorFor(String overlayId) {
       if (_isOverlaySelected(overlayId)) {
@@ -204,7 +252,7 @@ class _GeneralVisitBodyAreasQuestionState
     return QuestionCard(
       title: widget.t(widget.q.promptKey),
       errorText: widget.errorText,
-      helper: 'Tap the body to choose all areas involved.',
+      helper: 'Tap the body or choose from the list below. You can select multiple areas.',
       child: SizedBox(
         height: mapHeight,
         child: LayoutBuilder(
@@ -212,69 +260,40 @@ class _GeneralVisitBodyAreasQuestionState
             final height = constraints.maxHeight;
             final width = constraints.maxWidth;
 
-            return Stack(
-              fit: StackFit.expand,
-              children: [
-                // Area title + dynamic label box (shows hovered region)
-                Positioned(
-                  top: height * 0.02,
-                  left: width * 0.20,
-                  right: width * 0.20,
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        'Area',
-                        style: theme.textTheme.titleSmall?.copyWith(
-                              fontWeight: FontWeight.bold,
-                            ) ??
-                            const TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.bold,
-                            ),
-                      ),
-                      const SizedBox(height: 4),
-                      AnimatedOpacity(
-                        duration: const Duration(milliseconds: 250),
-                        curve: Curves.easeInOut,
-                        opacity: _hoveredOverlayId == null ? 0.0 : 1.0,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 12,
-                            vertical: 8,
-                          ),
-                          decoration: BoxDecoration(
-                            color: theme.colorScheme.surfaceContainerHighest
-                                .withValues(alpha: 0.9),
-                            border: Border.all(
-                              color: theme.colorScheme.outline
-                                  .withValues(alpha: 0.5),
-                            ),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: Text(
-                            _areaLabelFor(_hoveredOverlayId),
-                            style: theme.textTheme.bodyMedium ??
-                                const TextStyle(fontSize: 14),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
+            // Centered content: chart + list side by side, aligned with body regions
+            const double maxContentWidth = 720;
+            final contentWidth = width > maxContentWidth ? maxContentWidth : width;
+            final chartWidth = contentWidth * 0.48;
+            final listWidth = contentWidth * 0.52;
 
-                // Base body map image
-                Image.asset(
-                  'assets/body_map_person.png',
-                  fit: BoxFit.contain,
-                ),
+            return Center(
+              child: SizedBox(
+                width: contentWidth,
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Body chart (left) – image centered so overlay hit areas align with figure
+                    SizedBox(
+                      width: chartWidth,
+                      height: height,
+                      child: Stack(
+                        fit: StackFit.expand,
+                        children: [
+                          // Base body map image
+                          Image.asset(
+                            'assets/body_map_person.png',
+                            fit: BoxFit.contain,
+                            alignment: Alignment.center,
+                          ),
 
                 // Cervical / neck
                 Positioned(
-                  top: height * 0.20,
-                  left: width * 0.40,
-                  right: width * 0.40,
-                  height: height * 0.06,
+                  // Mobile values are tuned visually; desktop offset slightly upwards
+                  top: isMobile ? height * 0.15 : height * 0.17,
+                  left: chartWidth * 0.40,
+                  right: chartWidth * 0.40,
+                  height: isMobile ? height * 0.08 : height * 0.06,
                   child: MouseRegion(
                     onEnter: (_) =>
                         setState(() => _hoveredOverlayId = 'cervical.center'),
@@ -299,10 +318,10 @@ class _GeneralVisitBodyAreasQuestionState
 
                 // Thoracic / mid back
                 Positioned(
-                  top: height * 0.30,
-                  left: width * (19 / 50),
-                  width: width * (6 / 25),
-                  height: height * 0.04,
+                  top: isMobile ? height * 0.25 : height * 0.27,
+                  left: chartWidth * (19 / 50),
+                  width: chartWidth * (6 / 25),
+                  height: isMobile ? height * 0.05 : height * 0.04,
                   child: MouseRegion(
                     onEnter: (_) =>
                         setState(() => _hoveredOverlayId = 'thoracic.center'),
@@ -327,10 +346,10 @@ class _GeneralVisitBodyAreasQuestionState
 
                 // Lumbar / lower back
                 Positioned(
-                  top: height * 0.35,
-                  left: width * 0.40,
-                  right: width * 0.40,
-                  height: height * 0.10,
+                  top: isMobile ? height * 0.38 : height * 0.35,
+                  left: chartWidth * 0.40,
+                  right: chartWidth * 0.40,
+                  height: isMobile ? height * 0.12 : height * 0.10,
                   child: MouseRegion(
                     onEnter: (_) =>
                         setState(() => _hoveredOverlayId = 'lumbar.center'),
@@ -352,12 +371,12 @@ class _GeneralVisitBodyAreasQuestionState
                   ),
                 ),
 
-                // Right shoulder
+                // Right shoulder (aligned with body chart limbs)
                 Positioned(
-                  top: height * 0.25,
-                  left: width * 0.27,
-                  width: width * 0.18,
-                  height: height * 0.08,
+                  top: isMobile ? height * 0.25 : height * 0.22,
+                  left: chartWidth * 0.29,
+                  width: chartWidth * 0.18,
+                  height: isMobile ? height * 0.10 : height * 0.08,
                   child: MouseRegion(
                     onEnter: (_) =>
                         setState(() => _hoveredOverlayId = 'shoulder.right'),
@@ -382,10 +401,10 @@ class _GeneralVisitBodyAreasQuestionState
 
                 // Left shoulder
                 Positioned(
-                  top: height * 0.25,
-                  right: width * 0.27,
-                  width: width * 0.18,
-                  height: height * 0.08,
+                  top: isMobile ? height * 0.25 : height * 0.22,
+                  right: chartWidth * 0.29,
+                  width: chartWidth * 0.18,
+                  height: isMobile ? height * 0.10 : height * 0.08,
                   child: MouseRegion(
                     onEnter: (_) =>
                         setState(() => _hoveredOverlayId = 'shoulder.left'),
@@ -409,10 +428,10 @@ class _GeneralVisitBodyAreasQuestionState
 
                 // Right elbow
                 Positioned(
-                  top: height * 0.30,
-                  left: width * 0.20,
-                  width: width * 0.22,
-                  height: height * 0.08,
+                  top: isMobile ? height * 0.38 : height * 0.30,
+                  left: chartWidth * 0.25,
+                  width: chartWidth * 0.22,
+                  height: isMobile ? height * 0.10 : height * 0.08,
                   child: MouseRegion(
                     onEnter: (_) =>
                         setState(() => _hoveredOverlayId = 'elbow.right'),
@@ -436,10 +455,10 @@ class _GeneralVisitBodyAreasQuestionState
 
                 // Left elbow
                 Positioned(
-                  top: height * 0.30,
-                  right: width * 0.20,
-                  width: width * 0.22,
-                  height: height * 0.08,
+                  top: isMobile ? height * 0.38 : height * 0.30,
+                  right: chartWidth * 0.25,
+                  width: chartWidth * 0.22,
+                  height: isMobile ? height * 0.10 : height * 0.08,
                   child: MouseRegion(
                     onEnter: (_) =>
                         setState(() => _hoveredOverlayId = 'elbow.left'),
@@ -464,8 +483,8 @@ class _GeneralVisitBodyAreasQuestionState
                 // Right wrist / hand
                 Positioned(
                   top: height * 0.45,
-                  left: width * 0.18,
-                  width: width * 0.22,
+                  left: chartWidth * 0.20,
+                  width: chartWidth * 0.22,
                   height: height * 0.10,
                   child: MouseRegion(
                     onEnter: (_) =>
@@ -491,8 +510,8 @@ class _GeneralVisitBodyAreasQuestionState
                 // Left wrist / hand
                 Positioned(
                   top: height * 0.45,
-                  right: width * 0.18,
-                  width: width * 0.22,
+                  right: chartWidth * 0.20,
+                  width: chartWidth * 0.22,
                   height: height * 0.10,
                   child: MouseRegion(
                     onEnter: (_) =>
@@ -518,8 +537,8 @@ class _GeneralVisitBodyAreasQuestionState
                 // Right hip
                 Positioned(
                   top: height * 0.45,
-                  left: width * 0.35,
-                  width: width * 0.14,
+                  left: chartWidth * 0.35,
+                  width: chartWidth * 0.14,
                   height: height * 0.10,
                   child: MouseRegion(
                     onEnter: (_) =>
@@ -545,8 +564,8 @@ class _GeneralVisitBodyAreasQuestionState
                 // Left hip
                 Positioned(
                   top: height * 0.45,
-                  right: width * 0.35,
-                  width: width * 0.14,
+                  right: chartWidth * 0.35,
+                  width: chartWidth * 0.14,
                   height: height * 0.10,
                   child: MouseRegion(
                     onEnter: (_) =>
@@ -571,9 +590,9 @@ class _GeneralVisitBodyAreasQuestionState
 
                 // Right knee
                 Positioned(
-                  top: height * 0.55,
-                  left: width * 0.35,
-                  width: width * 0.12,
+                  top: height * 0.59,
+                  left: chartWidth * 0.35,
+                  width: chartWidth * 0.12,
                   height: height * 0.10,
                   child: MouseRegion(
                     onEnter: (_) =>
@@ -598,9 +617,9 @@ class _GeneralVisitBodyAreasQuestionState
 
                 // Left knee
                 Positioned(
-                  top: height * 0.55,
-                  right: width * 0.35,
-                  width: width * 0.12,
+                  top: height * 0.59,
+                  right: chartWidth * 0.35,
+                  width: chartWidth * 0.12,
                   height: height * 0.10,
                   child: MouseRegion(
                     onEnter: (_) =>
@@ -625,9 +644,9 @@ class _GeneralVisitBodyAreasQuestionState
 
                 // Right ankle / foot
                 Positioned(
-                  top: height * 0.73,
-                  left: width * 0.35,
-                  width: width * 0.10,
+                  top: height * 0.77,
+                  left: chartWidth * 0.37,
+                  width: chartWidth * 0.10,
                   height: height * 0.12,
                   child: MouseRegion(
                     onEnter: (_) =>
@@ -652,9 +671,9 @@ class _GeneralVisitBodyAreasQuestionState
 
                 // Left ankle / foot
                 Positioned(
-                  top: height * 0.73,
-                  right: width * 0.35,
-                  width: width * 0.10,
+                  top: height * 0.77,
+                  right: chartWidth * 0.37,
+                  width: chartWidth * 0.10,
                   height: height * 0.12,
                   child: MouseRegion(
                     onEnter: (_) =>
@@ -676,7 +695,98 @@ class _GeneralVisitBodyAreasQuestionState
                     ),
                   ),
                 ),
-              ],
+                    ],
+                  ),
+                ),
+                    // Area list (right): all body parts with left/right labels; select from list or chart
+                    SizedBox(
+                      width: listWidth,
+                      height: height,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Area',
+                            style: theme.textTheme.titleSmall?.copyWith(
+                                  fontWeight: FontWeight.bold,
+                                ) ??
+                                const TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                          ),
+                          const SizedBox(height: 8),
+                          Expanded(
+                            child: SingleChildScrollView(
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  for (final entry in _areaListEntries) ...[
+                                    Material(
+                                      color: _selectedOverlays.contains(entry.overlayId)
+                                          ? theme.colorScheme.primaryContainer
+                                              .withValues(alpha: 0.6)
+                                          : Colors.transparent,
+                                      borderRadius: BorderRadius.circular(8),
+                                      child: InkWell(
+                                        onTap: () =>
+                                            _onSelectFromList(entry.overlayId),
+                                        borderRadius: BorderRadius.circular(8),
+                                        child: Padding(
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 12,
+                                            vertical: 10,
+                                          ),
+                                          child: Row(
+                                            children: [
+                                              Icon(
+                                                _selectedOverlays.contains(entry.overlayId)
+                                                    ? Icons.check_circle
+                                                    : Icons.circle_outlined,
+                                                size: 20,
+                                                color: _selectedOverlays.contains(
+                                                        entry.overlayId)
+                                                    ? theme.colorScheme.primary
+                                                    : theme.colorScheme.outline,
+                                              ),
+                                              const SizedBox(width: 8),
+                                              Expanded(
+                                                child: Text(
+                                                  entry.label,
+                                                  style: theme.textTheme.bodyMedium
+                                                      ?.copyWith(
+                                                        fontWeight: _selectedOverlays.contains(
+                                                                entry.overlayId)
+                                                            ? FontWeight.w600
+                                                            : null,
+                                                      ) ??
+                                                      TextStyle(
+                                                        fontSize: 14,
+                                                        fontWeight: _selectedOverlays.contains(
+                                                                entry.overlayId)
+                                                            ? FontWeight.w600
+                                                            : FontWeight.normal,
+                                                      ),
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(height: 2),
+                                  ],
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             );
           },
         ),

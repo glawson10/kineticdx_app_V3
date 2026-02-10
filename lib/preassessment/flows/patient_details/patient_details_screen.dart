@@ -469,20 +469,6 @@ class _PatientDetailsScreenState extends State<PatientDetailsScreen> {
               style: Theme.of(context).textTheme.bodySmall,
             ),
           ],
-          const SizedBox(height: 12),
-          Text(
-            'Clinic: ${draft.session.clinicId}',
-            style: Theme.of(context).textTheme.bodySmall,
-          ),
-          Text(
-            'Session: ${draft.session.sessionId}',
-            style: Theme.of(context).textTheme.bodySmall,
-          ),
-          if (flowIdDebug.isNotEmpty)
-            Text(
-              'Flow (debug): $flowIdDebug',
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
         ],
       ),
     );

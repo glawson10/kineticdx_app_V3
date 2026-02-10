@@ -120,8 +120,9 @@ export async function acceptInvite(req: CallableRequest<AcceptInviteInput>) {
     status: safeStr(invite.status),
   });
 
-  // Validate invite state
-  if (safeStr(invite.status) !== "pending") {
+  // Validate invite state (accept both "pending" and "active" for backwards compat)
+  const inviteStatus = safeStr(invite.status);
+  if (inviteStatus !== "pending" && inviteStatus !== "active") {
     throw new HttpsError("failed-precondition", "Invite already used or revoked.");
   }
 
@@ -140,15 +141,20 @@ export async function acceptInvite(req: CallableRequest<AcceptInviteInput>) {
   const roleId = safeStr(invite.roleId);
   if (!roleId) throw new HttpsError("invalid-argument", "Invite roleId missing.");
 
-  // Load role permissions
-  const roleRef = db.collection("clinics").doc(clinicId).collection("roles").doc(roleId);
-  const roleSnap = await roleRef.get();
-  if (!roleSnap.exists) {
-    throw new HttpsError("invalid-argument", "Role no longer exists.");
+  // Permissions: invite.permissions override (from inviteUser) else role template
+  const invitePerms = invite.permissions as AnyMap | undefined;
+  let flattened: Record<string, boolean>;
+  if (invitePerms && typeof invitePerms === "object" && Object.keys(invitePerms).length > 0) {
+    flattened = flattenPermissions(invitePerms);
+  } else {
+    const roleRef = db.collection("clinics").doc(clinicId).collection("roles").doc(roleId);
+    const roleSnap = await roleRef.get();
+    if (!roleSnap.exists) {
+      throw new HttpsError("invalid-argument", "Role no longer exists.");
+    }
+    const rolePermissions = (roleSnap.data()?.permissions ?? {}) as AnyMap;
+    flattened = flattenPermissions(rolePermissions);
   }
-
-  const rolePermissions = (roleSnap.data()?.permissions ?? {}) as AnyMap;
-  const flattened = flattenPermissions(rolePermissions);
 
   const now = admin.firestore.FieldValue.serverTimestamp();
 

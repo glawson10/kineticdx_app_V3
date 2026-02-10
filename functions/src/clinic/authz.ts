@@ -25,20 +25,16 @@ function norm(s: unknown) {
 }
 
 /**
- * Canonical membership location:
- *   clinics/{clinicId}/memberships/{uid}
- *
- * Legacy fallback (migration):
+ * Canonical membership location (align with Firestore rules):
  *   clinics/{clinicId}/members/{uid}
- *
- * NOTE: We do NOT use users/{uid}/memberships/{clinicId} for authz because it's an index mirror.
+ * Legacy fallback: clinics/{clinicId}/memberships/{uid}
  */
-async function getClinicMembershipSnap(db: Firestore, clinicId: string, uid: string) {
-  const canonRef = db.doc(`clinics/${clinicId}/memberships/${uid}`);
-  const canonSnap = await canonRef.get();
-  if (canonSnap.exists) return canonSnap;
+export async function getClinicMembershipSnap(db: Firestore, clinicId: string, uid: string) {
+  const membersRef = db.doc(`clinics/${clinicId}/members/${uid}`);
+  const membersSnap = await membersRef.get();
+  if (membersSnap.exists) return membersSnap;
 
-  const legacyRef = db.doc(`clinics/${clinicId}/members/${uid}`);
+  const legacyRef = db.doc(`clinics/${clinicId}/memberships/${uid}`);
   const legacySnap = await legacyRef.get();
   if (legacySnap.exists) return legacySnap;
 
@@ -120,6 +116,35 @@ export async function hasPerm(
   } catch {
     return false;
   }
+}
+
+/**
+ * Count active owners in clinic (members + memberships, distinct uids).
+ * Used to enforce "cannot suspend/demote last owner".
+ */
+export async function countActiveOwners(db: Firestore, clinicId: string): Promise<number> {
+  const membersRef = db.collection("clinics").doc(clinicId).collection("members");
+  const membershipsRef = db.collection("clinics").doc(clinicId).collection("memberships");
+
+  const [membersSnap, membershipsSnap] = await Promise.all([
+    membersRef.get(),
+    membershipsRef.get(),
+  ]);
+
+  const ownerUids = new Set<string>();
+
+  for (const doc of membersSnap.docs) {
+    const d = (doc.data() || {}) as MemberDoc;
+    const role = (norm(d.roleId) || norm(d.role)).toLowerCase();
+    if (role === "owner" && isActiveMembership(d)) ownerUids.add(doc.id);
+  }
+  for (const doc of membershipsSnap.docs) {
+    const d = (doc.data() || {}) as MemberDoc;
+    const role = (norm(d.roleId) || norm(d.role)).toLowerCase();
+    if (role === "owner" && isActiveMembership(d)) ownerUids.add(doc.id);
+  }
+
+  return ownerUids.size;
 }
 
 /**

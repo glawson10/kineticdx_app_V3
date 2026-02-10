@@ -1,6 +1,7 @@
 import { CallableRequest, HttpsError } from "firebase-functions/v2/https";
 import * as admin from "firebase-admin";
-import { requireActiveMemberWithPerm } from "./authz";
+import { requireActiveMemberWithPerm, countActiveOwners, getClinicMembershipSnap, isActiveMembership } from "./authz";
+import type { MemberDoc } from "./authz";
 
 type Input = {
   clinicId: string;
@@ -18,6 +19,11 @@ function normalizeStatus(v: unknown): "active" | "suspended" {
   throw new HttpsError("invalid-argument", "status must be active|suspended");
 }
 
+function isOwner(data: MemberDoc): boolean {
+  const role = (safeStr(data.roleId) || safeStr(data.role)).toLowerCase();
+  return role === "owner";
+}
+
 export async function setMembershipStatus(req: CallableRequest<Input>) {
   if (!req.auth) throw new HttpsError("unauthenticated", "Sign in required.");
 
@@ -32,22 +38,37 @@ export async function setMembershipStatus(req: CallableRequest<Input>) {
   const db = admin.firestore();
   const actorUid = req.auth.uid;
 
-  // ✅ Only staff managers can change membership status
   await requireActiveMemberWithPerm(db, clinicId, actorUid, "members.manage");
 
-  // Optional safety: do not allow self-suspension (avoid locking yourself out)
   if (actorUid === memberUid) {
     throw new HttpsError("failed-precondition", "You cannot change your own status.");
   }
 
+  // Last-owner guard: cannot suspend the last active owner
+  if (status === "suspended") {
+    const snap = await getClinicMembershipSnap(db, clinicId, memberUid);
+    if (snap) {
+      const data = (snap.data() || {}) as MemberDoc;
+      if (isOwner(data) && isActiveMembership(data)) {
+        const ownerCount = await countActiveOwners(db, clinicId);
+        if (ownerCount <= 1) {
+          throw new HttpsError(
+            "failed-precondition",
+            "Cannot suspend the last active owner. Assign another owner first."
+          );
+        }
+      }
+    }
+  }
+
   const now = admin.firestore.FieldValue.serverTimestamp();
 
-  const canonRef = db.doc(`clinics/${clinicId}/memberships/${memberUid}`);
-  const legacyRef = db.doc(`clinics/${clinicId}/members/${memberUid}`);
+  // Canonical path (matches Firestore rules): members
+  const canonRef = db.doc(`clinics/${clinicId}/members/${memberUid}`);
+  const legacyRef = db.doc(`clinics/${clinicId}/memberships/${memberUid}`);
 
   const batch = db.batch();
 
-  // canonical
   batch.set(
     canonRef,
     {
@@ -59,19 +80,19 @@ export async function setMembershipStatus(req: CallableRequest<Input>) {
     { merge: true }
   );
 
-  // legacy mirror (migration window)
   batch.set(
     legacyRef,
     {
+      status,
       active: status === "active",
       updatedAt: now,
+      updatedByUid: actorUid,
     },
     { merge: true }
   );
 
   await batch.commit();
 
-  // Optional: audit event
   const auditRef = db.collection(`clinics/${clinicId}/audit`).doc();
   await auditRef.set({
     type: "membership.status_changed",

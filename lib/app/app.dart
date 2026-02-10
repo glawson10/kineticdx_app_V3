@@ -85,13 +85,27 @@ class MyApp extends StatelessWidget {
   }
 
   String? _generalTokenFromUri(Uri uri) {
-    final segments = uri.pathSegments;
-    if (segments.length == 3 &&
-        segments[0] == 'q' &&
-        segments[1] == 'general' &&
-        segments[2].trim().isNotEmpty) {
-      return segments[2].trim();
+    // Support either:
+    // - /q/general/<token>
+    // - /q/general/<token>/   (trailing slash)
+    // - //q/general/<token>   (double slash in generated links)
+    // - /q/general?token=<token> or /q/general?t=<token> (fallback)
+    final qpToken = _asTrimmedString(
+      uri.queryParameters['t'] ?? uri.queryParameters['token'],
+    );
+    if (qpToken != null) return qpToken;
+
+    final segments =
+        uri.pathSegments.map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
+    if (segments.length < 3) return null;
+
+    // Keep it strict: match the LAST 3 non-empty segments exactly.
+    final n = segments.length;
+    if (segments[n - 3] == 'q' && segments[n - 2] == 'general') {
+      final token = segments[n - 1].trim();
+      return token.isEmpty ? null : token;
     }
+
     return null;
   }
 

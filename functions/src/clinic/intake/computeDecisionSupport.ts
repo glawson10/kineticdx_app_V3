@@ -193,18 +193,13 @@ function mapSummaryToDecisionSupport(
 /**
  * Ankle result helper:
  * - await the async ankle engine
- * - normalize triageStatus -> triage for buildAnkleSummary()
+ * - Returns raw summary object (or extracts from wrapped response)
  */
 async function computeAnkleResult(answers: any) {
   const legacyAnswers = buildAnkleLegacyAnswers(answers);
-  return await processAnkleAssessmentCore(legacyAnswers as any);
-}
-
-function normalizeAnkleForSummary(raw: any) {
-  return {
-    ...raw,
-    triage: raw?.triage ?? raw?.triageStatus,
-  };
+  const result: any = await processAnkleAssessmentCore(legacyAnswers as any);
+  // If wrapped (has clinicianSummary), extract it; otherwise use result directly
+  return result?.clinicianSummary ?? result;
 }
 
 export const computeDecisionSupport = onCall(
@@ -271,40 +266,47 @@ export const computeDecisionSupport = onCall(
       switch (flowId) {
         case "ankle": {
           const raw = await computeAnkleResult(answers);
-          const rawForSummary = normalizeAnkleForSummary(raw);
-          summary = buildAnkleSummary(rawForSummary, answers);
+          summary = buildAnkleSummary(raw, answers);
           engineDispatch = "ankle";
           break;
         }
 
         case "cervical": {
           const legacyAnswers = buildCervicalLegacyAnswers(answers);
-          const rawResult = processCervicalAssessmentCore(legacyAnswers as any);
-          summary = buildCervicalSummary(rawResult, answers);
+          const rawResult: any = await processCervicalAssessmentCore(legacyAnswers as any);
+          // Extract raw summary if wrapped
+          const raw = rawResult?.clinicianSummary ?? rawResult;
+          summary = buildCervicalSummary(raw, answers);
           engineDispatch = "cervical";
           break;
         }
 
         case "elbow": {
           const legacyAnswers = buildElbowLegacyAnswers(answers);
-          const rawResult = processElbowAssessmentCore(legacyAnswers as any);
-          summary = buildElbowSummary(rawResult, answers);
+          const rawResult: any = await processElbowAssessmentCore(legacyAnswers as any);
+          // Extract raw summary if wrapped
+          const raw = rawResult?.clinicianSummary ?? rawResult;
+          summary = buildElbowSummary(raw, answers);
           engineDispatch = "elbow";
           break;
         }
 
         case "hip": {
           const legacyAnswers = buildHipLegacyAnswers(answers);
-          const rawResult = processHipAssessmentCore(legacyAnswers as any);
-          summary = buildHipSummary(rawResult, answers);
+          const rawResult: any = await processHipAssessmentCore(legacyAnswers as any);
+          // Extract raw summary if wrapped
+          const raw = rawResult?.clinicianSummary ?? rawResult;
+          summary = buildHipSummary(raw, answers);
           engineDispatch = "hip";
           break;
         }
 
         case "knee": {
           const legacyAnswers = buildKneeLegacyAnswers(answers);
-          const rawResult = processKneeAssessmentCore(legacyAnswers as any);
-          summary = buildKneeSummary(rawResult, answers);
+          const rawResult: any = await processKneeAssessmentCore(legacyAnswers as any);
+          // Extract raw summary if wrapped
+          const raw = rawResult?.clinicianSummary ?? rawResult;
+          summary = buildKneeSummary(raw, answers);
           engineDispatch = "knee";
           break;
         }
@@ -319,24 +321,30 @@ export const computeDecisionSupport = onCall(
 
         case "shoulder": {
           const rawForScorer = buildShoulderRawForScorer(answers);
-          const rawResult = processShoulderAssessmentCore(rawForScorer as any);
-          summary = buildShoulderSummary(rawResult, answers);
+          const rawResult: any = await processShoulderAssessmentCore(rawForScorer as any);
+          // Extract raw summary if wrapped
+          const raw = rawResult?.clinicianSummary ?? rawResult;
+          summary = buildShoulderSummary(raw, answers);
           engineDispatch = "shoulder";
           break;
         }
 
         case "thoracic": {
           const legacyAnswers = buildThoracicLegacyAnswers(answers);
-          const rawResult = processThoracicAssessmentCore(legacyAnswers as any);
-          summary = buildThoracicSummary(rawResult, answers);
+          const rawResult: any = await processThoracicAssessmentCore(legacyAnswers as any);
+          // Thoracic returns { ok: true, summary } shape
+          const raw = rawResult?.summary ?? rawResult;
+          summary = buildThoracicSummary(raw, answers);
           engineDispatch = "thoracic";
           break;
         }
 
         case "wrist": {
           const legacyAnswers = buildWristLegacyAnswers(answers);
-          const rawResult = processWristAssessmentCore(legacyAnswers as any);
-          summary = buildWristSummary(rawResult, answers);
+          const rawResult: any = await processWristAssessmentCore(legacyAnswers as any);
+          // Extract raw summary if wrapped
+          const raw = rawResult?.clinicianSummary ?? rawResult;
+          summary = buildWristSummary(raw, answers);
           engineDispatch = "wrist";
           break;
         }

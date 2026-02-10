@@ -1,30 +1,28 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.getClinicMembershipSnap = getClinicMembershipSnap;
 exports.isActiveMembership = isActiveMembership;
 exports.flattenPermissions = flattenPermissions;
 exports.requireActiveMember = requireActiveMember;
 exports.requireActiveMemberWithPerm = requireActiveMemberWithPerm;
 exports.hasPerm = hasPerm;
+exports.countActiveOwners = countActiveOwners;
 exports.requireCanAmendNote = requireCanAmendNote;
 const https_1 = require("firebase-functions/v2/https");
 function norm(s) {
     return (s !== null && s !== void 0 ? s : "").toString().trim();
 }
 /**
- * Canonical membership location:
- *   clinics/{clinicId}/memberships/{uid}
- *
- * Legacy fallback (migration):
+ * Canonical membership location (align with Firestore rules):
  *   clinics/{clinicId}/members/{uid}
- *
- * NOTE: We do NOT use users/{uid}/memberships/{clinicId} for authz because it's an index mirror.
+ * Legacy fallback: clinics/{clinicId}/memberships/{uid}
  */
 async function getClinicMembershipSnap(db, clinicId, uid) {
-    const canonRef = db.doc(`clinics/${clinicId}/memberships/${uid}`);
-    const canonSnap = await canonRef.get();
-    if (canonSnap.exists)
-        return canonSnap;
-    const legacyRef = db.doc(`clinics/${clinicId}/members/${uid}`);
+    const membersRef = db.doc(`clinics/${clinicId}/members/${uid}`);
+    const membersSnap = await membersRef.get();
+    if (membersSnap.exists)
+        return membersSnap;
+    const legacyRef = db.doc(`clinics/${clinicId}/memberships/${uid}`);
     const legacySnap = await legacyRef.get();
     if (legacySnap.exists)
         return legacySnap;
@@ -86,6 +84,32 @@ async function hasPerm(db, clinicId, uid, perm) {
     catch {
         return false;
     }
+}
+/**
+ * Count active owners in clinic (members + memberships, distinct uids).
+ * Used to enforce "cannot suspend/demote last owner".
+ */
+async function countActiveOwners(db, clinicId) {
+    const membersRef = db.collection("clinics").doc(clinicId).collection("members");
+    const membershipsRef = db.collection("clinics").doc(clinicId).collection("memberships");
+    const [membersSnap, membershipsSnap] = await Promise.all([
+        membersRef.get(),
+        membershipsRef.get(),
+    ]);
+    const ownerUids = new Set();
+    for (const doc of membersSnap.docs) {
+        const d = (doc.data() || {});
+        const role = (norm(d.roleId) || norm(d.role)).toLowerCase();
+        if (role === "owner" && isActiveMembership(d))
+            ownerUids.add(doc.id);
+    }
+    for (const doc of membershipsSnap.docs) {
+        const d = (doc.data() || {});
+        const role = (norm(d.roleId) || norm(d.role)).toLowerCase();
+        if (role === "owner" && isActiveMembership(d))
+            ownerUids.add(doc.id);
+    }
+    return ownerUids.size;
 }
 /**
  * Notes policy:

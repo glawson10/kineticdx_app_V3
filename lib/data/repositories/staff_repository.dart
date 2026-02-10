@@ -171,19 +171,53 @@ class StaffRepository {
     required String clinicId,
     required String email,
     required String roleId,
+    Map<String, bool>? permissions,
   }) async {
     final callable = _fn.httpsCallable('inviteMemberFn');
 
-    final res = await callable.call(<String, dynamic>{
+    final payload = <String, dynamic>{
       'clinicId': clinicId.trim(),
       'email': email.trim().toLowerCase(),
       'roleId': roleId.trim(),
-    });
+    };
+    if (permissions != null && permissions.isNotEmpty) {
+      payload['permissions'] = permissions;
+    }
+
+    final res = await callable.call(payload);
 
     final data = res.data;
     if (data is Map) return Map<String, dynamic>.from(data);
 
     throw StateError('inviteMemberFn returned unexpected payload: $data');
+  }
+
+  Future<void> updateMember({
+    required String clinicId,
+    required String memberUid,
+    String? role,
+    Map<String, bool>? permissions,
+  }) async {
+    final callable = _fn.httpsCallable('updateMemberFn');
+
+    final patch = <String, dynamic>{};
+    if (role != null && role.trim().isNotEmpty) patch['role'] = role.trim();
+    if (permissions != null) patch['permissions'] = permissions;
+
+    if (patch.isEmpty) {
+      throw ArgumentError('updateMember requires at least one of role or permissions');
+    }
+
+    final res = await callable.call(<String, dynamic>{
+      'clinicId': clinicId.trim(),
+      'memberUid': memberUid.trim(),
+      'patch': patch,
+    });
+
+    final data = res.data;
+    if (data is Map && data['ok'] == true) return;
+
+    throw StateError('updateMemberFn returned unexpected payload: $data');
   }
 
   Future<void> setMembershipStatus({
