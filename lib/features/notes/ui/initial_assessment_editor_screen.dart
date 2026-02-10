@@ -4,9 +4,11 @@ import 'package:provider/provider.dart';
 
 import '../../../app/clinic_context.dart';
 import '../../../models/clinical_tests.dart';
+import '../data/body_chart.dart';
 import '../data/initial_assessment_note.dart';
 import '../data/soap_notes_repo.dart';
 import '../data/notes_permissions.dart';
+import 'widgets/body_chart_editor.dart';
 import 'widgets/special_tests_picker.dart';
 
 /// Minimal Initial Assessment editor wired to clinic-scoped SOAP notes.
@@ -36,6 +38,7 @@ class _InitialAssessmentEditorScreenState
   InitialAssessmentNote? _note;
   bool _saving = false;
   bool _creating = false;
+  bool _isDrawingOnBodyChart = false;
 
   final TextEditingController _presentingComplaint = TextEditingController();
   final TextEditingController _primaryDiagnosis = TextEditingController();
@@ -238,16 +241,20 @@ class _InitialAssessmentEditorScreenState
           Expanded(
             child: ListView(
               padding: const EdgeInsets.all(16),
+              physics: _isDrawingOnBodyChart
+                  ? const NeverScrollableScrollPhysics()
+                  : null,
               children: [
                 _buildHeader(readOnly),
-                const SizedBox(height: 16),
+                const SizedBox(height: 24),
                 _buildSubjectiveCard(readOnly),
-                const SizedBox(height: 16),
+                const SizedBox(height: 24),
                 _buildSpecialTestsCard(note, readOnly),
-                const SizedBox(height: 16),
+                const SizedBox(height: 24),
                 _buildAssessmentCard(readOnly),
-                const SizedBox(height: 16),
+                const SizedBox(height: 24),
                 _buildPlanCard(readOnly),
+                const SizedBox(height: 24), // Bottom padding
               ],
             ),
           ),
@@ -317,6 +324,7 @@ class _InitialAssessmentEditorScreenState
                               goals: _note!.goals,
                               functionalLimitations:
                                   _note!.functionalLimitations,
+                              bodyChart: _note!.bodyChart,
                               observation: _note!.observation,
                               neuroScreenSummary: _note!.neuroScreenSummary,
                               functionalTests: _note!.functionalTests,
@@ -362,31 +370,462 @@ class _InitialAssessmentEditorScreenState
   }
 
   Widget _buildSubjectiveCard(bool readOnly) {
+    final isComplete = _isSubjectiveComplete();
+    
     return Card(
       child: Padding(
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              'Subjective',
-              style: Theme.of(context).textTheme.titleMedium,
+            Row(
+              children: [
+                Icon(
+                  isComplete ? Icons.check_circle : Icons.circle_outlined,
+                  size: 20,
+                  color: isComplete
+                      ? Theme.of(context).colorScheme.primary
+                      : Theme.of(context).colorScheme.outline.withOpacity(0.4),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  'Subjective',
+                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                    fontWeight: FontWeight.w400,
+                  ),
+                ),
+              ],
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 20),
+            
+            // Presenting complaint
             TextField(
               controller: _presentingComplaint,
               readOnly: readOnly,
-              minLines: 1,
-              maxLines: 3,
-              decoration: const InputDecoration(
+              minLines: 2,
+              maxLines: 4,
+              decoration: InputDecoration(
                 labelText: 'Presenting complaint *',
-                border: OutlineInputBorder(),
+                helperText: 'In the patient\'s own words',
+                helperStyle: TextStyle(
+                  color: Theme.of(context).colorScheme.onSurface.withOpacity(0.5),
+                  fontSize: 12,
+                ),
+                border: const OutlineInputBorder(),
               ),
             ),
+            const SizedBox(height: 24),
+            
+            // Pain scores
+            _buildPainScoresSection(readOnly),
+            const SizedBox(height: 24),
+            
+            // Red flags
+            _buildRedFlagsSection(readOnly),
+            const SizedBox(height: 24),
+            
+            // Collapsible secondary history
+            _buildSecondaryHistorySection(readOnly),
+            const SizedBox(height: 24),
+            
+            // Body chart
+            _buildBodyChartSection(readOnly),
           ],
         ),
       ),
     );
+  }
+
+  Widget _buildPainScoresSection(bool readOnly) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Pain',
+          style: Theme.of(context).textTheme.titleMedium?.copyWith(
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+        const SizedBox(height: 12),
+        
+        // Pain intensity sliders
+        _buildPainSlider('Now', _note?.painIntensityNow ?? 0, readOnly, (value) {
+          if (_note == null || readOnly) return;
+          setState(() {
+            _note = _copyNoteWithPainIntensityNow(_note!, value);
+          });
+        }),
+        const SizedBox(height: 12),
+        _buildPainSlider('Best', _note?.painIntensityBest ?? 0, readOnly, (value) {
+          if (_note == null || readOnly) return;
+          setState(() {
+            _note = _copyNoteWithPainIntensityBest(_note!, value);
+          });
+        }),
+        const SizedBox(height: 12),
+        _buildPainSlider('Worst', _note?.painIntensityWorst ?? 0, readOnly, (value) {
+          if (_note == null || readOnly) return;
+          setState(() {
+            _note = _copyNoteWithPainIntensityWorst(_note!, value);
+          });
+        }),
+        const SizedBox(height: 16),
+        
+        // Irritability
+        Text(
+          'Irritability',
+          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+        const SizedBox(height: 8),
+        SegmentedButton<String>(
+          segments: const [
+            ButtonSegment(value: 'low', label: Text('Low')),
+            ButtonSegment(value: 'mod', label: Text('Moderate')),
+            ButtonSegment(value: 'high', label: Text('High')),
+          ],
+          selected: {_note?.painIrritability.isEmpty ?? true ? 'low' : _note!.painIrritability},
+          onSelectionChanged: readOnly ? null : (Set<String> selected) {
+            if (_note == null) return;
+            setState(() {
+              _note = _copyNoteWithPainIrritability(_note!, selected.first);
+            });
+          },
+        ),
+      ],
+    );
+  }
+
+  Widget _buildPainSlider(String label, int value, bool readOnly, ValueChanged<int> onChanged) {
+    return Row(
+      children: [
+        SizedBox(
+          width: 60,
+          child: Text(
+            label,
+            style: Theme.of(context).textTheme.bodyMedium,
+          ),
+        ),
+        Expanded(
+          child: Slider(
+            value: value.toDouble(),
+            min: 0,
+            max: 10,
+            divisions: 10,
+            onChanged: readOnly ? null : (v) => onChanged(v.round()),
+          ),
+        ),
+        const SizedBox(width: 12),
+        Container(
+          width: 40,
+          height: 32,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.surfaceVariant,
+            borderRadius: BorderRadius.circular(6),
+          ),
+          child: Text(
+            '$value',
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ),
+        const SizedBox(width: 4),
+        Text(
+          '/10',
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+            color: Theme.of(context).colorScheme.onSurface.withOpacity(0.6),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildRedFlagsSection(bool readOnly) {
+    final redFlags = _note?.redFlags ?? [];
+    final hasPositiveFlags = redFlags.any((flag) => flag.isPositive);
+    
+    return Container(
+      decoration: BoxDecoration(
+        border: Border.all(
+          color: Theme.of(context).colorScheme.outline.withOpacity(0.3),
+        ),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                Icons.warning_amber_rounded,
+                size: 20,
+                color: Theme.of(context).colorScheme.onSurface.withOpacity(0.6),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                'Red flags',
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Text(
+            'Screen for serious pathology',
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: Theme.of(context).colorScheme.onSurface.withOpacity(0.6),
+            ),
+          ),
+          const SizedBox(height: 16),
+          
+          // Common red flags checklist (simplified for MVP)
+          _buildRedFlagCheckbox(
+            'Age <20 or >55 (first episode)',
+            readOnly,
+          ),
+          _buildRedFlagCheckbox(
+            'Recent significant trauma',
+            readOnly,
+          ),
+          _buildRedFlagCheckbox(
+            'Constant, progressive, non-mechanical pain',
+            readOnly,
+          ),
+          _buildRedFlagCheckbox(
+            'Night pain (disturbing sleep)',
+            readOnly,
+          ),
+          _buildRedFlagCheckbox(
+            'Thoracic pain',
+            readOnly,
+          ),
+          _buildRedFlagCheckbox(
+            'PMH: cancer, steroid use, HIV',
+            readOnly,
+          ),
+          _buildRedFlagCheckbox(
+            'Systemically unwell (fever, weight loss)',
+            readOnly,
+          ),
+          _buildRedFlagCheckbox(
+            'Widespread neurological symptoms',
+            readOnly,
+          ),
+          _buildRedFlagCheckbox(
+            'Saddle anaesthesia / bladder/bowel dysfunction',
+            readOnly,
+          ),
+          
+          // Only show "Other" input if at least one flag is checked
+          if (hasPositiveFlags) ...[
+            const SizedBox(height: 12),
+            TextField(
+              readOnly: readOnly,
+              minLines: 2,
+              maxLines: 3,
+              decoration: const InputDecoration(
+                labelText: 'Other red flags / notes',
+                border: OutlineInputBorder(),
+                isDense: true,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRedFlagCheckbox(String label, bool readOnly) {
+    // For MVP, just show checkboxes without state management
+    // In production, these would be wired to the redFlags list
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 24,
+            height: 24,
+            child: Checkbox(
+              value: false,
+              onChanged: readOnly ? null : (value) {
+                // TODO: Update red flags list
+              },
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              label,
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSecondaryHistorySection(bool readOnly) {
+    return Theme(
+      data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+      child: ExpansionTile(
+        tilePadding: EdgeInsets.zero,
+        childrenPadding: const EdgeInsets.only(top: 12),
+        title: Row(
+          children: [
+            Icon(
+              Icons.folder_outlined,
+              size: 18,
+              color: Theme.of(context).colorScheme.onSurface.withOpacity(0.6),
+            ),
+            const SizedBox(width: 8),
+            Text(
+              'Additional history',
+              style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ],
+        ),
+        children: [
+          TextField(
+            controller: TextEditingController(text: _note?.pastMedicalHistory ?? ''),
+            readOnly: readOnly,
+            minLines: 2,
+            maxLines: 4,
+            decoration: const InputDecoration(
+              labelText: 'Past medical history',
+              border: OutlineInputBorder(),
+              isDense: true,
+            ),
+            onChanged: (value) {
+              if (_note == null || readOnly) return;
+              // TODO: Update note with pastMedicalHistory
+            },
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: TextEditingController(text: _note?.meds ?? ''),
+            readOnly: readOnly,
+            minLines: 2,
+            maxLines: 4,
+            decoration: const InputDecoration(
+              labelText: 'Medications',
+              border: OutlineInputBorder(),
+              isDense: true,
+            ),
+            onChanged: (value) {
+              if (_note == null || readOnly) return;
+              // TODO: Update note with meds
+            },
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: TextEditingController(text: _note?.imaging ?? ''),
+            readOnly: readOnly,
+            minLines: 2,
+            maxLines: 4,
+            decoration: const InputDecoration(
+              labelText: 'Imaging',
+              border: OutlineInputBorder(),
+              isDense: true,
+            ),
+            onChanged: (value) {
+              if (_note == null || readOnly) return;
+              // TODO: Update note with imaging
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBodyChartSection(bool readOnly) {
+    return SizedBox(
+      height: 500, // Fixed height for the body chart editor
+      child: BodyChartEditor(
+            value: _note?.bodyChart ?? const BodyChartState.empty(),
+            readOnly: readOnly,
+            onChanged: (newBodyChart) {
+              if (_note == null) return;
+              setState(() {
+                _note = InitialAssessmentNote(
+                  id: _note!.id,
+                  clinicId: _note!.clinicId,
+                  patientId: _note!.patientId,
+                  noteType: _note!.noteType,
+                  bodyRegion: _note!.bodyRegion,
+                  status: _note!.status,
+                  createdAt: _note!.createdAt,
+                  updatedAt: _note!.updatedAt,
+                  finalizedAt: _note!.finalizedAt,
+                  createdByUid: _note!.createdByUid,
+                  updatedByUid: _note!.updatedByUid,
+                  presentingComplaint: _presentingComplaint.text,
+                  historyOfPresentingComplaint:
+                      _note!.historyOfPresentingComplaint,
+                  painIntensityNow: _note!.painIntensityNow,
+                  painIntensityBest: _note!.painIntensityBest,
+                  painIntensityWorst: _note!.painIntensityWorst,
+                  painIrritability: _note!.painIrritability,
+                  painNature: _note!.painNature,
+                  aggravatingFactors: _note!.aggravatingFactors,
+                  easingFactors: _note!.easingFactors,
+                  pattern24h: _note!.pattern24h,
+                  redFlags: _note!.redFlags,
+                  yellowFlags: _note!.yellowFlags,
+                  pastMedicalHistory: _note!.pastMedicalHistory,
+                  meds: _note!.meds,
+                  imaging: _note!.imaging,
+                  goals: _note!.goals,
+                  functionalLimitations: _note!.functionalLimitations,
+                  bodyChart: newBodyChart,
+                  observation: _note!.observation,
+                  neuroScreenSummary: _note!.neuroScreenSummary,
+                  functionalTests: _note!.functionalTests,
+                  palpation: _note!.palpation,
+                  rangeOfMotion: _note!.rangeOfMotion,
+                  strength: _note!.strength,
+                  neuroMyotomesSummary: _note!.neuroMyotomesSummary,
+                  neuroDermatomesSummary: _note!.neuroDermatomesSummary,
+                  neuroReflexesSummary: _note!.neuroReflexesSummary,
+                  regionSpecificObjective: _note!.regionSpecificObjective,
+                  specialTests: _note!.specialTests,
+                  primaryDiagnosis: _primaryDiagnosis.text,
+                  differentialDiagnoses: _note!.differentialDiagnoses,
+                  contributingFactors: _note!.contributingFactors,
+                  clinicalReasoning: _note!.clinicalReasoning,
+                  severity: _note!.severity,
+                  irritability: _note!.irritability,
+                  stage: _note!.stage,
+                  outcomeMeasures: _note!.outcomeMeasures,
+                  planSummary: _planSummary.text,
+                  educationAdvice: _note!.educationAdvice,
+                  exercises: _note!.exercises,
+                  manualTherapy: _note!.manualTherapy,
+                  followUp: _note!.followUp,
+                  referrals: _note!.referrals,
+                  consentConfirmed: _note!.consentConfirmed,
+                  homeAdvice: _note!.homeAdvice,
+                );
+              });
+            },
+            onInteractionStart: () {
+              setState(() {
+                _isDrawingOnBodyChart = true;
+              });
+            },
+            onInteractionEnd: () {
+              setState(() {
+                _isDrawingOnBodyChart = false;
+              });
+            },
+          ),
+        );
   }
 
   Widget _buildSpecialTestsCard(
@@ -397,7 +836,7 @@ class _InitialAssessmentEditorScreenState
       height: 260,
       child: Card(
         child: Padding(
-          padding: const EdgeInsets.all(12),
+          padding: const EdgeInsets.all(16),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -450,6 +889,7 @@ class _InitialAssessmentEditorScreenState
                                 goals: note.goals,
                                 functionalLimitations:
                                     note.functionalLimitations,
+                                bodyChart: note.bodyChart,
                                 observation: note.observation,
                                 neuroScreenSummary: note.neuroScreenSummary,
                                 functionalTests: note.functionalTests,
@@ -496,17 +936,33 @@ class _InitialAssessmentEditorScreenState
   }
 
   Widget _buildAssessmentCard(bool readOnly) {
+    final isComplete = _primaryDiagnosis.text.trim().isNotEmpty;
+    
     return Card(
       child: Padding(
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              'Assessment',
-              style: Theme.of(context).textTheme.titleMedium,
+            Row(
+              children: [
+                Icon(
+                  isComplete ? Icons.check_circle : Icons.circle_outlined,
+                  size: 18,
+                  color: isComplete
+                      ? Theme.of(context).colorScheme.primary
+                      : Theme.of(context).colorScheme.outline.withOpacity(0.4),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  'Assessment',
+                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                    fontWeight: FontWeight.w400,
+                  ),
+                ),
+              ],
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 20),
             TextField(
               controller: _primaryDiagnosis,
               readOnly: readOnly,
@@ -524,17 +980,33 @@ class _InitialAssessmentEditorScreenState
   }
 
   Widget _buildPlanCard(bool readOnly) {
+    final isComplete = _planSummary.text.trim().isNotEmpty;
+    
     return Card(
       child: Padding(
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              'Plan',
-              style: Theme.of(context).textTheme.titleMedium,
+            Row(
+              children: [
+                Icon(
+                  isComplete ? Icons.check_circle : Icons.circle_outlined,
+                  size: 18,
+                  color: isComplete
+                      ? Theme.of(context).colorScheme.primary
+                      : Theme.of(context).colorScheme.outline.withOpacity(0.4),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  'Plan',
+                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                    fontWeight: FontWeight.w400,
+                  ),
+                ),
+              ],
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 20),
             TextField(
               controller: _planSummary,
               readOnly: readOnly,
@@ -549,6 +1021,13 @@ class _InitialAssessmentEditorScreenState
         ),
       ),
     );
+  }
+
+  bool _isSubjectiveComplete() {
+    if (_note == null) return false;
+    final hasComplaint = _presentingComplaint.text.trim().isNotEmpty;
+    final hasBodyChart = !_note!.bodyChart.isEmpty;
+    return hasComplaint || hasBodyChart;
   }
 
   List<String> _missingRequired(InitialAssessmentNote note) {
@@ -597,6 +1076,7 @@ class _InitialAssessmentEditorScreenState
         imaging: note.imaging,
         goals: note.goals,
         functionalLimitations: note.functionalLimitations,
+        bodyChart: note.bodyChart,
         observation: note.observation,
         neuroScreenSummary: note.neuroScreenSummary,
         functionalTests: note.functionalTests,
@@ -699,6 +1179,250 @@ class _InitialAssessmentEditorScreenState
       case BodyRegion.other:
         return 'Other';
     }
+  }
+
+  InitialAssessmentNote _copyNoteWithPainIntensityNow(InitialAssessmentNote note, int value) {
+    return InitialAssessmentNote(
+      id: note.id,
+      clinicId: note.clinicId,
+      patientId: note.patientId,
+      noteType: note.noteType,
+      bodyRegion: note.bodyRegion,
+      status: note.status,
+      createdAt: note.createdAt,
+      updatedAt: note.updatedAt,
+      finalizedAt: note.finalizedAt,
+      createdByUid: note.createdByUid,
+      updatedByUid: note.updatedByUid,
+      presentingComplaint: note.presentingComplaint,
+      historyOfPresentingComplaint: note.historyOfPresentingComplaint,
+      painIntensityNow: value,
+      painIntensityBest: note.painIntensityBest,
+      painIntensityWorst: note.painIntensityWorst,
+      painIrritability: note.painIrritability,
+      painNature: note.painNature,
+      aggravatingFactors: note.aggravatingFactors,
+      easingFactors: note.easingFactors,
+      pattern24h: note.pattern24h,
+      redFlags: note.redFlags,
+      yellowFlags: note.yellowFlags,
+      pastMedicalHistory: note.pastMedicalHistory,
+      meds: note.meds,
+      imaging: note.imaging,
+      goals: note.goals,
+      functionalLimitations: note.functionalLimitations,
+      bodyChart: note.bodyChart,
+      observation: note.observation,
+      neuroScreenSummary: note.neuroScreenSummary,
+      functionalTests: note.functionalTests,
+      palpation: note.palpation,
+      rangeOfMotion: note.rangeOfMotion,
+      strength: note.strength,
+      neuroMyotomesSummary: note.neuroMyotomesSummary,
+      neuroDermatomesSummary: note.neuroDermatomesSummary,
+      neuroReflexesSummary: note.neuroReflexesSummary,
+      regionSpecificObjective: note.regionSpecificObjective,
+      specialTests: note.specialTests,
+      primaryDiagnosis: note.primaryDiagnosis,
+      differentialDiagnoses: note.differentialDiagnoses,
+      contributingFactors: note.contributingFactors,
+      clinicalReasoning: note.clinicalReasoning,
+      severity: note.severity,
+      irritability: note.irritability,
+      stage: note.stage,
+      outcomeMeasures: note.outcomeMeasures,
+      planSummary: note.planSummary,
+      educationAdvice: note.educationAdvice,
+      exercises: note.exercises,
+      manualTherapy: note.manualTherapy,
+      followUp: note.followUp,
+      referrals: note.referrals,
+      consentConfirmed: note.consentConfirmed,
+      homeAdvice: note.homeAdvice,
+    );
+  }
+
+  InitialAssessmentNote _copyNoteWithPainIntensityBest(InitialAssessmentNote note, int value) {
+    return InitialAssessmentNote(
+      id: note.id,
+      clinicId: note.clinicId,
+      patientId: note.patientId,
+      noteType: note.noteType,
+      bodyRegion: note.bodyRegion,
+      status: note.status,
+      createdAt: note.createdAt,
+      updatedAt: note.updatedAt,
+      finalizedAt: note.finalizedAt,
+      createdByUid: note.createdByUid,
+      updatedByUid: note.updatedByUid,
+      presentingComplaint: note.presentingComplaint,
+      historyOfPresentingComplaint: note.historyOfPresentingComplaint,
+      painIntensityNow: note.painIntensityNow,
+      painIntensityBest: value,
+      painIntensityWorst: note.painIntensityWorst,
+      painIrritability: note.painIrritability,
+      painNature: note.painNature,
+      aggravatingFactors: note.aggravatingFactors,
+      easingFactors: note.easingFactors,
+      pattern24h: note.pattern24h,
+      redFlags: note.redFlags,
+      yellowFlags: note.yellowFlags,
+      pastMedicalHistory: note.pastMedicalHistory,
+      meds: note.meds,
+      imaging: note.imaging,
+      goals: note.goals,
+      functionalLimitations: note.functionalLimitations,
+      bodyChart: note.bodyChart,
+      observation: note.observation,
+      neuroScreenSummary: note.neuroScreenSummary,
+      functionalTests: note.functionalTests,
+      palpation: note.palpation,
+      rangeOfMotion: note.rangeOfMotion,
+      strength: note.strength,
+      neuroMyotomesSummary: note.neuroMyotomesSummary,
+      neuroDermatomesSummary: note.neuroDermatomesSummary,
+      neuroReflexesSummary: note.neuroReflexesSummary,
+      regionSpecificObjective: note.regionSpecificObjective,
+      specialTests: note.specialTests,
+      primaryDiagnosis: note.primaryDiagnosis,
+      differentialDiagnoses: note.differentialDiagnoses,
+      contributingFactors: note.contributingFactors,
+      clinicalReasoning: note.clinicalReasoning,
+      severity: note.severity,
+      irritability: note.irritability,
+      stage: note.stage,
+      outcomeMeasures: note.outcomeMeasures,
+      planSummary: note.planSummary,
+      educationAdvice: note.educationAdvice,
+      exercises: note.exercises,
+      manualTherapy: note.manualTherapy,
+      followUp: note.followUp,
+      referrals: note.referrals,
+      consentConfirmed: note.consentConfirmed,
+      homeAdvice: note.homeAdvice,
+    );
+  }
+
+  InitialAssessmentNote _copyNoteWithPainIntensityWorst(InitialAssessmentNote note, int value) {
+    return InitialAssessmentNote(
+      id: note.id,
+      clinicId: note.clinicId,
+      patientId: note.patientId,
+      noteType: note.noteType,
+      bodyRegion: note.bodyRegion,
+      status: note.status,
+      createdAt: note.createdAt,
+      updatedAt: note.updatedAt,
+      finalizedAt: note.finalizedAt,
+      createdByUid: note.createdByUid,
+      updatedByUid: note.updatedByUid,
+      presentingComplaint: note.presentingComplaint,
+      historyOfPresentingComplaint: note.historyOfPresentingComplaint,
+      painIntensityNow: note.painIntensityNow,
+      painIntensityBest: note.painIntensityBest,
+      painIntensityWorst: value,
+      painIrritability: note.painIrritability,
+      painNature: note.painNature,
+      aggravatingFactors: note.aggravatingFactors,
+      easingFactors: note.easingFactors,
+      pattern24h: note.pattern24h,
+      redFlags: note.redFlags,
+      yellowFlags: note.yellowFlags,
+      pastMedicalHistory: note.pastMedicalHistory,
+      meds: note.meds,
+      imaging: note.imaging,
+      goals: note.goals,
+      functionalLimitations: note.functionalLimitations,
+      bodyChart: note.bodyChart,
+      observation: note.observation,
+      neuroScreenSummary: note.neuroScreenSummary,
+      functionalTests: note.functionalTests,
+      palpation: note.palpation,
+      rangeOfMotion: note.rangeOfMotion,
+      strength: note.strength,
+      neuroMyotomesSummary: note.neuroMyotomesSummary,
+      neuroDermatomesSummary: note.neuroDermatomesSummary,
+      neuroReflexesSummary: note.neuroReflexesSummary,
+      regionSpecificObjective: note.regionSpecificObjective,
+      specialTests: note.specialTests,
+      primaryDiagnosis: note.primaryDiagnosis,
+      differentialDiagnoses: note.differentialDiagnoses,
+      contributingFactors: note.contributingFactors,
+      clinicalReasoning: note.clinicalReasoning,
+      severity: note.severity,
+      irritability: note.irritability,
+      stage: note.stage,
+      outcomeMeasures: note.outcomeMeasures,
+      planSummary: note.planSummary,
+      educationAdvice: note.educationAdvice,
+      exercises: note.exercises,
+      manualTherapy: note.manualTherapy,
+      followUp: note.followUp,
+      referrals: note.referrals,
+      consentConfirmed: note.consentConfirmed,
+      homeAdvice: note.homeAdvice,
+    );
+  }
+
+  InitialAssessmentNote _copyNoteWithPainIrritability(InitialAssessmentNote note, String value) {
+    return InitialAssessmentNote(
+      id: note.id,
+      clinicId: note.clinicId,
+      patientId: note.patientId,
+      noteType: note.noteType,
+      bodyRegion: note.bodyRegion,
+      status: note.status,
+      createdAt: note.createdAt,
+      updatedAt: note.updatedAt,
+      finalizedAt: note.finalizedAt,
+      createdByUid: note.createdByUid,
+      updatedByUid: note.updatedByUid,
+      presentingComplaint: note.presentingComplaint,
+      historyOfPresentingComplaint: note.historyOfPresentingComplaint,
+      painIntensityNow: note.painIntensityNow,
+      painIntensityBest: note.painIntensityBest,
+      painIntensityWorst: note.painIntensityWorst,
+      painIrritability: value,
+      painNature: note.painNature,
+      aggravatingFactors: note.aggravatingFactors,
+      easingFactors: note.easingFactors,
+      pattern24h: note.pattern24h,
+      redFlags: note.redFlags,
+      yellowFlags: note.yellowFlags,
+      pastMedicalHistory: note.pastMedicalHistory,
+      meds: note.meds,
+      imaging: note.imaging,
+      goals: note.goals,
+      functionalLimitations: note.functionalLimitations,
+      bodyChart: note.bodyChart,
+      observation: note.observation,
+      neuroScreenSummary: note.neuroScreenSummary,
+      functionalTests: note.functionalTests,
+      palpation: note.palpation,
+      rangeOfMotion: note.rangeOfMotion,
+      strength: note.strength,
+      neuroMyotomesSummary: note.neuroMyotomesSummary,
+      neuroDermatomesSummary: note.neuroDermatomesSummary,
+      neuroReflexesSummary: note.neuroReflexesSummary,
+      regionSpecificObjective: note.regionSpecificObjective,
+      specialTests: note.specialTests,
+      primaryDiagnosis: note.primaryDiagnosis,
+      differentialDiagnoses: note.differentialDiagnoses,
+      contributingFactors: note.contributingFactors,
+      clinicalReasoning: note.clinicalReasoning,
+      severity: note.severity,
+      irritability: note.irritability,
+      stage: note.stage,
+      outcomeMeasures: note.outcomeMeasures,
+      planSummary: note.planSummary,
+      educationAdvice: note.educationAdvice,
+      exercises: note.exercises,
+      manualTherapy: note.manualTherapy,
+      followUp: note.followUp,
+      referrals: note.referrals,
+      consentConfirmed: note.consentConfirmed,
+      homeAdvice: note.homeAdvice,
+    );
   }
 }
 

@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 import '../../../models/clinical_tests.dart';
+import 'body_chart.dart';
 
 BodyRegion? bodyRegionFromString(String? raw) {
   if (raw == null) return null;
@@ -345,6 +346,7 @@ class InitialAssessmentNote {
   final String imaging;
   final String goals;
   final String functionalLimitations;
+  final BodyChartState bodyChart;
 
   // ───────────────────────── Objective (common) ─────────────────────────
   final String observation;
@@ -415,6 +417,7 @@ class InitialAssessmentNote {
     required this.imaging,
     required this.goals,
     required this.functionalLimitations,
+    required this.bodyChart,
     required this.observation,
     required this.neuroScreenSummary,
     required this.functionalTests,
@@ -499,6 +502,8 @@ class InitialAssessmentNote {
       goals: _safeString(subjective['goals']),
       functionalLimitations:
           _safeString(subjective['functionalLimitations']),
+      bodyChart: BodyChartState.fromMap(
+          subjective['bodyChart'] as Map<String, dynamic>?),
       observation: _safeString(objective['observation']),
       neuroScreenSummary: _safeString(objective['neuroScreenSummary']),
       functionalTests: _mapList(objective['functionalTests'])
@@ -574,6 +579,7 @@ class InitialAssessmentNote {
         'imaging': imaging,
         'goals': goals,
         'functionalLimitations': functionalLimitations,
+        'bodyChart': bodyChart.toMap(),
       },
       'objective': {
         'observation': observation,
