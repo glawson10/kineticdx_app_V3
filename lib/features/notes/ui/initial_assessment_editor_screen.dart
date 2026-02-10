@@ -369,17 +369,31 @@ class _InitialAssessmentEditorScreenState
   }
 
   Widget _buildSubjectiveCard(bool readOnly) {
+    final isComplete = _isSubjectiveComplete();
+    
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              'Subjective',
-              style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                fontWeight: FontWeight.w400,
-              ),
+            Row(
+              children: [
+                Icon(
+                  isComplete ? Icons.check_circle : Icons.circle_outlined,
+                  size: 20,
+                  color: isComplete
+                      ? Theme.of(context).colorScheme.primary
+                      : Theme.of(context).colorScheme.outline.withOpacity(0.4),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  'Subjective',
+                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                    fontWeight: FontWeight.w400,
+                  ),
+                ),
+              ],
             ),
             const SizedBox(height: 20),
             
@@ -712,15 +726,29 @@ class _InitialAssessmentEditorScreenState
   }
 
   Widget _buildAssessmentCard(bool readOnly) {
+    final isComplete = _primaryDiagnosis.text.trim().isNotEmpty;
+    
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(12),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              'Assessment',
-              style: Theme.of(context).textTheme.titleMedium,
+            Row(
+              children: [
+                Icon(
+                  isComplete ? Icons.check_circle : Icons.circle_outlined,
+                  size: 18,
+                  color: isComplete
+                      ? Theme.of(context).colorScheme.primary
+                      : Theme.of(context).colorScheme.outline.withOpacity(0.4),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  'Assessment',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+              ],
             ),
             const SizedBox(height: 12),
             TextField(
@@ -740,15 +768,29 @@ class _InitialAssessmentEditorScreenState
   }
 
   Widget _buildPlanCard(bool readOnly) {
+    final isComplete = _planSummary.text.trim().isNotEmpty;
+    
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(12),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              'Plan',
-              style: Theme.of(context).textTheme.titleMedium,
+            Row(
+              children: [
+                Icon(
+                  isComplete ? Icons.check_circle : Icons.circle_outlined,
+                  size: 18,
+                  color: isComplete
+                      ? Theme.of(context).colorScheme.primary
+                      : Theme.of(context).colorScheme.outline.withOpacity(0.4),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  'Plan',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+              ],
             ),
             const SizedBox(height: 12),
             TextField(
@@ -765,6 +807,13 @@ class _InitialAssessmentEditorScreenState
         ),
       ),
     );
+  }
+
+  bool _isSubjectiveComplete() {
+    if (_note == null) return false;
+    final hasComplaint = _presentingComplaint.text.trim().isNotEmpty;
+    final hasBodyChart = !_note!.bodyChart.isEmpty;
+    return hasComplaint || hasBodyChart;
   }
 
   List<String> _missingRequired(InitialAssessmentNote note) {
