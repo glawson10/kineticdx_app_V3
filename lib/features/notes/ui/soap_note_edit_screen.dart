@@ -152,6 +152,7 @@ class _SoapNoteEditScreenState extends State<SoapNoteEditScreen> with TickerProv
   final _assessmentSummaryCtrl = TextEditingController();
   final _contributingFactorsCtrl = TextEditingController();
   final _keyImpairmentsCtrl = TextEditingController();
+  final _differentialDiagnosesCtrl = TextEditingController();
 
   // Plan controllers
   final _treatmentTodayCtrl = TextEditingController();
@@ -201,6 +202,7 @@ class _SoapNoteEditScreenState extends State<SoapNoteEditScreen> with TickerProv
     _assessmentSummaryCtrl.dispose();
     _contributingFactorsCtrl.dispose();
     _keyImpairmentsCtrl.dispose();
+    _differentialDiagnosesCtrl.dispose();
     _treatmentTodayCtrl.dispose();
     _homeExerciseCtrl.dispose();
     _educationCtrl.dispose();
@@ -275,6 +277,7 @@ class _SoapNoteEditScreenState extends State<SoapNoteEditScreen> with TickerProv
     _assessmentSummaryCtrl.text = a.reasoningSummary ?? '';
     _contributingFactorsCtrl.text = a.contributingFactorsText ?? '';
     _keyImpairmentsCtrl.text = a.keyImpairments.join('\n');
+    _differentialDiagnosesCtrl.text = a.secondaryDiagnoses.join('\n');
 
     // Plan
     final p = note.plan;
@@ -400,6 +403,7 @@ class _SoapNoteEditScreenState extends State<SoapNoteEditScreen> with TickerProv
           ? null
           : _contributingFactorsCtrl.text.trim(),
       keyImpairments: _splitList(_keyImpairmentsCtrl.text),
+      secondaryDiagnoses: _splitList(_differentialDiagnosesCtrl.text),
     );
 
     // Plan
@@ -1003,41 +1007,374 @@ class _ObjectiveTab extends StatelessWidget {
 }
 
 // Assessment Tab
-class _AssessmentTab extends StatelessWidget {
+class _AssessmentTab extends StatefulWidget {
   final _SoapNoteEditScreenState root;
   final bool readOnly;
 
   const _AssessmentTab({required this.root, required this.readOnly});
 
   @override
+  State<_AssessmentTab> createState() => _AssessmentTabState();
+}
+
+class _AssessmentTabState extends State<_AssessmentTab> {
+  final List<String> _contributingFactorChips = [];
+  final List<String> _keyImpairmentItems = [];
+  final TextEditingController _newChipCtrl = TextEditingController();
+  final TextEditingController _newImpairmentCtrl = TextEditingController();
+  bool _showDifferentials = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // Parse existing contributing factors into chips
+    final existing = widget.root._contributingFactorsCtrl.text.trim();
+    if (existing.isNotEmpty) {
+      _contributingFactorChips.addAll(
+        existing.split('\n').where((s) => s.trim().isNotEmpty),
+      );
+    }
+    // Parse key impairments into bullet items
+    final impairments = widget.root._keyImpairmentsCtrl.text.trim();
+    if (impairments.isNotEmpty) {
+      _keyImpairmentItems.addAll(
+        impairments.split('\n').where((s) => s.trim().isNotEmpty),
+      );
+    }
+  }
+
+  @override
+  void dispose() {
+    _newChipCtrl.dispose();
+    _newImpairmentCtrl.dispose();
+    super.dispose();
+  }
+
+  void _updateContributingFactors() {
+    widget.root._contributingFactorsCtrl.text = _contributingFactorChips.join('\n');
+  }
+
+  void _updateKeyImpairments() {
+    widget.root._keyImpairmentsCtrl.text = _keyImpairmentItems.join('\n');
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          TextFormField(
-            controller: root._diagnosisCtrl,
-            maxLines: 2,
-            readOnly: readOnly,
-            decoration: const InputDecoration(labelText: 'Diagnosis'),
+          // Clinical impression section
+          Card(
+            elevation: 0,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+              side: BorderSide(color: theme.dividerColor),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(Icons.psychology_outlined, size: 20, color: theme.primaryColor),
+                      const SizedBox(width: 8),
+                      Text(
+                        'Clinical impression',
+                        style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  TextFormField(
+                    controller: widget.root._diagnosisCtrl,
+                    maxLines: 1,
+                    readOnly: widget.readOnly,
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                    decoration: const InputDecoration(
+                      labelText: 'Primary diagnosis',
+                      hintText: 'e.g., Subacromial pain syndrome',
+                      border: OutlineInputBorder(),
+                      isDense: true,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextFormField(
+                    controller: widget.root._assessmentSummaryCtrl,
+                    maxLines: 5,
+                    readOnly: widget.readOnly,
+                    decoration: const InputDecoration(
+                      labelText: 'Assessment summary',
+                      hintText: 'Based on subjective history, objective findings and response to testing...',
+                      helperText: 'Synthesize your clinical reasoning here',
+                      helperMaxLines: 2,
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ),
-          TextFormField(
-            controller: root._assessmentSummaryCtrl,
-            maxLines: 5,
-            readOnly: readOnly,
-            decoration: const InputDecoration(labelText: 'Assessment summary'),
+          const SizedBox(height: 16),
+
+          // Contributing factors section
+          Card(
+            elevation: 0,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+              side: BorderSide(color: theme.dividerColor),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(Icons.search_outlined, size: 20, color: theme.primaryColor),
+                      const SizedBox(width: 8),
+                      Text(
+                        'Contributing factors',
+                        style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  if (_contributingFactorChips.isEmpty && widget.readOnly)
+                    const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 8),
+                      child: Text('No contributing factors documented', style: TextStyle(fontStyle: FontStyle.italic, color: Colors.grey)),
+                    )
+                  else
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: _contributingFactorChips.map((factor) {
+                        return Chip(
+                          label: Text(factor),
+                          deleteIcon: widget.readOnly ? null : const Icon(Icons.close, size: 18),
+                          onDeleted: widget.readOnly ? null : () {
+                            setState(() {
+                              _contributingFactorChips.remove(factor);
+                              _updateContributingFactors();
+                            });
+                          },
+                        );
+                      }).toList(),
+                    ),
+                  if (!widget.readOnly) ...[
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: _newChipCtrl,
+                            decoration: const InputDecoration(
+                              labelText: 'Add factor',
+                              hintText: 'e.g., Load management, Movement pattern',
+                              border: OutlineInputBorder(),
+                              isDense: true,
+                            ),
+                            onSubmitted: (value) {
+                              if (value.trim().isNotEmpty) {
+                                setState(() {
+                                  _contributingFactorChips.add(value.trim());
+                                  _updateContributingFactors();
+                                  _newChipCtrl.clear();
+                                });
+                              }
+                            },
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        IconButton(
+                          icon: const Icon(Icons.add_circle),
+                          onPressed: () {
+                            final value = _newChipCtrl.text.trim();
+                            if (value.isNotEmpty) {
+                              setState(() {
+                                _contributingFactorChips.add(value);
+                                _updateContributingFactors();
+                                _newChipCtrl.clear();
+                              });
+                            }
+                          },
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    // Quick add buttons for common factors
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 6,
+                      children: [
+                        'Load management',
+                        'Movement pattern',
+                        'Strength deficit',
+                        'Psychosocial',
+                        'Sleep / recovery',
+                        'Work demands',
+                      ].where((f) => !_contributingFactorChips.contains(f)).map((factor) {
+                        return OutlinedButton(
+                          onPressed: () {
+                            setState(() {
+                              _contributingFactorChips.add(factor);
+                              _updateContributingFactors();
+                            });
+                          },
+                          style: OutlinedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                            minimumSize: Size.zero,
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          ),
+                          child: Text(factor, style: const TextStyle(fontSize: 12)),
+                        );
+                      }).toList(),
+                    ),
+                  ],
+                ],
+              ),
+            ),
           ),
-          TextFormField(
-            controller: root._contributingFactorsCtrl,
-            maxLines: 3,
-            readOnly: readOnly,
-            decoration: const InputDecoration(labelText: 'Contributing factors'),
+          const SizedBox(height: 16),
+
+          // Key impairments section
+          Card(
+            elevation: 0,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+              side: BorderSide(color: theme.dividerColor),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(Icons.warning_amber_outlined, size: 20, color: theme.primaryColor),
+                      const SizedBox(width: 8),
+                      Text(
+                        'Key impairments',
+                        style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  if (_keyImpairmentItems.isEmpty && widget.readOnly)
+                    const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 8),
+                      child: Text('No key impairments documented', style: TextStyle(fontStyle: FontStyle.italic, color: Colors.grey)),
+                    )
+                  else
+                    ..._keyImpairmentItems.asMap().entries.map((entry) {
+                      final index = entry.key;
+                      final impairment = entry.value;
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Padding(
+                              padding: EdgeInsets.only(top: 12, right: 8),
+                              child: Icon(Icons.circle, size: 6),
+                            ),
+                            Expanded(
+                              child: Text(
+                                impairment,
+                                style: theme.textTheme.bodyMedium,
+                              ),
+                            ),
+                            if (!widget.readOnly)
+                              IconButton(
+                                icon: const Icon(Icons.delete_outline, size: 18),
+                                padding: EdgeInsets.zero,
+                                constraints: const BoxConstraints(),
+                                onPressed: () {
+                                  setState(() {
+                                    _keyImpairmentItems.removeAt(index);
+                                    _updateKeyImpairments();
+                                  });
+                                },
+                              ),
+                          ],
+                        ),
+                      );
+                    }),
+                  if (!widget.readOnly) ...[
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: _newImpairmentCtrl,
+                      decoration: const InputDecoration(
+                        labelText: 'Add impairment',
+                        hintText: 'e.g., Reduced shoulder ER strength',
+                        border: OutlineInputBorder(),
+                        isDense: true,
+                      ),
+                      onSubmitted: (value) {
+                        if (value.trim().isNotEmpty) {
+                          setState(() {
+                            _keyImpairmentItems.add(value.trim());
+                            _updateKeyImpairments();
+                            _newImpairmentCtrl.clear();
+                          });
+                        }
+                      },
+                    ),
+                  ],
+                ],
+              ),
+            ),
           ),
-          TextFormField(
-            controller: root._keyImpairmentsCtrl,
-            maxLines: 3,
-            readOnly: readOnly,
-            decoration: const InputDecoration(labelText: 'Key impairments'),
+          const SizedBox(height: 16),
+
+          // Differential diagnoses (optional, collapsed by default)
+          Card(
+            elevation: 0,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+              side: BorderSide(color: theme.dividerColor),
+            ),
+            child: Theme(
+              data: theme.copyWith(dividerColor: Colors.transparent),
+              child: ExpansionTile(
+                title: Row(
+                  children: [
+                    Icon(Icons.list_alt_outlined, size: 20, color: theme.primaryColor),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Differential diagnoses',
+                      style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(width: 8),
+                    Text('(optional)', style: TextStyle(fontSize: 12, color: Colors.grey[600])),
+                  ],
+                ),
+                initiallyExpanded: _showDifferentials,
+                onExpansionChanged: (expanded) {
+                  setState(() => _showDifferentials = expanded);
+                },
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                    child: TextFormField(
+                      controller: widget.root._differentialDiagnosesCtrl,
+                      maxLines: 4,
+                      readOnly: widget.readOnly,
+                      decoration: const InputDecoration(
+                        labelText: 'Alternative diagnoses considered',
+                        hintText: 'List other conditions considered and why they were ruled out',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ),
         ],
       ),
@@ -1046,80 +1383,514 @@ class _AssessmentTab extends StatelessWidget {
 }
 
 // Plan Tab
-class _PlanTab extends StatelessWidget {
+class _PlanTab extends StatefulWidget {
   final _SoapNoteEditScreenState root;
   final bool readOnly;
 
   const _PlanTab({required this.root, required this.readOnly});
 
   @override
+  State<_PlanTab> createState() => _PlanTabState();
+}
+
+class _PlanTabState extends State<_PlanTab> {
+  String? _goal1Timeframe;
+  String? _goal2Timeframe;
+  String? _goal3Timeframe;
+
+  bool get _hasGoals =>
+      widget.root._goal1Ctrl.text.trim().isNotEmpty ||
+      widget.root._goal2Ctrl.text.trim().isNotEmpty ||
+      widget.root._goal3Ctrl.text.trim().isNotEmpty;
+
+  bool get _hasTreatmentToday => widget.root._treatmentTodayCtrl.text.trim().isNotEmpty;
+  bool get _hasHomeExercise => widget.root._homeExerciseCtrl.text.trim().isNotEmpty;
+  bool get _hasFollowUp => widget.root._followUpCtrl.text.trim().isNotEmpty;
+
+  @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('Patient goals', style: TextStyle(fontWeight: FontWeight.bold)),
-          const SizedBox(height: 4),
-          TextFormField(
-            controller: root._goal1Ctrl,
-            maxLines: 1,
-            readOnly: readOnly,
-            decoration: const InputDecoration(labelText: 'Goal 1'),
+          // Shared goals section
+          Text(
+            'Shared goals',
+            style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
           ),
-          TextFormField(
-            controller: root._goal2Ctrl,
-            maxLines: 1,
-            readOnly: readOnly,
-            decoration: const InputDecoration(labelText: 'Goal 2'),
-          ),
-          TextFormField(
-            controller: root._goal3Ctrl,
-            maxLines: 1,
-            readOnly: readOnly,
-            decoration: const InputDecoration(labelText: 'Goal 3'),
+          const SizedBox(height: 8),
+          Text(
+            'Collaboratively set with patient',
+            style: theme.textTheme.bodySmall?.copyWith(color: Colors.grey[600]),
           ),
           const SizedBox(height: 16),
-          TextFormField(
-            controller: root._treatmentTodayCtrl,
-            maxLines: 3,
-            readOnly: readOnly,
-            decoration: const InputDecoration(labelText: 'Treatment today'),
+          _buildGoalCard(context, 1, widget.root._goal1Ctrl, _goal1Timeframe, (val) => setState(() => _goal1Timeframe = val)),
+          const SizedBox(height: 12),
+          _buildGoalCard(context, 2, widget.root._goal2Ctrl, _goal2Timeframe, (val) => setState(() => _goal2Timeframe = val)),
+          const SizedBox(height: 12),
+          _buildGoalCard(context, 3, widget.root._goal3Ctrl, _goal3Timeframe, (val) => setState(() => _goal3Timeframe = val)),
+          const SizedBox(height: 24),
+
+          // Treatment today section
+          Card(
+            elevation: 0,
+            color: theme.colorScheme.primaryContainer.withOpacity(0.3),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+              side: BorderSide(color: theme.primaryColor.withOpacity(0.3)),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(Icons.healing_outlined, size: 20, color: theme.primaryColor),
+                      const SizedBox(width: 8),
+                      Text(
+                        'Treatment today',
+                        style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'What you actually did this session',
+                    style: theme.textTheme.bodySmall?.copyWith(color: Colors.grey[700]),
+                  ),
+                  const SizedBox(height: 12),
+                  TextFormField(
+                    controller: widget.root._treatmentTodayCtrl,
+                    maxLines: 4,
+                    readOnly: widget.readOnly,
+                    decoration: const InputDecoration(
+                      hintText: 'Manual therapy, exercise selection, taping, education provided...',
+                      helperText: 'Include response to treatment (medico-legally important)',
+                      helperMaxLines: 2,
+                      border: OutlineInputBorder(),
+                      filled: true,
+                      fillColor: Colors.white,
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ),
-          TextFormField(
-            controller: root._homeExerciseCtrl,
-            maxLines: 3,
-            readOnly: readOnly,
-            decoration: const InputDecoration(labelText: 'Home exercise programme'),
+          const SizedBox(height: 16),
+
+          // Home programme section
+          Card(
+            elevation: 0,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+              side: BorderSide(color: theme.dividerColor),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(Icons.home_outlined, size: 20, color: theme.primaryColor),
+                      const SizedBox(width: 8),
+                      Text(
+                        'Home programme',
+                        style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  TextFormField(
+                    controller: widget.root._homeExerciseCtrl,
+                    maxLines: 5,
+                    readOnly: widget.readOnly,
+                    decoration: const InputDecoration(
+                      labelText: 'Exercise prescription',
+                      hintText: 'Exercise name, dosage (sets/reps), key cues...',
+                      helperText: 'Structure: exercise → dosage → cue',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ),
-          TextFormField(
-            controller: root._educationCtrl,
-            maxLines: 3,
-            readOnly: readOnly,
-            decoration: const InputDecoration(labelText: 'Education / advice'),
+          const SizedBox(height: 16),
+
+          // Education & advice section
+          Card(
+            elevation: 0,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+              side: BorderSide(color: theme.dividerColor),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(Icons.school_outlined, size: 20, color: theme.primaryColor),
+                      const SizedBox(width: 8),
+                      Text(
+                        'Education & advice',
+                        style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Red flags discussed, expectations set, load advice given...',
+                    style: theme.textTheme.bodySmall?.copyWith(color: Colors.grey[600], fontStyle: FontStyle.italic),
+                  ),
+                  const SizedBox(height: 12),
+                  TextFormField(
+                    controller: widget.root._educationCtrl,
+                    maxLines: 4,
+                    readOnly: widget.readOnly,
+                    decoration: const InputDecoration(
+                      hintText: 'Safety netting, activity modification, pain education...',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ),
-          TextFormField(
-            controller: root._followUpCtrl,
-            maxLines: 2,
-            readOnly: readOnly,
-            decoration: const InputDecoration(labelText: 'Follow-up plan'),
+          const SizedBox(height: 24),
+
+          // Time-based planning
+          Text(
+            'Time-based plan',
+            style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
           ),
-          TextFormField(
-            controller: root._planShortTermCtrl,
-            maxLines: 2,
-            readOnly: readOnly,
-            decoration: const InputDecoration(labelText: 'Short-term plan (1-2 weeks)'),
+          const SizedBox(height: 16),
+          
+          Card(
+            elevation: 0,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+              side: BorderSide(color: theme.dividerColor),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: theme.primaryColor.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Text(
+                          '1–2 weeks',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                            color: theme.primaryColor,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        'Short-term',
+                        style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  TextFormField(
+                    controller: widget.root._planShortTermCtrl,
+                    maxLines: 3,
+                    readOnly: widget.readOnly,
+                    decoration: const InputDecoration(
+                      hintText: 'Settle symptoms, establish tolerance to load...',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ),
-          TextFormField(
-            controller: root._planMediumTermCtrl,
-            maxLines: 2,
-            readOnly: readOnly,
-            decoration: const InputDecoration(labelText: 'Medium-term plan (4-8 weeks)'),
+          const SizedBox(height: 12),
+
+          Card(
+            elevation: 0,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+              side: BorderSide(color: theme.dividerColor),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: theme.colorScheme.secondary.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Text(
+                          '4–8 weeks',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                            color: theme.colorScheme.secondary,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        'Medium-term',
+                        style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  TextFormField(
+                    controller: widget.root._planMediumTermCtrl,
+                    maxLines: 3,
+                    readOnly: widget.readOnly,
+                    decoration: const InputDecoration(
+                      hintText: 'Strengthen rotator cuff, return to overhead sport...',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ),
-          TextFormField(
-            controller: root._contingencyPlanCtrl,
-            maxLines: 3,
-            readOnly: readOnly,
-            decoration: const InputDecoration(labelText: 'Contingency plan'),
+          const SizedBox(height: 16),
+
+          // Follow-up plan
+          Card(
+            elevation: 0,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+              side: BorderSide(color: theme.dividerColor),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(Icons.event_outlined, size: 20, color: theme.primaryColor),
+                      const SizedBox(width: 8),
+                      Text(
+                        'Follow-up plan',
+                        style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  TextFormField(
+                    controller: widget.root._followUpCtrl,
+                    maxLines: 2,
+                    readOnly: widget.readOnly,
+                    decoration: const InputDecoration(
+                      hintText: 'Review in 1 week, discharge after 4 sessions...',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+
+          // Contingency plan
+          Card(
+            elevation: 0,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+              side: BorderSide(color: theme.dividerColor),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(Icons.route_outlined, size: 20, color: theme.primaryColor),
+                      const SizedBox(width: 8),
+                      Text(
+                        'Contingency plan',
+                        style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'If progress is not as expected...',
+                    style: theme.textTheme.bodySmall?.copyWith(color: Colors.grey[600], fontStyle: FontStyle.italic),
+                  ),
+                  const SizedBox(height: 12),
+                  TextFormField(
+                    controller: widget.root._contingencyPlanCtrl,
+                    maxLines: 3,
+                    readOnly: widget.readOnly,
+                    decoration: const InputDecoration(
+                      hintText: 'Consider imaging, refer to specialist, modify treatment approach...',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 24),
+
+          // Plan completeness indicator
+          Card(
+            elevation: 0,
+            color: theme.colorScheme.surfaceVariant.withOpacity(0.3),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Plan completeness',
+                    style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 12),
+                  _buildCompletenessItem(context, _hasGoals, 'Goals set'),
+                  _buildCompletenessItem(context, _hasTreatmentToday, 'Treatment documented'),
+                  _buildCompletenessItem(context, _hasHomeExercise, 'Home programme provided'),
+                  _buildCompletenessItem(context, _hasFollowUp, 'Follow-up planned'),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildGoalCard(BuildContext context, int number, TextEditingController controller, String? timeframe, void Function(String?) onTimeframeChanged) {
+    final theme = Theme.of(context);
+    final isEmpty = controller.text.trim().isEmpty;
+    
+    return Card(
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(
+          color: isEmpty ? theme.dividerColor : theme.primaryColor.withOpacity(0.3),
+        ),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Container(
+                  width: 28,
+                  height: 28,
+                  decoration: BoxDecoration(
+                    color: isEmpty ? Colors.grey[300] : theme.primaryColor,
+                    shape: BoxShape.circle,
+                  ),
+                  child: Center(
+                    child: Text(
+                      '$number',
+                      style: TextStyle(
+                        color: isEmpty ? Colors.grey[700] : Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 14,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: TextFormField(
+                    controller: controller,
+                    maxLines: 2,
+                    readOnly: widget.readOnly,
+                    decoration: InputDecoration(
+                      hintText: number == 1 ? 'e.g., Return to pain-free overhead lifting' : 'Optional goal',
+                      border: InputBorder.none,
+                      isDense: true,
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                    style: const TextStyle(fontWeight: FontWeight.w500),
+                  ),
+                ),
+              ],
+            ),
+            if (!widget.readOnly && !isEmpty) ...[
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  const SizedBox(width: 40),
+                  Icon(Icons.access_time, size: 16, color: Colors.grey[600]),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: DropdownButtonFormField<String>(
+                      value: timeframe,
+                      decoration: const InputDecoration(
+                        hintText: 'Timeframe (optional)',
+                        border: OutlineInputBorder(),
+                        isDense: true,
+                        contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      ),
+                      items: const [
+                        DropdownMenuItem(value: '1-2 weeks', child: Text('1-2 weeks')),
+                        DropdownMenuItem(value: '4-6 weeks', child: Text('4-6 weeks')),
+                        DropdownMenuItem(value: '8-12 weeks', child: Text('8-12 weeks')),
+                        DropdownMenuItem(value: '3-6 months', child: Text('3-6 months')),
+                      ],
+                      onChanged: onTimeframeChanged,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCompletenessItem(BuildContext context, bool complete, String label) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        children: [
+          Icon(
+            complete ? Icons.check_circle : Icons.circle_outlined,
+            size: 20,
+            color: complete ? Colors.green : Colors.grey[400],
+          ),
+          const SizedBox(width: 8),
+          Text(
+            label,
+            style: theme.textTheme.bodyMedium?.copyWith(
+              color: complete ? theme.textTheme.bodyMedium?.color : Colors.grey[600],
+            ),
           ),
         ],
       ),
