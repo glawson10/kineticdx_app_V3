@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:printing/printing.dart';
 
 import '../../../app/clinic_context.dart';
 import '../../../models/clinical_tests.dart';
@@ -7,6 +8,7 @@ import '../../../models/soap_note.dart';
 import '../../../models/region_objective_templates.dart';
 import '../data/soap_notes_repo.dart';
 import '../data/notes_permissions.dart';
+import '../data/soap_note_pdf_generator.dart';
 import 'clinical_test_selector.dart';
 import 'region_objective_editor.dart';
 
@@ -525,6 +527,34 @@ class _SoapNoteEditScreenState extends State<SoapNoteEditScreen> with TickerProv
     }
   }
 
+  Future<void> _onExportPdf() async {
+    if (_note == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please save the note first')),
+      );
+      return;
+    }
+
+    final clinicCtx = context.read<ClinicContext>();
+    final uid = clinicCtx.uidOrNull?.trim() ?? '';
+    final note = _buildSoapNote(uid);
+
+    try {
+      await Printing.layoutPdf(
+        onLayout: (format) => SoapNotePdfGenerator.generate(
+          note,
+          patientName: 'Patient', // TODO: Get actual patient name
+          clinicianName: clinicCtx.session.displayName ?? 'Clinician',
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('PDF generation failed: $e')),
+      );
+    }
+  }
+
   Future<SoapNote> _createIfNeeded(String uid) async {
     if (_creating && _note != null) return _note!;
     _creating = true;
@@ -638,6 +668,12 @@ class _SoapNoteEditScreenState extends State<SoapNoteEditScreen> with TickerProv
           ],
         ),
         actions: [
+          if (widget.noteId != null)
+            IconButton(
+              icon: const Icon(Icons.print_outlined),
+              tooltip: 'Export PDF',
+              onPressed: _onExportPdf,
+            ),
           if (!readOnly)
             IconButton(
               icon: _saving
@@ -647,6 +683,7 @@ class _SoapNoteEditScreenState extends State<SoapNoteEditScreen> with TickerProv
                       child: CircularProgressIndicator(strokeWidth: 2),
                     )
                   : const Icon(Icons.save),
+              tooltip: 'Save',
               onPressed: _saving ? null : _onSave,
             ),
         ],
