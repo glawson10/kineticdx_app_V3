@@ -246,14 +246,15 @@ class _InitialAssessmentEditorScreenState
                   : null,
               children: [
                 _buildHeader(readOnly),
-                const SizedBox(height: 16),
+                const SizedBox(height: 24),
                 _buildSubjectiveCard(readOnly),
-                const SizedBox(height: 16),
+                const SizedBox(height: 24),
                 _buildSpecialTestsCard(note, readOnly),
-                const SizedBox(height: 16),
+                const SizedBox(height: 24),
                 _buildAssessmentCard(readOnly),
-                const SizedBox(height: 16),
+                const SizedBox(height: 24),
                 _buildPlanCard(readOnly),
+                const SizedBox(height: 24), // Bottom padding
               ],
             ),
           ),
@@ -626,7 +627,7 @@ class _InitialAssessmentEditorScreenState
       height: 260,
       child: Card(
         child: Padding(
-          padding: const EdgeInsets.all(12),
+          padding: const EdgeInsets.all(16),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -730,7 +731,7 @@ class _InitialAssessmentEditorScreenState
     
     return Card(
       child: Padding(
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -746,11 +747,13 @@ class _InitialAssessmentEditorScreenState
                 const SizedBox(width: 8),
                 Text(
                   'Assessment',
-                  style: Theme.of(context).textTheme.titleMedium,
+                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                    fontWeight: FontWeight.w400,
+                  ),
                 ),
               ],
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 20),
             TextField(
               controller: _primaryDiagnosis,
               readOnly: readOnly,
@@ -772,7 +775,7 @@ class _InitialAssessmentEditorScreenState
     
     return Card(
       child: Padding(
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -788,11 +791,13 @@ class _InitialAssessmentEditorScreenState
                 const SizedBox(width: 8),
                 Text(
                   'Plan',
-                  style: Theme.of(context).textTheme.titleMedium,
+                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                    fontWeight: FontWeight.w400,
+                  ),
                 ),
               ],
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 20),
             TextField(
               controller: _planSummary,
               readOnly: readOnly,
