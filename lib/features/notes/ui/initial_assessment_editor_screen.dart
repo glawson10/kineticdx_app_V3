@@ -420,6 +420,10 @@ class _InitialAssessmentEditorScreenState
             _buildPainScoresSection(readOnly),
             const SizedBox(height: 24),
             
+            // Red flags
+            _buildRedFlagsSection(readOnly),
+            const SizedBox(height: 24),
+            
             // Collapsible secondary history
             _buildSecondaryHistorySection(readOnly),
             const SizedBox(height: 24),
@@ -536,6 +540,132 @@ class _InitialAssessmentEditorScreenState
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildRedFlagsSection(bool readOnly) {
+    final redFlags = _note?.redFlags ?? [];
+    final hasPositiveFlags = redFlags.any((flag) => flag.isPositive);
+    
+    return Container(
+      decoration: BoxDecoration(
+        border: Border.all(
+          color: Theme.of(context).colorScheme.outline.withOpacity(0.3),
+        ),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                Icons.warning_amber_rounded,
+                size: 20,
+                color: Theme.of(context).colorScheme.onSurface.withOpacity(0.6),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                'Red flags',
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Text(
+            'Screen for serious pathology',
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: Theme.of(context).colorScheme.onSurface.withOpacity(0.6),
+            ),
+          ),
+          const SizedBox(height: 16),
+          
+          // Common red flags checklist (simplified for MVP)
+          _buildRedFlagCheckbox(
+            'Age <20 or >55 (first episode)',
+            readOnly,
+          ),
+          _buildRedFlagCheckbox(
+            'Recent significant trauma',
+            readOnly,
+          ),
+          _buildRedFlagCheckbox(
+            'Constant, progressive, non-mechanical pain',
+            readOnly,
+          ),
+          _buildRedFlagCheckbox(
+            'Night pain (disturbing sleep)',
+            readOnly,
+          ),
+          _buildRedFlagCheckbox(
+            'Thoracic pain',
+            readOnly,
+          ),
+          _buildRedFlagCheckbox(
+            'PMH: cancer, steroid use, HIV',
+            readOnly,
+          ),
+          _buildRedFlagCheckbox(
+            'Systemically unwell (fever, weight loss)',
+            readOnly,
+          ),
+          _buildRedFlagCheckbox(
+            'Widespread neurological symptoms',
+            readOnly,
+          ),
+          _buildRedFlagCheckbox(
+            'Saddle anaesthesia / bladder/bowel dysfunction',
+            readOnly,
+          ),
+          
+          // Only show "Other" input if at least one flag is checked
+          if (hasPositiveFlags) ...[
+            const SizedBox(height: 12),
+            TextField(
+              readOnly: readOnly,
+              minLines: 2,
+              maxLines: 3,
+              decoration: const InputDecoration(
+                labelText: 'Other red flags / notes',
+                border: OutlineInputBorder(),
+                isDense: true,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRedFlagCheckbox(String label, bool readOnly) {
+    // For MVP, just show checkboxes without state management
+    // In production, these would be wired to the redFlags list
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 24,
+            height: 24,
+            child: Checkbox(
+              value: false,
+              onChanged: readOnly ? null : (value) {
+                // TODO: Update red flags list
+              },
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              label,
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
+          ),
+        ],
+      ),
     );
   }
 
