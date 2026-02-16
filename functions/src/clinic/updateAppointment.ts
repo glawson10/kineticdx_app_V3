@@ -3,6 +3,9 @@ import { CallableRequest, HttpsError } from "firebase-functions/v2/https";
 import * as admin from "firebase-admin";
 import { writeAuditEvent } from "./audit/audit";
 
+const MIN_DURATION_MINS = 5;
+const MAX_DURATION_MINS = 240;
+
 type Input = {
   clinicId: string;
   appointmentId: string;
@@ -20,6 +23,7 @@ type Input = {
 
   kind?: string; // admin|new|followup
   serviceId?: string | null; // allow null/empty to clear
+  practitionerId?: string | null; // allow reassign
 };
 
 const ALLOW_KIND_CONVERSION = false;
@@ -93,6 +97,83 @@ async function findOverlappingClosures(params: {
   }
 
   return ids;
+}
+
+function parseTimestamp(v: any): admin.firestore.Timestamp | null {
+  if (!v) return null;
+  if (v instanceof admin.firestore.Timestamp) return v;
+  if (typeof v?.toMillis === "function") return v;
+  if (typeof v === "object" && typeof (v as any)._seconds === "number") {
+    return new admin.firestore.Timestamp((v as any)._seconds, (v as any)._nanoseconds ?? 0);
+  }
+  if (typeof v === "number" && Number.isFinite(v)) return admin.firestore.Timestamp.fromMillis(v);
+  return null;
+}
+
+/**
+ * Returns true if the given practitioner has any other non-cancelled appointment
+ * overlapping [startAt, endAt), excluding excludeAppointmentId.
+ * Used for overlap validation on update/reschedule.
+ * When tx is provided, runs inside the transaction for consistency.
+ */
+async function hasPractitionerOverlap(params: {
+  db: admin.firestore.Firestore;
+  clinicId: string;
+  practitionerId: string;
+  startAt: admin.firestore.Timestamp;
+  endAt: admin.firestore.Timestamp;
+  excludeAppointmentId: string;
+  tx?: admin.firestore.Transaction;
+}): Promise<boolean> {
+  const { db, clinicId, practitionerId, startAt, endAt, excludeAppointmentId, tx } = params;
+  const col = db.collection(`clinics/${clinicId}/appointments`);
+  const query = col.where("practitionerId", "==", practitionerId).where("startAt", "<", endAt);
+  const snap = tx ? await tx.get(query) : await query.get();
+
+  const startMs = startAt.toMillis();
+  const endMs = endAt.toMillis();
+
+  for (const doc of snap.docs) {
+    if (doc.id === excludeAppointmentId) continue;
+    const d = doc.data() as any;
+    const status = (d?.status ?? "").toString().toLowerCase();
+    if (status === "cancelled") continue;
+
+    const otherStart = parseTimestamp(d?.startAt ?? d?.start);
+    const otherEnd = parseTimestamp(d?.endAt ?? d?.end);
+    if (!otherStart || !otherEnd) continue;
+    const otherStartMs = otherStart.toMillis();
+    const otherEndMs = otherEnd.toMillis();
+    const overlaps = otherStartMs < endMs && otherEndMs > startMs;
+    if (overlaps) return true;
+  }
+  return false;
+}
+
+async function readPractitionerDoc(
+  db: admin.firestore.Firestore,
+  clinicId: string,
+  practitionerId: string
+): Promise<{ displayName: string; active: boolean }> {
+  const paths = [
+    `clinics/${clinicId}/members/${practitionerId}`,
+    `clinics/${clinicId}/memberships/${practitionerId}`,
+    `clinics/${clinicId}/practitioners/${practitionerId}`,
+    `clinics/${clinicId}/staff/${practitionerId}`,
+  ];
+  for (const path of paths) {
+    const snap = await db.doc(path).get();
+    if (!snap.exists) continue;
+    const d = (snap.data() ?? {}) as any;
+    const active =
+      d.active === true ||
+      d.status === "active" ||
+      (d.status as any)?.active === true;
+    const displayName =
+      (d.displayName ?? d.name ?? "").toString().trim() || practitionerId;
+    return { displayName, active };
+  }
+  return { displayName: practitionerId, active: false };
 }
 
 // ✅ Canonical-first membership loader (with legacy fallback)
@@ -207,6 +288,13 @@ export async function updateAppointment(req: CallableRequest<Input>) {
       if (startTs.toMillis() >= endTs.toMillis()) {
         throw new HttpsError("invalid-argument", "start must be before end.");
       }
+      const durationMins = (endTs.toMillis() - startTs.toMillis()) / (60 * 1000);
+      if (durationMins < MIN_DURATION_MINS || durationMins > MAX_DURATION_MINS) {
+        throw new HttpsError(
+          "invalid-argument",
+          `Duration must be between ${MIN_DURATION_MINS} and ${MAX_DURATION_MINS} minutes.`
+        );
+      }
 
       newStartAt = startTs;
       newEndAt = endTs;
@@ -231,6 +319,13 @@ export async function updateAppointment(req: CallableRequest<Input>) {
       if (!endTs) throw new HttpsError("invalid-argument", "Invalid end ISO string.");
       if (startTs.toMillis() >= endTs.toMillis()) {
         throw new HttpsError("invalid-argument", "start must be before end.");
+      }
+      const durationMins = (endTs.toMillis() - startTs.toMillis()) / (60 * 1000);
+      if (durationMins < MIN_DURATION_MINS || durationMins > MAX_DURATION_MINS) {
+        throw new HttpsError(
+          "invalid-argument",
+          `Duration must be between ${MIN_DURATION_MINS} and ${MAX_DURATION_MINS} minutes.`
+        );
       }
 
       newStartAt = startTs;
@@ -293,12 +388,31 @@ export async function updateAppointment(req: CallableRequest<Input>) {
   }
 
   // ─────────────────────────────
+  // practitionerId update + denormalized practitionerName
+  // ─────────────────────────────
+  if ("practitionerId" in (req.data ?? {})) {
+    const raw = req.data?.practitionerId;
+    const pid = (raw ?? "").toString().trim();
+
+    const pracResult = await readPractitionerDoc(db, clinicId, pid || "x");
+    if (pid && !pracResult.active) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Selected practitioner is not an active clinic member."
+      );
+    }
+
+    patch.practitionerId = pid || "";
+    patch.practitionerName = pid ? pracResult.displayName : "";
+  }
+
+  // ─────────────────────────────
   // If kind changed away from admin, ensure required IDs exist
   // ─────────────────────────────
   if (patch.kind && patch.kind !== "admin") {
     const patientId = (appt["patientId"] ?? "").toString().trim();
     const serviceId = ((patch.serviceId ?? appt["serviceId"]) ?? "").toString().trim();
-    const practitionerId = (appt["practitionerId"] ?? "").toString().trim();
+    const practitionerId = ((patch.practitionerId ?? appt["practitionerId"]) ?? "").toString().trim();
 
     if (!patientId) {
       throw new HttpsError(
@@ -373,7 +487,42 @@ export async function updateAppointment(req: CallableRequest<Input>) {
   patch.updatedAt = now;
   patch.updatedByUid = uid;
 
-  await apptRef.update(patch);
+  // Resolve effective time and practitioner for overlap check
+  const effectiveStartAt =
+    newStartAt ?? parseTimestamp(appt["startAt"] ?? appt["start"]) ?? null;
+  const effectiveEndAt =
+    newEndAt ?? parseTimestamp(appt["endAt"] ?? appt["end"]) ?? null;
+  const effectivePractitionerId = (
+    (patch.practitionerId !== undefined ? patch.practitionerId : appt["practitionerId"]) ?? ""
+  ).toString().trim();
+  const timeOrPractitionerChanged =
+    (newStartAt != null || newEndAt != null) || "practitionerId" in (patch as any);
+
+  await db.runTransaction(async (tx) => {
+    const freshSnap = await tx.get(apptRef);
+    if (!freshSnap.exists) throw new HttpsError("not-found", "Appointment not found.");
+
+    if (effectivePractitionerId && effectiveStartAt && effectiveEndAt && timeOrPractitionerChanged) {
+      const overlap = await hasPractitionerOverlap({
+        db,
+        clinicId,
+        practitionerId: effectivePractitionerId,
+        startAt: effectiveStartAt,
+        endAt: effectiveEndAt,
+        excludeAppointmentId: appointmentId,
+        tx,
+      });
+      if (overlap) {
+        throw new HttpsError(
+          "failed-precondition",
+          "This time slot is already booked for the selected practitioner.",
+          { code: "practitioner_overlap" }
+        );
+      }
+    }
+
+    tx.update(apptRef, patch);
+  });
 
   // ✅ IMPORTANT: use the "clinic.closure.override.used" type so your Audit screen filter matches.
   if (didUseClosureOverride) {
@@ -395,5 +544,24 @@ export async function updateAppointment(req: CallableRequest<Input>) {
     });
   }
 
-  return { success: true, updatedKeys: Object.keys(patch) };
+  await writeAuditEvent(db, clinicId, {
+    type: "appointment.updated",
+    actorUid: uid,
+    appointmentId,
+    metadata: {
+      appointmentId,
+      updatedKeys: Object.keys(patch),
+      startAtMs: newStartAt?.toMillis() ?? effectiveStartAt?.toMillis() ?? null,
+      endAtMs: newEndAt?.toMillis() ?? effectiveEndAt?.toMillis() ?? null,
+    },
+  });
+
+  const updatedFields = Object.keys(patch);
+  return {
+    success: true,
+    appointmentId,
+    updatedFields,
+    startAt: newStartAt?.toMillis() ?? effectiveStartAt?.toMillis() ?? undefined,
+    endAt: newEndAt?.toMillis() ?? effectiveEndAt?.toMillis() ?? undefined,
+  };
 }

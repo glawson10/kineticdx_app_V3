@@ -15,6 +15,17 @@ class ClinicClosureConflictException implements Exception {
   String toString() => message;
 }
 
+/// Thrown when update/reschedule would overlap another appointment
+/// for the same practitioner.
+class PractitionerOverlapException implements Exception {
+  final String message;
+  PractitionerOverlapException(
+      [this.message = 'This time slot is already booked for the selected practitioner.']);
+
+  @override
+  String toString() => message;
+}
+
 class AppointmentsRepository {
   final FirebaseFunctions _functions;
   final FirebaseFirestore _db;
@@ -61,6 +72,11 @@ class AppointmentsRepository {
       if (e.code == 'failed-precondition' &&
           (e.message?.toLowerCase().contains('closure') ?? false)) {
         throw ClinicClosureConflictException();
+      }
+      // 🔒 Practitioner overlap (reschedule)
+      if (e.code == 'failed-precondition' &&
+          (e.message?.toLowerCase().contains('already booked') ?? false)) {
+        throw PractitionerOverlapException(e.message);
       }
 
       rethrow;
@@ -236,7 +252,22 @@ class AppointmentsRepository {
   }
 
   // ---------------------------------------------------------------------------
-  // Delete appointment
+  // Cancel appointment (status-based; slot freed via trigger)
+  // ---------------------------------------------------------------------------
+  Future<void> cancelAppointment({
+    required String clinicId,
+    required String appointmentId,
+    String? reason,
+  }) async {
+    await _call<void>('cancelAppointmentFn', {
+      'clinicId': clinicId,
+      'appointmentId': appointmentId,
+      if (reason != null && reason.trim().isNotEmpty) 'reason': reason.trim(),
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Delete appointment (hard delete; prefer cancelAppointment for lifecycle)
   // ---------------------------------------------------------------------------
   Future<void> deleteAppointment({
     required String clinicId,

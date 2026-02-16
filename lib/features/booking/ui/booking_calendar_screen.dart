@@ -8,15 +8,13 @@ import 'package:provider/provider.dart';
 
 import '../../../app/clinic_context.dart';
 import '../../../data/repositories/appointments_repository.dart'
-    show AppointmentsRepository, ClinicClosureConflictException;
+    show AppointmentsRepository, ClinicClosureConflictException, PractitionerOverlapException;
 import '../../../data/repositories/services_repository.dart';
 import '../../../models/appointment.dart';
 import '../../../models/service.dart';
 import 'draggable_appointment_block.dart';
 
 import '../../notes/data/notes_permissions.dart';
-import '../../notes/data/notes_templates.dart';
-import '../../notes/data/notes_paths.dart';
 import '../../notes/ui/note_editor_screen.dart';
 import '../../notes/ui/soap_note_edit_screen.dart';
 import '../../patients/patient_details_screen.dart';
@@ -61,20 +59,6 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
     with SingleTickerProviderStateMixin {
   late DateTime _weekStart; // Monday
   bool _fitWeek = false;
-
-  Future<String> _loadDefaultInitialKind(String clinicId) async {
-    try {
-      final doc = await clinicNotesSettingsDoc(
-        FirebaseFirestore.instance,
-        clinicId,
-      ).get();
-      if (!doc.exists) return 'basicSoap';
-      final settings = NotesSettings.fromMap(doc.data());
-      return settings.defaultInitialNoteKind;
-    } catch (_) {
-      return 'basicSoap';
-    }
-  }
 
   // ✅ Practitioner filter
   String? _selectedPractitionerId; // null = all
@@ -883,9 +867,11 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
 
     final clinicCtx = context.read<ClinicContext>();
     final canCreateNote = canEditClinicalNotes(clinicCtx.session.permissions);
+    final canWriteSchedule = clinicCtx.session.permissions.has('schedule.write');
     final action = await _showBookingActions(
       appt,
       canCreateNote: canCreateNote,
+      canWriteSchedule: canWriteSchedule,
     );
     if (!mounted || action == null) return;
 
@@ -906,24 +892,55 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
       final pid = appt.patientId.trim();
       if (pid.isEmpty) return;
 
-      final kind = await _loadDefaultInitialKind(clinicId);
-      if (kind == 'initialAssessment') {
-        await Navigator.of(context).push(
-          MaterialPageRoute(
-            builder: (_) => SoapNoteEditScreen(
-              clinicId: clinicId,
-              patientId: pid,
-              noteId: null,
-            ),
+      // Mirror the patient Notes tab: let the clinician choose which note
+      // type to create (Basic SOAP vs Initial Assessment).
+      final choice = await showModalBottomSheet<String>(
+        context: context,
+        builder: (ctx) => SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.description_outlined),
+                title: const Text('Basic SOAP note'),
+                subtitle: const Text('Free-text subjective, objective, assessment, plan'),
+                onTap: () => Navigator.pop(ctx, 'basicSoap'),
+              ),
+              ListTile(
+                leading: const Icon(Icons.assignment_outlined),
+                title: const Text('Initial Assessment'),
+                subtitle: const Text('Structured, region-specific initial assessment'),
+                onTap: () => Navigator.pop(ctx, 'initialAssessment'),
+              ),
+              ListTile(
+                leading: const Icon(Icons.cancel),
+                title: const Text('Cancel'),
+                onTap: () => Navigator.pop(ctx, null),
+              ),
+            ],
           ),
-        );
-      } else {
+        ),
+      );
+
+      if (choice == null) return;
+
+      if (choice == 'basicSoap') {
         await Navigator.of(context).push(
           MaterialPageRoute(
             builder: (_) => NoteEditorScreen.create(
               clinicId: clinicId,
               patientId: pid,
               appointmentId: appt.id,
+            ),
+          ),
+        );
+      } else if (choice == 'initialAssessment') {
+        await Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => SoapNoteEditScreen(
+              clinicId: clinicId,
+              patientId: pid,
+              noteId: null,
             ),
           ),
         );
@@ -957,6 +974,12 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
       } on ClinicClosureConflictException {
         _showClosedSnack();
         return;
+      } on PractitionerOverlapException catch (e) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(e.message ?? 'This time slot is already booked for the selected practitioner.')),
+        );
+        return;
       }
 
       if (!mounted) return;
@@ -969,11 +992,18 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
     if (action.startsWith('status:')) {
       final status = action.split(':')[1];
       try {
-        await _updateAppointmentStatusFn(
-          clinicId: clinicId,
-          appointmentId: appt.id,
-          status: status,
-        );
+        if (status == 'cancelled') {
+          await apptRepo.cancelAppointment(
+            clinicId: clinicId,
+            appointmentId: appt.id,
+          );
+        } else {
+          await _updateAppointmentStatusFn(
+            clinicId: clinicId,
+            appointmentId: appt.id,
+            status: status,
+          );
+        }
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Status updated to $status')),
@@ -1036,6 +1066,7 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
   Future<String?> _showBookingActions(
     Appointment appt, {
     required bool canCreateNote,
+    required bool canWriteSchedule,
   }) {
     return showModalBottomSheet<String>(
       context: context,
@@ -1044,11 +1075,12 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            ListTile(
-              leading: const Icon(Icons.edit_calendar_outlined),
-              title: const Text('Edit booking'),
-              onTap: () => Navigator.pop(context, 'edit'),
-            ),
+            if (canWriteSchedule)
+              ListTile(
+                leading: const Icon(Icons.edit_calendar_outlined),
+                title: const Text('Edit booking'),
+                onTap: () => Navigator.pop(context, 'edit'),
+              ),
             if (appt.patientId.trim().isNotEmpty)
               ListTile(
                 leading: const Icon(Icons.person_outline),
@@ -1061,28 +1093,30 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
                 title: const Text('Create note'),
                 onTap: () => Navigator.pop(context, 'create_note'),
               ),
-            const Divider(height: 1),
-            ListTile(
-              leading: const Icon(Icons.check_circle_outline),
-              title: const Text('Mark attended'),
-              onTap: () => Navigator.pop(context, 'status:attended'),
-            ),
-            ListTile(
-              leading: const Icon(Icons.cancel_outlined),
-              title: const Text('Mark cancelled'),
-              onTap: () => Navigator.pop(context, 'status:cancelled'),
-            ),
-            ListTile(
-              leading: const Icon(Icons.do_not_disturb_on_outlined),
-              title: const Text('Mark missed'),
-              onTap: () => Navigator.pop(context, 'status:missed'),
-            ),
-            const Divider(height: 1),
-            ListTile(
-              leading: const Icon(Icons.delete_outline),
-              title: const Text('Remove appointment'),
-              onTap: () => Navigator.pop(context, 'delete'),
-            ),
+            if (canWriteSchedule) ...[
+              const Divider(height: 1),
+              ListTile(
+                leading: const Icon(Icons.check_circle_outline),
+                title: const Text('Mark attended'),
+                onTap: () => Navigator.pop(context, 'status:attended'),
+              ),
+              ListTile(
+                leading: const Icon(Icons.cancel_outlined),
+                title: const Text('Mark cancelled'),
+                onTap: () => Navigator.pop(context, 'status:cancelled'),
+              ),
+              ListTile(
+                leading: const Icon(Icons.do_not_disturb_on_outlined),
+                title: const Text('Mark missed'),
+                onTap: () => Navigator.pop(context, 'status:missed'),
+              ),
+              const Divider(height: 1),
+              ListTile(
+                leading: const Icon(Icons.delete_outline),
+                title: const Text('Remove appointment'),
+                onTap: () => Navigator.pop(context, 'delete'),
+              ),
+            ],
           ],
         ),
       ),

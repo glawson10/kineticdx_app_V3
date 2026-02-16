@@ -15,6 +15,7 @@ export type AuditEventType =
   | "patient.updated"
   | "appointment.created"
   | "appointment.updated"
+  | "appointment.cancelled"
   | "appointment.deleted"
   | "member.invited"
   | "member.accepted"

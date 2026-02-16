@@ -48,6 +48,7 @@ import { deleteClosure } from "./clinic/closures/deleteClosure";
 // Booking / patients / episodes
 // ─────────────────────────────
 import { createAppointment } from "./clinic/createAppointment";
+import { cancelAppointment } from "./clinic/cancelAppointment";
 import { deleteAppointment } from "./clinic/deleteAppointment";
 import { updateAppointment } from "./clinic/updateAppointment";
 import { updateAppointmentStatus } from "./clinic/updateAppointmentStatus";
@@ -204,6 +205,11 @@ export const updateAppointmentFn = onCall(
 export const updateAppointmentStatusFn = onCall(
   { region: REGION, cors: true },
   updateAppointmentStatus
+);
+
+export const cancelAppointmentFn = onCall(
+  { region: REGION, cors: true },
+  cancelAppointment
 );
 
 // Patients
