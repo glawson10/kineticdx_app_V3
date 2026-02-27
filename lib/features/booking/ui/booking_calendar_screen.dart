@@ -7,12 +7,30 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../../app/clinic_context.dart';
+import '../../../app/clinic_session.dart';
 import '../../../data/repositories/appointments_repository.dart'
     show AppointmentsRepository, ClinicClosureConflictException, PractitionerOverlapException;
+import '../../../data/repositories/calendar_display_settings_repository.dart';
 import '../../../data/repositories/services_repository.dart';
+import '../../../data/repositories/staff_repository.dart';
+import '../../../data/repositories/waitlist_repository.dart';
 import '../../../models/appointment.dart';
+import '../../../models/calendar_display_settings.dart';
+import '../../../models/recurrence_draft.dart';
 import '../../../models/service.dart';
+import '../../../models/waitlist_entry.dart';
 import 'draggable_appointment_block.dart';
+import 'calendar_display_settings_screen.dart';
+import 'booking_rail_date_navigator.dart';
+import 'booking_rail_practitioners_section.dart';
+import 'booking_rail_waitlist_section.dart';
+
+import '../../../shared/ui/overlay_left_drawer.dart';
+import '../../../shared/ui/sticky_tab_button.dart';
+import '../../shell/shell_overlay_scope.dart';
+
+import '../data/booking_calendar_prefs.dart'
+    show loadBookingRailCollapsed, loadMiniCalendarExpanded, loadPractitionerVisibilityPrefs, PractitionerVisibilityPrefs, saveBookingRailCollapsed, saveMiniCalendarExpanded;
 
 import '../../notes/data/notes_permissions.dart';
 import '../../notes/ui/note_editor_screen.dart';
@@ -30,11 +48,18 @@ class BookingCalendarScreen extends StatefulWidget {
   /// set this to true and it will render its own Scaffold/AppBar.
   final bool standaloneScaffold;
 
+  /// When opening the calendar tools overlay, call this to close the clinic shell overlay (Option B).
+  final VoidCallback? onCloseShellOverlay;
+
+  /// Set to true to show Repeat? dialog, series badge, and scope picker when editing/dragging series.
+  static const bool showRecurrenceUI = false;
+
   const BookingCalendarScreen({
     super.key,
     this.initialFocus,
     this.initialAppointmentId,
     this.standaloneScaffold = false,
+    this.onCloseShellOverlay,
   });
 
   static Route<void> route({
@@ -57,11 +82,31 @@ class BookingCalendarScreen extends StatefulWidget {
 
 class _BookingCalendarScreenState extends State<BookingCalendarScreen>
     with SingleTickerProviderStateMixin {
-  late DateTime _weekStart; // Monday
+  late DateTime _weekStart; // first day shown
   bool _fitWeek = false;
+  bool _hideCancelled = false;
+
+  /// View mode: 1 = 1 Day, 3 = 3 Days, 5 = Work Week, 7 = 7 Days
+  int _viewModeDays = 7;
 
   // ✅ Practitioner filter
   String? _selectedPractitionerId; // null = all
+
+  // Cache for weekly hours future to prevent multiple calls on rebuilds
+  Future<_WeeklyHours>? _cachedWeeklyHoursFuture;
+  String? _cachedWeeklyHoursClinicId;
+  DateTime? _cachedWeeklyHoursWeekStart;
+  String? _cachedWeeklyHoursPractitionerId;
+
+  /// Cached Firestore streams so StreamBuilder keeps the same subscription across rebuilds (avoids Firestore "Unexpected state" + LateInitializationError on web).
+  Stream<DocumentSnapshot<Map<String, dynamic>>>? _cachedClinicDocStream;
+  String? _cachedClinicDocClinicId;
+  Stream<List<_ClinicClosure>>? _cachedClosuresStream;
+  String? _cachedClosuresClinicId;
+  Stream<List<Appointment>>? _cachedAppointmentsStream;
+  String? _cachedAppointmentsKey;
+  Stream<CalendarDisplaySettings>? _cachedDisplaySettingsStream;
+  String? _cachedDisplaySettingsClinicId;
 
   static const double _timeGutterWidth = 64;
   static const double _headerHeight = 48;
@@ -78,12 +123,27 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
   final ScrollController _horizontalController = ScrollController();
   bool _didInitialAutoJump = false;
 
+  /// F2: mini date navigator section expanded (persisted). ValueNotifier so toggling doesn't rebuild the whole screen (no flash).
+  late final ValueNotifier<bool> _miniCalendarExpandedNotifier;
+
   // Highlight (audit)
   DateTime? _highlightStart;
   DateTime? _highlightEnd;
   int _highlightDayIndex = -1;
 
   late final AnimationController _pulseCtrl;
+
+  /// Calendar tools overlay open state. ValueNotifier so only the overlay rebuilds (no calendar flicker).
+  late final ValueNotifier<bool> _calendarToolsOpenNotifier;
+
+  /// Practitioner visibility/order from rail (empty visible = all visible).
+  PractitionerVisibilityPrefs _practitionerPrefs =
+      const PractitionerVisibilityPrefs();
+  List<String> _visiblePractitionerIds = const [];
+  List<String> _orderPractitionerIds = const [];
+
+  /// F3: When user taps "Book" on a waitlist entry, we set this; next empty-slot tap can book this patient.
+  WaitlistEntry? _pendingWaitlistEntry;
 
   // ───────────────────────────────────────────────────────────────────────────
   // ✅ Unified opening-hours source: Cloud Function listPublicSlotsFn
@@ -96,16 +156,44 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
   @override
   void initState() {
     super.initState();
+    _calendarToolsOpenNotifier = ValueNotifier<bool>(false);
+    _miniCalendarExpandedNotifier = ValueNotifier<bool>(true);
     _weekStart = _startOfWeek(widget.initialFocus ?? DateTime.now());
 
     _pulseCtrl = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 900),
     )..repeat(reverse: true);
+
+    _loadRailCollapsed();
+    _loadMiniCalendarExpanded();
+    _loadPractitionerPrefs();
+  }
+
+  Future<void> _loadMiniCalendarExpanded() async {
+    final expanded = await loadMiniCalendarExpanded();
+    if (mounted) _miniCalendarExpandedNotifier.value = expanded;
+  }
+
+  Future<void> _loadPractitionerPrefs() async {
+    final prefs = await loadPractitionerVisibilityPrefs();
+    if (mounted) setState(() => _practitionerPrefs = prefs);
+  }
+
+  Future<void> _loadRailCollapsed() async {
+    final collapsed = await loadBookingRailCollapsed();
+    if (mounted) _calendarToolsOpenNotifier.value = !collapsed;
+  }
+
+  void _setCalendarToolsOpen(bool open) {
+    _calendarToolsOpenNotifier.value = open;
+    saveBookingRailCollapsed(!open);
   }
 
   @override
   void dispose() {
+    _calendarToolsOpenNotifier.dispose();
+    _miniCalendarExpandedNotifier.dispose();
     _verticalController.dispose();
     _horizontalController.dispose();
     _pulseCtrl.dispose();
@@ -223,18 +311,37 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
   // Week navigation
   // ───────────────────────────────────────────────────────────────────────────
 
-  void _prevWeek() => setState(() {
-        _weekStart = _weekStart.subtract(const Duration(days: 7));
+  // ───────────────────────────────────────────────────────────────────────────
+  // Week / period navigation
+  // ───────────────────────────────────────────────────────────────────────────
+
+  void _prevPeriod() => setState(() {
+        if (_viewModeDays == 30) {
+          _weekStart = DateTime(_weekStart.year, _weekStart.month - 1, 1);
+        } else {
+          _weekStart = _weekStart.subtract(Duration(days: _viewModeDays));
+        }
         _didInitialAutoJump = true;
       });
 
-  void _nextWeek() => setState(() {
-        _weekStart = _weekStart.add(const Duration(days: 7));
+  void _nextPeriod() => setState(() {
+        if (_viewModeDays == 30) {
+          _weekStart = DateTime(_weekStart.year, _weekStart.month + 1, 1);
+        } else {
+          _weekStart = _weekStart.add(Duration(days: _viewModeDays));
+        }
         _didInitialAutoJump = true;
       });
 
   void _goCurrentWeek() => setState(() {
-        _weekStart = _startOfWeek(DateTime.now());
+        final now = DateTime.now();
+        if (_viewModeDays == 1) {
+          _weekStart = DateTime(now.year, now.month, now.day);
+        } else if (_viewModeDays == 30) {
+          _weekStart = DateTime(now.year, now.month, 1);
+        } else {
+          _weekStart = _startOfWeek(now);
+        }
         _didInitialAutoJump = true;
       });
 
@@ -248,7 +355,13 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
     if (!mounted) return;
     if (picked == null) return;
     setState(() {
-      _weekStart = _startOfWeek(picked);
+      if (_viewModeDays == 1) {
+        _weekStart = DateTime(picked.year, picked.month, picked.day);
+      } else if (_viewModeDays == 30) {
+        _weekStart = DateTime(picked.year, picked.month, 1);
+      } else {
+        _weekStart = _startOfWeek(picked);
+      }
       _didInitialAutoJump = true;
     });
   }
@@ -268,18 +381,159 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
   @override
   Widget build(BuildContext context) {
     final clinicId = context.watch<ClinicContext>().clinicId;
-    final body = _buildBody(context, clinicId);
+    final isWide = MediaQuery.sizeOf(context).width >= 900;
+    final visibleIds = _visiblePractitionerIds;
+    final orderIds = _orderPractitionerIds;
 
-    if (!widget.standaloneScaffold) return body;
+    final bodyContent = _buildBody(
+      context,
+      clinicId,
+      visiblePractitionerIds: visibleIds,
+      orderPractitionerIds: orderIds,
+    );
+
+    if (!widget.standaloneScaffold) {
+      if (isWide) {
+        final screenWidth = MediaQuery.sizeOf(context).width;
+        final drawerWidth = screenWidth >= 900 ? 360.0 : (screenWidth * 0.85).clamp(260.0, 360.0);
+        final shellRight = ShellOverlayScope.getShellRightEdge(context);
+        final viewHeight = MediaQuery.sizeOf(context).height;
+        final tabGroupHeight = StickyTabButton.restingHeight * 2 + 4; // shell + gap + calendar
+        final tabTopOffset = (viewHeight - tabGroupHeight) / 2 + StickyTabButton.restingHeight + 4;
+
+        return Stack(
+          clipBehavior: Clip.hardEdge,
+          children: [
+            Positioned.fill(child: RepaintBoundary(child: bodyContent)),
+            ValueListenableBuilder<bool>(
+              valueListenable: _calendarToolsOpenNotifier,
+              builder: (context, isOpen, _) {
+                final tabLeft = isOpen ? shellRight + drawerWidth : shellRight;
+                return OverlayLeftDrawer(
+                  isOpen: isOpen,
+                  width: drawerWidth,
+                  topOffset: 0,
+                  drawerLeftOffset: shellRight,
+                  tabTopOffset: tabTopOffset,
+                  tabLeftOffset: tabLeft,
+                  showScrim: true,
+                  onScrimTap: () => _setCalendarToolsOpen(false),
+                  tab: StickyTabButton(
+                    icon: Icons.calendar_month,
+                    iconSize: 20,
+                    useDarkerStyle: true,
+                    onTap: () {
+                      _setCalendarToolsOpen(!isOpen);
+                    },
+                    tooltip: 'Calendar tools',
+                  ),
+                  child: _buildCalendarToolsPanel(context, clinicId),
+                );
+              },
+            ),
+          ],
+        );
+      }
+      return bodyContent;
+    }
 
     return Scaffold(
       appBar: AppBar(title: const Text('Booking calendar')),
-      body: body,
+      body: _buildBody(context, clinicId,
+          visiblePractitionerIds: const [], orderPractitionerIds: const []),
     );
   }
 
-  Widget _buildBody(BuildContext context, String clinicId) {
+  /// Content for the left rail: date navigator (F2) + practitioners. Scrollable so clinicians list can extend below the fold.
+  Widget _buildRailContent(BuildContext context, String clinicId) {
+    return SingleChildScrollView(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ValueListenableBuilder<bool>(
+            valueListenable: _miniCalendarExpandedNotifier,
+            builder: (context, expanded, _) => BookingRailDateNavigator(
+              currentFocus: _weekStart,
+              isExpanded: expanded,
+              onExpandedChanged: (v) {
+                _miniCalendarExpandedNotifier.value = v;
+                saveMiniCalendarExpanded(v);
+              },
+              onDateSelected: (date) => setState(() {
+                _weekStart = _startOfWeek(date);
+                _viewModeDays = 7;
+                _didInitialAutoJump = true;
+              }),
+            ),
+          ),
+          BookingRailPractitionersSection(
+            clinicId: clinicId,
+            initialPrefs: _practitionerPrefs,
+            onPrefsChanged: (prefs, visibleIds, orderIds) {
+              setState(() {
+                _practitionerPrefs = prefs;
+                _visiblePractitionerIds = visibleIds;
+                _orderPractitionerIds = orderIds;
+              });
+            },
+            shrinkWrap: true,
+          ),
+          BookingRailWaitlistSection(
+            clinicId: clinicId,
+            onBookEntry: (entry) {
+              setState(() => _pendingWaitlistEntry = entry);
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text('Click an empty slot to book ${entry.displayLabel}'),
+                  duration: const Duration(seconds: 4),
+                ),
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Content for the calendar tools overlay drawer (mini month + practitioners + waitlist).
+  /// Left padding clears the clinician shell sticky tab (hover width + gap).
+  static const double _calendarToolsPanelLeftInset = 18.0;
+
+  Widget _buildCalendarToolsPanel(BuildContext context, String clinicId) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(left: _calendarToolsPanelLeftInset),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 20, 16, 12),
+            child: Text(
+              'Calendar tools',
+              style: theme.textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.w600,
+                color: theme.colorScheme.onSurface,
+              ),
+            ),
+          ),
+          Expanded(
+            child: _buildRailContent(context, clinicId),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBody(
+    BuildContext context,
+    String clinicId, {
+    List<String> visiblePractitionerIds = const [],
+    List<String> orderPractitionerIds = const [],
+  }) {
     final clinicCtx = context.watch<ClinicContext>();
+    final session = context.watch<ClinicSession?>();
+    final hasSession = clinicCtx.hasSession || session != null;
 
     if (!clinicCtx.hasClinic) {
       return const _FatalPanel(
@@ -288,11 +542,11 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
       );
     }
 
-    if (!clinicCtx.hasSession) {
+    if (!hasSession) {
       return const Center(child: CircularProgressIndicator());
     }
 
-    final perms = clinicCtx.session.permissions;
+    final perms = (clinicCtx.hasSession ? clinicCtx.session.permissions : session!.permissions);
     final canReadSchedule = perms.has('schedule.read');
     final canWriteSchedule = perms.has('schedule.write');
 
@@ -307,32 +561,54 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
     final apptRepo = context.read<AppointmentsRepository>();
     final servicesRepo = context.read<ServicesRepository>();
 
-    final clinicDoc = FirebaseFirestore.instance
-        .collection('clinics')
-        .doc(clinicId)
-        .snapshots();
+    // Reuse same stream instance for same clinicId so StreamBuilder does not cancel/resubscribe on rebuild (avoids Firestore web SDK "Unexpected state").
+    Stream<DocumentSnapshot<Map<String, dynamic>>> clinicDoc;
+    if (_cachedClinicDocClinicId == clinicId && _cachedClinicDocStream != null) {
+      clinicDoc = _cachedClinicDocStream!;
+    } else {
+      clinicDoc = FirebaseFirestore.instance
+          .collection('clinics')
+          .doc(clinicId)
+          .snapshots();
+      _cachedClinicDocStream = clinicDoc;
+      _cachedClinicDocClinicId = clinicId;
+    }
 
-    final closuresStream = FirebaseFirestore.instance
-        .collection('clinics')
-        .doc(clinicId)
-        .collection('closures')
-        .where('active', isEqualTo: true)
-        .orderBy('fromAt')
-        .snapshots()
-        .map((snap) => snap.docs
-            .map((d) => _ClinicClosure.fromFirestore(d.id, d.data()))
-            .toList());
+    Stream<List<_ClinicClosure>> closuresStream;
+    if (_cachedClosuresClinicId == clinicId && _cachedClosuresStream != null) {
+      closuresStream = _cachedClosuresStream!;
+    } else {
+      closuresStream = FirebaseFirestore.instance
+          .collection('clinics')
+          .doc(clinicId)
+          .collection('closures')
+          .where('active', isEqualTo: true)
+          .orderBy('fromAt')
+          .snapshots()
+          .map((snap) => snap.docs
+              .map((d) => _ClinicClosure.fromFirestore(d.id, d.data()))
+              .toList());
+      _cachedClosuresStream = closuresStream;
+      _cachedClosuresClinicId = clinicId;
+    }
 
     return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
       stream: clinicDoc,
       builder: (context, clinicSnap) {
-        if (clinicSnap.connectionState == ConnectionState.waiting) {
+        if (clinicSnap.connectionState == ConnectionState.waiting && !clinicSnap.hasData) {
           return const Center(child: CircularProgressIndicator());
         }
         if (clinicSnap.hasError) {
+          final err = clinicSnap.error!;
+          final isPermissionDenied = err is FirebaseException &&
+              err.code == 'permission-denied';
           return _FatalPanel(
             title: 'Failed to load clinic settings',
-            message: clinicSnap.error.toString(),
+            message: isPermissionDenied
+                ? 'Missing or insufficient permissions. '
+                  'If you just signed out, sign in again. '
+                  'If you are a new member, ask an admin to grant you schedule.read (or settings.read) for this clinic.'
+                : err.toString(),
           );
         }
 
@@ -350,22 +626,29 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
             ? Map<String, dynamic>.from(settings['bookingStructure'] as Map)
             : <String, dynamic>{};
 
-        final double baseSlotHeight =
-            (appearance['slotHeight'] as num?)?.toDouble() ?? 48.0;
-
-        final int adminGridMinutes =
-            (bookingStructure['adminGridMinutes'] as num?)?.toInt() ?? 15;
         final int defaultSlotMinutes =
             (bookingStructure['defaultSlotMinutes'] as num?)?.toInt() ?? 20;
 
-        return FutureBuilder<_WeeklyHours>(
-          future: _weeklyHoursFromListPublicSlots(
+        // Cache the future to prevent multiple calls when toggling hide/show cancelled
+        // Only recreate if clinicId, weekStart, or practitionerId changed
+        if (_cachedWeeklyHoursFuture == null ||
+            _cachedWeeklyHoursClinicId != clinicId ||
+            _cachedWeeklyHoursWeekStart?.millisecondsSinceEpoch != _weekStart.millisecondsSinceEpoch ||
+            _cachedWeeklyHoursPractitionerId != _selectedPractitionerId) {
+          _cachedWeeklyHoursFuture = _weeklyHoursFromListPublicSlots(
             clinicId: clinicId,
             weekStartLocal: _weekStart,
             practitionerId: _selectedPractitionerId,
-          ),
+          );
+          _cachedWeeklyHoursClinicId = clinicId;
+          _cachedWeeklyHoursWeekStart = _weekStart;
+          _cachedWeeklyHoursPractitionerId = _selectedPractitionerId;
+        }
+
+        return FutureBuilder<_WeeklyHours>(
+          future: _cachedWeeklyHoursFuture,
           builder: (context, hoursSnap) {
-            if (hoursSnap.connectionState == ConnectionState.waiting) {
+            if (hoursSnap.connectionState == ConnectionState.waiting && !hoursSnap.hasData) {
               return const Center(child: CircularProgressIndicator());
             }
             if (hoursSnap.hasError) {
@@ -380,26 +663,16 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
             final weeklyHours =
                 hoursSnap.data ?? _WeeklyHours.fromFirestore(null);
 
-            const int daysCount = 7;
+            final int daysCount = _viewModeDays;
             final List<DateTime> days = List.generate(
               daysCount,
               (i) => _weekStart.add(Duration(days: i)),
             );
-            final weekEnd = _weekStart.add(const Duration(days: 6));
-
-            final bounds = _computeGridBoundsForWeek(
-              days: days,
-              weeklyHours: weeklyHours,
-              fallbackStartHour: _fallbackStartHour,
-              fallbackEndHour: _fallbackEndHour,
-            );
-            final int gridStartHour = bounds.startHour;
-            final int gridEndHour = bounds.endHour;
 
             return StreamBuilder<List<_ClinicClosure>>(
               stream: closuresStream,
               builder: (context, closureSnap) {
-                if (closureSnap.connectionState == ConnectionState.waiting) {
+                if (closureSnap.connectionState == ConnectionState.waiting && !closureSnap.hasData) {
                   return const Center(child: CircularProgressIndicator());
                 }
                 if (closureSnap.hasError) {
@@ -438,14 +711,140 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
                   return false;
                 }
 
-                return StreamBuilder<List<Appointment>>(
-                  stream: apptRepo.watchAppointmentsForWeek(
+                // Month view: calendar grid with appointment counts per day
+                if (_viewModeDays == 30) {
+                  final monthStart = _weekStart;
+                  final monthEnd = DateTime(_weekStart.year, _weekStart.month + 1, 1);
+                  final apptKey = '$clinicId|${monthStart.millisecondsSinceEpoch}|${monthEnd.millisecondsSinceEpoch}|${_selectedPractitionerId ?? ""}';
+                  Stream<List<Appointment>> apptsStream;
+                  if (_cachedAppointmentsKey == apptKey && _cachedAppointmentsStream != null) {
+                    apptsStream = _cachedAppointmentsStream!;
+                  } else {
+                    apptsStream = apptRepo.watchAppointmentsForDateRange(
+                      clinicId: clinicId,
+                      startLocal: monthStart,
+                      endLocal: monthEnd,
+                      practitionerId: _selectedPractitionerId,
+                    );
+                    _cachedAppointmentsStream = apptsStream;
+                    _cachedAppointmentsKey = apptKey;
+                  }
+                  return StreamBuilder<List<Appointment>>(
+                    stream: apptsStream,
+                    builder: (context, apptSnap) {
+                      if (apptSnap.connectionState == ConnectionState.waiting && !apptSnap.hasData) {
+                        return const Center(child: CircularProgressIndicator());
+                      }
+                      if (apptSnap.hasError) {
+                        return _FatalPanel(
+                          title: 'Failed to load appointments',
+                          message: '${apptSnap.error}',
+                        );
+                      }
+                      final allAppts = apptSnap.data ?? const <Appointment>[];
+                      var appts = _hideCancelled
+                          ? allAppts.where((a) => a.status.toLowerCase() != 'cancelled').toList()
+                          : allAppts;
+                      if (visiblePractitionerIds.isNotEmpty) {
+                        appts = appts.where((a) => visiblePractitionerIds.contains(a.practitionerId)).toList();
+                      }
+                      final calendarDisplayRepo = context.read<CalendarDisplaySettingsRepository>();
+                      Stream<CalendarDisplaySettings> displayStream;
+                      if (_cachedDisplaySettingsClinicId == clinicId && _cachedDisplaySettingsStream != null) {
+                        displayStream = _cachedDisplaySettingsStream!;
+                      } else {
+                        displayStream = calendarDisplayRepo.streamSettings(clinicId);
+                        _cachedDisplaySettingsStream = displayStream;
+                        _cachedDisplaySettingsClinicId = clinicId;
+                      }
+                      return StreamBuilder<CalendarDisplaySettings>(
+                        stream: displayStream,
+                        initialData: CalendarDisplaySettings.defaults,
+                        builder: (context, displaySnap) {
+                          final displaySettings = displaySnap.data ?? CalendarDisplaySettings.defaults;
+                          return Column(
+                            children: [
+                              _CalendarHeader(
+                                clinicId: clinicId,
+                                weekStartLabel: _fmtMonthStart(_weekStart),
+                                value: _selectedPractitionerId,
+                                onChanged: (v) {
+                                  setState(() {
+                                    _selectedPractitionerId = v;
+                                    _didInitialAutoJump = true;
+                                  });
+                                },
+                                visiblePractitionerIds: visiblePractitionerIds,
+                                orderPractitionerIds: orderPractitionerIds,
+                                onPrev: _prevPeriod,
+                                onNext: _nextPeriod,
+                                onPickDate: _pickDate,
+                                onCurrentWeek: _goCurrentWeek,
+                                fitWeek: _fitWeek,
+                                onToggleFit: _toggleFitWeek,
+                                hideCancelled: _hideCancelled,
+                                onToggleHideCancelled: () => setState(() => _hideCancelled = !_hideCancelled),
+                                viewModeDays: _viewModeDays,
+                                onViewModeChanged: (v) => setState(() {
+                                  _viewModeDays = v;
+                                  if (v == 30) _weekStart = DateTime(_weekStart.year, _weekStart.month, 1);
+                                }),
+                                hidePatientNames: displaySettings.hidePatientNames,
+                                onToggleHidePatientNames: () async {
+                                  final repo = context.read<CalendarDisplaySettingsRepository>();
+                                  await repo.updateSettings(clinicId, {'hidePatientNames': !displaySettings.hidePatientNames});
+                                },
+                                onOpenSettings: () async {
+                                  final repo = context.read<CalendarDisplaySettingsRepository>();
+                                  final saved = await Navigator.of(context).push<CalendarDisplaySettings>(
+                                    MaterialPageRoute(
+                                      builder: (_) => CalendarDisplaySettingsScreen(
+                                        clinicId: clinicId,
+                                        initial: displaySettings,
+                                        repo: repo,
+                                      ),
+                                    ),
+                                  );
+                                  if (saved != null && mounted) setState(() {});
+                                },
+                              ),
+                              const _DevPermissionHintBanner(),
+                              Expanded(
+                                child: _MonthCalendarGrid(
+                                  monthStart: monthStart,
+                                  appts: appts,
+                                  onDaySelected: (date) => setState(() {
+                                    _viewModeDays = 7;
+                                    _weekStart = _startOfWeek(date);
+                                  }),
+                                ),
+                              ),
+                            ],
+                          );
+                        },
+                      );
+                    },
+                  );
+                }
+
+                final weekEnd = _weekStart.add(const Duration(days: 7));
+                final weekApptKey = '$clinicId|${_weekStart.millisecondsSinceEpoch}|${weekEnd.millisecondsSinceEpoch}|${_selectedPractitionerId ?? ""}';
+                Stream<List<Appointment>> weekApptsStream;
+                if (_cachedAppointmentsKey == weekApptKey && _cachedAppointmentsStream != null) {
+                  weekApptsStream = _cachedAppointmentsStream!;
+                } else {
+                  weekApptsStream = apptRepo.watchAppointmentsForWeek(
                     clinicId: clinicId,
                     weekStart: _weekStart,
                     practitionerId: _selectedPractitionerId,
-                  ),
+                  );
+                  _cachedAppointmentsStream = weekApptsStream;
+                  _cachedAppointmentsKey = weekApptKey;
+                }
+                return StreamBuilder<List<Appointment>>(
+                  stream: weekApptsStream,
                   builder: (context, apptSnap) {
-                    if (apptSnap.connectionState == ConnectionState.waiting) {
+                    if (apptSnap.connectionState == ConnectionState.waiting && !apptSnap.hasData) {
                       return const Center(child: CircularProgressIndicator());
                     }
                     if (apptSnap.hasError) {
@@ -459,7 +858,43 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
                       );
                     }
 
-                    final appts = apptSnap.data ?? const <Appointment>[];
+                    final allAppts = apptSnap.data ?? const <Appointment>[];
+                    // Filter cancelled appointments if hide toggle is on
+                    var appts = _hideCancelled
+                        ? allAppts.where((a) => a.status.toLowerCase() != 'cancelled').toList()
+                        : allAppts;
+                    
+                    // Sort so cancelled appointments render last (on top) to ensure they can receive taps
+                    // when squashed side-by-side with booked appointments
+                    appts = List<Appointment>.from(appts)..sort((a, b) {
+                      final aCancelled = a.status.toLowerCase() == 'cancelled';
+                      final bCancelled = b.status.toLowerCase() == 'cancelled';
+                      // Non-cancelled first, cancelled last (so cancelled render on top)
+                      if (aCancelled == bCancelled) return 0;
+                      return aCancelled ? 1 : -1;
+                    });
+                    if (visiblePractitionerIds.isNotEmpty) {
+                      appts = appts.where((a) => visiblePractitionerIds.contains(a.practitionerId)).toList();
+                    }
+
+                    final calendarDisplayRepo = context.read<CalendarDisplaySettingsRepository>();
+                    Stream<CalendarDisplaySettings> weekDisplayStream;
+                    if (_cachedDisplaySettingsClinicId == clinicId && _cachedDisplaySettingsStream != null) {
+                      weekDisplayStream = _cachedDisplaySettingsStream!;
+                    } else {
+                      weekDisplayStream = calendarDisplayRepo.streamSettings(clinicId);
+                      _cachedDisplaySettingsStream = weekDisplayStream;
+                      _cachedDisplaySettingsClinicId = clinicId;
+                    }
+                    return StreamBuilder<CalendarDisplaySettings>(
+                      stream: weekDisplayStream,
+                      initialData: CalendarDisplaySettings.defaults,
+                      builder: (context, displaySnap) {
+                        final displaySettings = displaySnap.data ?? CalendarDisplaySettings.defaults;
+                        final gridStartHour = displaySettings.displayStartHour;
+                        final gridEndHour = displaySettings.displayEndHour;
+                        final adminGridMinutes = displaySettings.minutesPerBlock;
+                        final baseSlotHeight = displaySettings.slotHeightPx;
 
                     return LayoutBuilder(
                       builder: (context, c) {
@@ -487,7 +922,7 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
 
                         final fitSlotHeight =
                             ((fitViewportHeight - _headerHeight) / rows)
-                                .clamp(18.0, 96.0);
+                                .clamp(28.0, 96.0);
 
                         final effectiveSlotHeight =
                             _fitWeek ? fitSlotHeight : baseSlotHeight;
@@ -510,11 +945,10 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
 
                         return Column(
                           children: [
-                            // ✅ Top bar WITH inline dropdown
-                            _TopBarWithPractitioner(
+                            // ✅ 3-zone header: Context (A) | Navigation & View (B) | Actions (C)
+                            _CalendarHeader(
                               clinicId: clinicId,
-                              rangeText:
-                                  '${_fmtShort(_weekStart)} → ${_fmtShort(weekEnd)}',
+                              weekStartLabel: _viewModeDays == 30 ? _fmtMonthStart(_weekStart) : _fmtWeekStart(_weekStart),
                               value: _selectedPractitionerId,
                               onChanged: (v) {
                                 setState(() {
@@ -522,15 +956,41 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
                                   _didInitialAutoJump = true;
                                 });
                               },
-                              onPrev: _prevWeek,
-                              onNext: _nextWeek,
+                              visiblePractitionerIds: visiblePractitionerIds,
+                              orderPractitionerIds: orderPractitionerIds,
+                              onPrev: _prevPeriod,
+                              onNext: _nextPeriod,
                               onPickDate: _pickDate,
                               onCurrentWeek: _goCurrentWeek,
                               fitWeek: _fitWeek,
                               onToggleFit: _toggleFitWeek,
+                              hideCancelled: _hideCancelled,
+                              onToggleHideCancelled: () => setState(() => _hideCancelled = !_hideCancelled),
+                              viewModeDays: _viewModeDays,
+                              onViewModeChanged: (v) => setState(() {
+                                    _viewModeDays = v;
+                                    if (v == 30) _weekStart = DateTime(_weekStart.year, _weekStart.month, 1);
+                                  }),
+                              hidePatientNames: displaySettings.hidePatientNames,
+                              onToggleHidePatientNames: () async {
+                                final repo = context.read<CalendarDisplaySettingsRepository>();
+                                await repo.updateSettings(clinicId, {'hidePatientNames': !displaySettings.hidePatientNames});
+                              },
+                              onOpenSettings: () async {
+                                final repo = context.read<CalendarDisplaySettingsRepository>();
+                                final saved = await Navigator.of(context).push<CalendarDisplaySettings>(
+                                  MaterialPageRoute(
+                                    builder: (_) => CalendarDisplaySettingsScreen(
+                                      clinicId: clinicId,
+                                      initial: displaySettings,
+                                      repo: repo,
+                                    ),
+                                  ),
+                                );
+                                if (saved != null && mounted) setState(() {});
+                              },
                             ),
 
-                            const Divider(height: 1),
                             const _DevPermissionHintBanner(),
 
                             Expanded(
@@ -603,6 +1063,7 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
                                                         adminGridMinutes,
                                                     defaultSlotMinutes:
                                                         defaultSlotMinutes,
+                                                    waitlistEntry: _pendingWaitlistEntry,
                                                   );
                                                 },
                                               ),
@@ -625,10 +1086,23 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
                                                 startLocal: _highlightStart,
                                                 endLocal: _highlightEnd,
                                               ),
+                                              if (displaySettings.showCurrentTimeIndicator)
+                                                _CurrentTimeIndicator(
+                                                  days: days,
+                                                  dayWidth: dayWidth,
+                                                  headerHeight: _headerHeight,
+                                                  displayStartHour: gridStartHour,
+                                                  displayEndHour: gridEndHour,
+                                                  pxPerMinute: pxPerMinute,
+                                                ),
                                               for (final a in appts)
                                                 DraggableAppointmentBlock(
                                                   key: ValueKey('appt_${a.id}'),
                                                   appointment: a,
+                                                  allAppointments: allAppts,
+                                                  hideCancelled: _hideCancelled,
+                                                  hidePatientNames: displaySettings.hidePatientNames,
+                                                  confirmAppointmentMoves: displaySettings.confirmAppointmentMoves,
                                                   weekStart: _weekStart,
                                                   daysCount: daysCount,
                                                   dayWidth: dayWidth,
@@ -637,6 +1111,7 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
                                                   endHour: gridEndHour,
                                                   pxPerMinute: pxPerMinute,
                                                   snapMinutes: _dragSnapMinutes,
+                                                  showRecurrenceUI: BookingCalendarScreen.showRecurrenceUI,
                                                   onRequestUpdate: ({
                                                     required String
                                                         appointmentId,
@@ -649,6 +1124,17 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
                                                             'Read-only: schedule.write required to move bookings.',
                                                       );
                                                       return;
+                                                    }
+
+                                                    String? dragScope;
+                                                    if (a.isSeriesOccurrence && BookingCalendarScreen.showRecurrenceUI) {
+                                                      dragScope = await showDialog<String>(
+                                                        context: context,
+                                                        builder: (_) => const _SeriesEditScopeDialog(),
+                                                      );
+                                                      if (!mounted || dragScope == null) return;
+                                                    } else if (a.isSeriesOccurrence) {
+                                                      dragScope = 'this_only';
                                                     }
 
                                                     final okHours = weeklyHours
@@ -672,18 +1158,61 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
                                                         overlapsClosure(
                                                             newStart, newEnd);
 
-                                                    if (!isOverlap) {
-                                                      try {
+                                                    final durationMinutes = newEnd.difference(newStart).inMinutes;
+                                                    final startTimeLocal =
+                                                        '${newStart.hour.toString().padLeft(2, '0')}:${newStart.minute.toString().padLeft(2, '0')}';
+
+                                                    Future<void> performUpdate({required bool allowClosedOverride}) async {
+                                                      if (!a.isSeriesOccurrence) {
                                                         await _updateAppointment(
                                                           apptRepo: apptRepo,
                                                           clinicId: clinicId,
-                                                          appointmentId:
-                                                              appointmentId,
+                                                          appointmentId: appointmentId,
                                                           start: newStart,
                                                           end: newEnd,
-                                                          allowClosedOverride:
-                                                              false,
+                                                          allowClosedOverride: allowClosedOverride,
                                                         );
+                                                        return;
+                                                      }
+                                                      switch (dragScope ?? 'this_only') {
+                                                        case 'this_only':
+                                                          await apptRepo.updateAppointmentOccurrence(
+                                                            clinicId: clinicId,
+                                                            appointmentId: appointmentId,
+                                                            start: newStart,
+                                                            end: newEnd,
+                                                            markException: true,
+                                                            allowClosedOverride: allowClosedOverride,
+                                                          );
+                                                          break;
+                                                        case 'this_and_following':
+                                                          await apptRepo.splitAppointmentSeries(
+                                                            clinicId: clinicId,
+                                                            seriesId: a.seriesId!,
+                                                            splitFromAppointmentId: appointmentId,
+                                                            newStartTimeLocal: startTimeLocal,
+                                                            newDurationMinutes: durationMinutes,
+                                                            conflictPolicy: 'BLOCK',
+                                                          );
+                                                          break;
+                                                        case 'entire_series':
+                                                          await apptRepo.updateAppointmentSeries(
+                                                            clinicId: clinicId,
+                                                            seriesId: a.seriesId!,
+                                                            startTimeLocal: startTimeLocal,
+                                                            durationMinutes: durationMinutes,
+                                                            tz: _tz,
+                                                            effectiveFromMs: a.start.toUtc().millisecondsSinceEpoch,
+                                                            preserveExceptions: true,
+                                                            conflictPolicy: 'BLOCK',
+                                                          );
+                                                          break;
+                                                      }
+                                                    }
+
+                                                    if (!isOverlap) {
+                                                      try {
+                                                        await performUpdate(allowClosedOverride: false);
                                                       } on ClinicClosureConflictException {
                                                         _showClosedSnack(
                                                           message:
@@ -704,16 +1233,7 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
                                                     if (!mounted || !ok) return;
 
                                                     try {
-                                                      await _updateAppointment(
-                                                        apptRepo: apptRepo,
-                                                        clinicId: clinicId,
-                                                        appointmentId:
-                                                            appointmentId,
-                                                        start: newStart,
-                                                        end: newEnd,
-                                                        allowClosedOverride:
-                                                            true,
-                                                      );
+                                                      await performUpdate(allowClosedOverride: true);
                                                     } on ClinicClosureConflictException {
                                                       _showClosedSnack(
                                                         message:
@@ -741,13 +1261,15 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
                           ],
                         );
                       },
-                    );
+                    ); // StreamBuilder<CalendarDisplaySettings>
                   },
                 );
               },
             );
           },
         );
+      },
+    );
       },
     );
   }
@@ -949,6 +1471,17 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
     }
 
     if (action == 'edit') {
+      String? editScope;
+      if (appt.isSeriesOccurrence && BookingCalendarScreen.showRecurrenceUI) {
+        editScope = await showDialog<String>(
+          context: context,
+          builder: (_) => const _SeriesEditScopeDialog(),
+        );
+        if (!mounted || editScope == null) return;
+      } else if (appt.isSeriesOccurrence) {
+        editScope = 'this_only';
+      }
+
       final edited = await showDialog<_EditBookingResult>(
         context: context,
         builder: (_) => _EditBookingDialog(
@@ -960,24 +1493,69 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
 
       if (!mounted || edited == null) return;
 
-      final newEnd = appt.start.add(Duration(minutes: edited.minutes));
-
       try {
-        await apptRepo.updateAppointmentDetails(
-          clinicId: clinicId,
-          appointmentId: appt.id,
-          start: appt.start,
-          end: newEnd,
-          kind: edited.kind,
-          serviceId: edited.serviceId,
-        );
+        if (!appt.isSeriesOccurrence) {
+          await apptRepo.updateAppointmentDetails(
+            clinicId: clinicId,
+            appointmentId: appt.id,
+            start: edited.start,
+            end: edited.end,
+            kind: edited.kind,
+            serviceId: edited.serviceId,
+          );
+        } else {
+          switch (editScope ?? 'this_only') {
+            case 'this_only':
+              await apptRepo.updateAppointmentOccurrence(
+                clinicId: clinicId,
+                appointmentId: appt.id,
+                start: edited.start,
+                end: edited.end,
+                kind: edited.kind,
+                serviceId: edited.serviceId,
+                markException: true,
+                allowClosedOverride: false,
+              );
+              break;
+            case 'this_and_following':
+              final minutes = edited.end.difference(edited.start).inMinutes;
+              final startTimeLocal =
+                  '${edited.start.hour.toString().padLeft(2, '0')}:${edited.start.minute.toString().padLeft(2, '0')}';
+              await apptRepo.splitAppointmentSeries(
+                clinicId: clinicId,
+                seriesId: appt.seriesId!,
+                splitFromAppointmentId: appt.id,
+                newStartTimeLocal: startTimeLocal,
+                newDurationMinutes: minutes,
+                conflictPolicy: 'BLOCK',
+              );
+              break;
+            case 'entire_series':
+              final effectiveFromMs = appt.start.toUtc().millisecondsSinceEpoch;
+              final startTimeLocal =
+                  '${edited.start.hour.toString().padLeft(2, '0')}:${edited.start.minute.toString().padLeft(2, '0')}';
+              await apptRepo.updateAppointmentSeries(
+                clinicId: clinicId,
+                seriesId: appt.seriesId!,
+                kind: edited.kind,
+                serviceId: edited.serviceId,
+                startTimeLocal: startTimeLocal,
+                durationMinutes: edited.end.difference(edited.start).inMinutes,
+                tz: _tz,
+                effectiveFromMs: effectiveFromMs,
+                preserveExceptions: true,
+                conflictPolicy: 'BLOCK',
+              );
+              break;
+          }
+        }
       } on ClinicClosureConflictException {
         _showClosedSnack();
         return;
       } on PractitionerOverlapException catch (e) {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(e.message ?? 'This time slot is already booked for the selected practitioner.')),
+          SnackBar(content: Text(e.message)),
         );
         return;
       }
@@ -997,17 +1575,97 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
             clinicId: clinicId,
             appointmentId: appt.id,
           );
+          if (!mounted) return;
+          // F4: Show waitlist matches when toggle is on
+          final displaySettingsRepo = context.read<CalendarDisplaySettingsRepository>();
+          final displaySettings = await displaySettingsRepo.getSettings(clinicId);
+          if (displaySettings.showWaitlistMatchesOnCancel && mounted) {
+            final waitlistRepo = context.read<WaitlistRepository>();
+            final allEntries = await waitlistRepo.watchEntries(clinicId).first;
+            final matches = _matchWaitlistToFreedSlot(allEntries, appt);
+            if (matches.isNotEmpty && mounted) {
+              final result = await showDialog<_WaitlistMatchResult>(
+                context: context,
+                builder: (_) => _WaitlistMatchesDialog(
+                  matches: matches,
+                  freedSlotStart: appt.start,
+                  freedSlotEnd: appt.end,
+                  onRemove: (entry) => waitlistRepo.removeEntry(clinicId, entry.id),
+                ),
+              );
+              if (!mounted) return;
+              if (result?.action == 'book' && result!.entry != null) {
+                await _startBookingFlowDialog(
+                  clinicId: clinicId,
+                  apptRepo: apptRepo,
+                  servicesRepo: servicesRepo,
+                  slotStart: appt.start,
+                  adminGridMinutes: 15,
+                  defaultSlotMinutes: appt.end.difference(appt.start).inMinutes,
+                  waitlistEntry: result.entry,
+                );
+                if (mounted) {
+                  await context.read<WaitlistRepository>().removeEntry(clinicId, result.entry!.id);
+                  setState(() => _pendingWaitlistEntry = null);
+                }
+              } else if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Appointment cancelled')),
+                );
+              }
+            } else if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Appointment cancelled')),
+              );
+            }
+          } else if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Appointment cancelled')),
+            );
+          }
         } else {
-          await _updateAppointmentStatusFn(
+          final result = await _updateAppointmentStatusFn(
             clinicId: clinicId,
             appointmentId: appt.id,
             status: status,
           );
+          if (!mounted) return;
+          String message = 'Status updated to $status';
+          final billing = result?['billing'] as Map<String, dynamic>?;
+          if (billing != null && status == 'attended') {
+            final created = billing['created'] as bool? ?? false;
+            if (created) {
+              final invNum = billing['invoiceNumber']?.toString();
+              message = invNum != null && invNum.isNotEmpty
+                  ? 'Status updated. Invoice $invNum created.'
+                  : 'Status updated. Invoice created.';
+            } else {
+              final reason = billing['reason'] as String?;
+              final errors = billing['validationErrors'] as List<dynamic>?;
+              if (reason == 'billing_not_configured') {
+                message = 'Status updated. No invoice: set up Billing in Clinic Settings first.';
+              } else if (reason == 'validation' && errors != null && errors.isNotEmpty) {
+                final firstErr = errors.first;
+                final first = firstErr is Map ? firstErr['message']?.toString() ?? '' : '';
+                message = first.isNotEmpty
+                    ? 'Status updated. No invoice: $first'
+                    : 'Status updated. No invoice: check service price and tax in Billing settings.';
+              } else if (reason == 'already_invoiced') {
+                message = 'Status updated. Invoice already existed.';
+              } else if (reason == 'no_patient') {
+                message = 'Status updated. No invoice: appointment has no patient.';
+              } else {
+                message = 'Status updated. No invoice created.';
+              }
+            }
+          }
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(message),
+              duration: status == 'attended' ? const Duration(seconds: 4) : const Duration(seconds: 2),
+            ),
+          );
         }
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Status updated to $status')),
-        );
       } on FirebaseFunctionsException catch (e, st) {
         debugPrint(
             '[BookingCalendar] updateAppointmentStatusFn error: $e\n$st');
@@ -1075,6 +1733,12 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            if (appt.isSeriesOccurrence && BookingCalendarScreen.showRecurrenceUI)
+              ListTile(
+                leading: const Icon(Icons.repeat),
+                title: const Text('Repeating appointment'),
+                subtitle: const Text('Choose scope when editing or moving'),
+              ),
             if (canWriteSchedule)
               ListTile(
                 leading: const Icon(Icons.edit_calendar_outlined),
@@ -1123,6 +1787,30 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
     );
   }
 
+  /// F4: Filter waitlist entries that match the freed slot (practitioner, service, date range). Sorted by priority desc, then createdAt asc.
+  static List<WaitlistEntry> _matchWaitlistToFreedSlot(
+    List<WaitlistEntry> entries,
+    Appointment appt,
+  ) {
+    final slotDate = DateTime(appt.start.year, appt.start.month, appt.start.day);
+    final list = entries.where((e) {
+      if (e.preferredPractitionerIds.isNotEmpty &&
+          !e.preferredPractitionerIds.contains(appt.practitionerId)) return false;
+      if (e.preferredAppointmentTypeIds.isNotEmpty &&
+          !e.preferredAppointmentTypeIds.contains(appt.serviceId)) return false;
+      if (e.earliestDate != null && slotDate.isBefore(DateTime(e.earliestDate!.year, e.earliestDate!.month, e.earliestDate!.day))) return false;
+      if (e.latestDate != null && slotDate.isAfter(DateTime(e.latestDate!.year, e.latestDate!.month, e.latestDate!.day))) return false;
+      return true;
+    }).toList();
+    list.sort((a, b) {
+      if (a.priority != b.priority) return b.priority.compareTo(a.priority);
+      final aAt = a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+      final bAt = b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+      return aAt.compareTo(bAt);
+    });
+    return list;
+  }
+
   Future<bool> _confirm(String msg) async {
     final ok = await showDialog<bool>(
           context: context,
@@ -1155,16 +1843,17 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
     });
   }
 
-  Future<void> _updateAppointmentStatusFn({
+  Future<Map<String, dynamic>?> _updateAppointmentStatusFn({
     required String clinicId,
     required String appointmentId,
     required String status,
   }) async {
-    await _functions.httpsCallable('updateAppointmentStatusFn').call({
+    final res = await _functions.httpsCallable('updateAppointmentStatusFn').call({
       'clinicId': clinicId,
       'appointmentId': appointmentId,
       'status': status,
     });
+    return res.data as Map<String, dynamic>?;
   }
 
   // ---------------------------------------------------------------------------
@@ -1178,6 +1867,7 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
     required DateTime slotStart,
     required int adminGridMinutes,
     required int defaultSlotMinutes,
+    WaitlistEntry? waitlistEntry,
   }) async {
     try {
       final action = await showDialog<_BookingAction>(
@@ -1271,17 +1961,28 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
         return;
       }
 
-      final patientMode = await showDialog<_PatientMode>(
-        context: context,
-        builder: (_) => _PatientModeDialog(action: action),
-      );
-      if (!mounted) return;
-      if (patientMode == null) return;
-
       String patientId;
       _PatientSnapshot patientSnapshot;
 
-      if (patientMode == _PatientMode.createNew) {
+      if (waitlistEntry != null) {
+        patientId = waitlistEntry.patientId;
+        patientSnapshot = _PatientSnapshot(
+          id: patientId,
+          firstName: waitlistEntry.displayLabel,
+          lastName: '',
+          dob: DateTime(2000, 1, 1),
+          phone: '',
+          email: '',
+        );
+      } else {
+        final patientMode = await showDialog<_PatientMode>(
+          context: context,
+          builder: (_) => _PatientModeDialog(action: action),
+        );
+        if (!mounted) return;
+        if (patientMode == null) return;
+
+        if (patientMode == _PatientMode.createNew) {
         final created = await showDialog<_PatientSnapshot>(
           context: context,
           barrierDismissible: false,
@@ -1311,6 +2012,7 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
         patientId = picked.id!;
         patientSnapshot = picked;
       }
+      }
 
       final kind = (action == _BookingAction.newPatient) ? 'new' : 'followup';
 
@@ -1328,15 +2030,54 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
       if (!mounted) return;
       if (!ok) return;
 
-      await apptRepo.createAppointment(
-        clinicId: clinicId,
-        kind: kind,
-        patientId: patientId,
-        serviceId: pickedService!.id,
-        practitionerId: pickedPractitioner!.uid,
-        start: slotStart,
-        end: end,
-      );
+      final RecurrenceDraft? repeat = BookingCalendarScreen.showRecurrenceUI
+          ? await showDialog<RecurrenceDraft?>(
+              context: context,
+              builder: (_) => _RecurrenceDialog(initialDay: slotStart),
+            )
+          : RecurrenceDraft.none;
+      if (!mounted) return;
+      if (repeat == null) return;
+
+      final tz = _tz;
+
+      if (repeat.isNone) {
+        await apptRepo.createAppointment(
+          clinicId: clinicId,
+          kind: kind,
+          patientId: patientId,
+          serviceId: pickedService!.id,
+          practitionerId: pickedPractitioner!.uid,
+          start: slotStart,
+          end: end,
+        );
+        if (waitlistEntry != null && mounted) {
+          await context.read<WaitlistRepository>().removeEntry(clinicId, waitlistEntry.id);
+          if (mounted) setState(() => _pendingWaitlistEntry = null);
+        }
+      } else {
+        final result = await apptRepo.createAppointmentSeries(
+          clinicId: clinicId,
+          kind: kind,
+          patientId: patientId,
+          serviceId: pickedService!.id,
+          practitionerId: pickedPractitioner!.uid,
+          tz: tz,
+          start: slotStart,
+          durationMinutes: minutes,
+          rule: repeat.toJson(),
+          generateDaysAhead: 180,
+          conflictPolicy: 'BLOCK',
+        );
+        final ids = result['createdAppointmentIds'] as List<dynamic>? ?? [];
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Created repeating appointments (${ids.length})'),
+          ),
+        );
+        return;
+      }
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1348,17 +2089,22 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
     } on ClinicClosureConflictException {
       _showClosedSnack(message: 'Clinic closure conflict.');
       return;
+    } on PractitionerOverlapException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.message)),
+      );
+      return;
     } on FirebaseFunctionsException catch (e, st) {
       debugPrint(
           '[BookingCalendar] Functions error: code=${e.code} message=${e.message} details=${e.details}\n$st');
       if (!mounted) return;
+      final msg = (e.message != null && e.message!.trim().isNotEmpty)
+          ? e.message!
+          : 'Server error (${e.code}). Check Firebase Functions logs for details.';
       await _showFatalDialog(
         title: 'Create appointment failed',
-        message: 'Functions error\n\n'
-            'code: ${e.code}\n'
-            'message: ${e.message}\n'
-            'details: ${e.details}\n\n'
-            'Tip: check Firebase Functions logs for the exact thrown HttpsError.',
+        message: msg,
       );
     } catch (e, st) {
       debugPrint('[BookingCalendar] Booking flow error: $e\n$st');
@@ -1451,6 +2197,21 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
 
   static String _fmtShort(DateTime d) => '${d.day}/${d.month}/${d.year}';
 
+  /// Format week-start for toolbar: "Mon 23 Feb 2026"
+  static String _fmtWeekStart(DateTime d) {
+    const weekdays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    final w = weekdays[(d.weekday - 1) % 7];
+    final m = months[d.month - 1];
+    return '$w ${d.day} $m ${d.year}';
+  }
+
+  /// Format for month view toolbar: "February 2026"
+  static String _fmtMonthStart(DateTime d) {
+    const months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+    return '${months[d.month - 1]} ${d.year}';
+  }
+
   static String _fmtTime(DateTime d) =>
       '${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
 
@@ -1473,25 +2234,32 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
   }
 }
 
-/// ✅ Inline top bar that contains the practitioner dropdown (compact) next to
-/// date controls (no giant row above the calendar).
-class _TopBarWithPractitioner extends StatelessWidget {
+/// Revised calendar header: 56px, left block (title + clinician) + right cluster (date, view, actions).
+/// Zone B + C form one right-anchored cluster (no floating center).
+class _CalendarHeader extends StatelessWidget {
   final String clinicId;
-  final String rangeText;
-
-  final String? value; // null = all
+  final String weekStartLabel;
+  final String? value;
   final ValueChanged<String?> onChanged;
-
   final VoidCallback onPrev;
   final VoidCallback onNext;
   final VoidCallback onPickDate;
   final VoidCallback onCurrentWeek;
   final bool fitWeek;
   final VoidCallback onToggleFit;
+  final bool hideCancelled;
+  final VoidCallback onToggleHideCancelled;
+  final int viewModeDays;
+  final ValueChanged<int> onViewModeChanged;
+  final bool hidePatientNames;
+  final VoidCallback onToggleHidePatientNames;
+  final VoidCallback onOpenSettings;
+  final List<String> visiblePractitionerIds;
+  final List<String> orderPractitionerIds;
 
-  const _TopBarWithPractitioner({
+  const _CalendarHeader({
     required this.clinicId,
-    required this.rangeText,
+    required this.weekStartLabel,
     required this.value,
     required this.onChanged,
     required this.onPrev,
@@ -1500,61 +2268,613 @@ class _TopBarWithPractitioner extends StatelessWidget {
     required this.onCurrentWeek,
     required this.fitWeek,
     required this.onToggleFit,
+    required this.hideCancelled,
+    required this.onToggleHideCancelled,
+    required this.viewModeDays,
+    required this.onViewModeChanged,
+    required this.hidePatientNames,
+    required this.onToggleHidePatientNames,
+    required this.onOpenSettings,
+    this.visiblePractitionerIds = const [],
+    this.orderPractitionerIds = const [],
+  });
+
+  static const double _headerHeight = 56;
+  static const double _zonePadding = 24;
+  static const double _dividerOpacity = 0.25;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final isNarrow = MediaQuery.sizeOf(context).width < 700;
+    final isTablet = MediaQuery.sizeOf(context).width < 900;
+
+    final dividerColor = scheme.outline.withValues(alpha: _dividerOpacity);
+
+    return Container(
+      height: _headerHeight,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border(
+          bottom: BorderSide(color: dividerColor),
+        ),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          // Zone A — Title + clinician (left anchored)
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.only(left: _zonePadding),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: _ZoneA(
+                  clinicId: clinicId,
+                  value: value,
+                  onChanged: onChanged,
+                  theme: theme,
+                  compact: isNarrow,
+                  visiblePractitionerIds: visiblePractitionerIds,
+                  orderPractitionerIds: orderPractitionerIds,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 16),
+          // Right cluster: date nav | view segments | actions (right anchored)
+          _RightCluster(
+            weekStartLabel: weekStartLabel,
+            onPrev: onPrev,
+            onNext: onNext,
+            onPickDate: onPickDate,
+            viewModeDays: viewModeDays,
+            onViewModeChanged: onViewModeChanged,
+            fitWeek: fitWeek,
+            onToggleFit: onToggleFit,
+            hideCancelled: hideCancelled,
+            onToggleHideCancelled: onToggleHideCancelled,
+            hidePatientNames: hidePatientNames,
+            onToggleHidePatientNames: onToggleHidePatientNames,
+            onOpenSettings: onOpenSettings,
+            theme: theme,
+            collapseToDropdown: isTablet,
+            dividerColor: dividerColor,
+          ),
+          const SizedBox(width: _zonePadding),
+        ],
+      ),
+    );
+  }
+}
+
+/// Month view: calendar grid with day cells and booked appointment count per day.
+class _MonthCalendarGrid extends StatelessWidget {
+  final DateTime monthStart;
+  final List<Appointment> appts;
+  final ValueChanged<DateTime>? onDaySelected;
+
+  const _MonthCalendarGrid({
+    required this.monthStart,
+    required this.appts,
+    this.onDaySelected,
+  });
+
+  static DateTime _startOfWeek(DateTime d) {
+    final date = DateTime(d.year, d.month, d.day);
+    final diff = date.weekday - DateTime.monday;
+    return date.subtract(Duration(days: diff));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    const weekdays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    final firstCell = _startOfWeek(monthStart);
+    // 6 rows of 7 days to cover any month
+    const int rows = 6;
+    const int cols = 7;
+
+    int countFor(DateTime date) {
+      return appts.where((a) =>
+          a.start.year == date.year &&
+          a.start.month == date.month &&
+          a.start.day == date.day).length;
+    }
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // Weekday headers
+          Row(
+            children: List.generate(cols, (c) => Expanded(
+              child: Center(
+                child: Text(
+                  weekdays[c],
+                  style: theme.textTheme.labelMedium?.copyWith(
+                    color: scheme.onSurfaceVariant,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            )),
+          ),
+          const SizedBox(height: 8),
+          // Grid of days
+          Expanded(
+            child: GridView.builder(
+              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: 7,
+                childAspectRatio: 1.1,
+                crossAxisSpacing: 6,
+                mainAxisSpacing: 6,
+              ),
+              itemCount: rows * cols,
+              itemBuilder: (context, index) {
+                final dayOffset = index;
+                final date = firstCell.add(Duration(days: dayOffset));
+                final isCurrentMonth = date.month == monthStart.month && date.year == monthStart.year;
+                final count = countFor(date);
+                final isToday = _isToday(date);
+
+                return Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    onTap: onDaySelected != null
+                        ? () => onDaySelected!(date)
+                        : null,
+                    borderRadius: BorderRadius.circular(8),
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: isCurrentMonth
+                            ? (isToday ? scheme.primaryContainer.withValues(alpha: 0.5) : scheme.surfaceContainerHighest.withValues(alpha: 0.4))
+                            : scheme.surface.withValues(alpha: 0.5),
+                        borderRadius: BorderRadius.circular(8),
+                        border: isToday ? Border.all(color: scheme.primary, width: 1.5) : null,
+                      ),
+                      padding: const EdgeInsets.all(6),
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Text(
+                            '${date.day}',
+                            style: theme.textTheme.titleSmall?.copyWith(
+                              color: isCurrentMonth ? scheme.onSurface : scheme.onSurface.withValues(alpha: 0.5),
+                              fontWeight: isToday ? FontWeight.bold : FontWeight.w500,
+                            ),
+                          ),
+                          if (count > 0) ...[
+                            const SizedBox(height: 2),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: scheme.primary.withValues(alpha: 0.2),
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                              child: Text(
+                                '$count',
+                                style: theme.textTheme.labelMedium?.copyWith(
+                                  color: scheme.primary,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  static bool _isToday(DateTime d) {
+    final now = DateTime.now();
+    return d.year == now.year && d.month == now.month && d.day == now.day;
+  }
+}
+
+/// Zone A: Clinician dropdown only (title removed; nav item shows context).
+class _ZoneA extends StatelessWidget {
+  final String clinicId;
+  final String? value;
+  final ValueChanged<String?> onChanged;
+  final ThemeData theme;
+  final bool compact;
+  final List<String> visiblePractitionerIds;
+  final List<String> orderPractitionerIds;
+
+  const _ZoneA({
+    required this.clinicId,
+    required this.value,
+    required this.onChanged,
+    required this.theme,
+    required this.compact,
+    this.visiblePractitionerIds = const [],
+    this.orderPractitionerIds = const [],
   });
 
   @override
   Widget build(BuildContext context) {
-    final isNarrow = MediaQuery.of(context).size.width < 700;
-    final theme = Theme.of(context);
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: SizedBox(
+        width: compact ? 200 : 240,
+        height: 32,
+        child: _ClinicianDropdownCompact(
+          clinicId: clinicId,
+          value: value,
+          onChanged: onChanged,
+          theme: theme,
+          visiblePractitionerIds: visiblePractitionerIds,
+          orderPractitionerIds: orderPractitionerIds,
+        ),
+      ),
+    );
+  }
+}
 
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(8, 10, 8, 8),
-      child: Wrap(
-        crossAxisAlignment: WrapCrossAlignment.center,
-        spacing: 10,
-        runSpacing: 10,
+/// Right cluster: date nav | divider | view (1/3/7 days) | divider | actions.
+/// Right-aligned so date/view sit next to Fit Screen.
+class _RightCluster extends StatelessWidget {
+  final String weekStartLabel;
+  final VoidCallback onPrev;
+  final VoidCallback onNext;
+  final VoidCallback onPickDate;
+  final int viewModeDays;
+  final ValueChanged<int> onViewModeChanged;
+  final bool fitWeek;
+  final VoidCallback onToggleFit;
+  final bool hideCancelled;
+  final VoidCallback onToggleHideCancelled;
+  final bool hidePatientNames;
+  final VoidCallback onToggleHidePatientNames;
+  final VoidCallback onOpenSettings;
+  final ThemeData theme;
+  final bool collapseToDropdown;
+  final Color dividerColor;
+
+  const _RightCluster({
+    required this.weekStartLabel,
+    required this.onPrev,
+    required this.onNext,
+    required this.onPickDate,
+    required this.viewModeDays,
+    required this.onViewModeChanged,
+    required this.fitWeek,
+    required this.onToggleFit,
+    required this.hideCancelled,
+    required this.onToggleHideCancelled,
+    required this.hidePatientNames,
+    required this.onToggleHidePatientNames,
+    required this.onOpenSettings,
+    required this.theme,
+    required this.collapseToDropdown,
+    required this.dividerColor,
+  });
+
+  static const double _controlHeight = 32;
+  static const _segmentValues = [1, 3, 7, 30];
+  static const _segmentLabels = ['1 Day', '3 Days', '7 Days', 'Month'];
+  static const double _dividerHeight = 24;
+  static const double _iconGap = 11;
+
+  @override
+  Widget build(BuildContext context) {
+    Widget viewControl;
+    if (collapseToDropdown) {
+      final effective = _segmentValues.contains(viewModeDays) ? viewModeDays : 7;
+      viewControl = _ViewModeDropdown(
+        value: effective,
+        onChanged: onViewModeChanged,
+        theme: theme,
+        headerSegments: true,
+      );
+    } else {
+      viewControl = _ViewModeSegmentedControl(
+        value: _segmentValues.contains(viewModeDays) ? viewModeDays : 7,
+        values: _segmentValues,
+        labels: _segmentLabels,
+        onChanged: onViewModeChanged,
+        theme: theme,
+      );
+    }
+
+    return Align(
+      alignment: Alignment.centerRight,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          IconButton(onPressed: onPrev, icon: const Icon(Icons.chevron_left)),
-          Text(rangeText, style: theme.textTheme.titleMedium),
-          IconButton(onPressed: onNext, icon: const Icon(Icons.chevron_right)),
-          const SizedBox(width: 6),
-          if (isNarrow)
-            IconButton(
-              tooltip: 'Pick date',
-              onPressed: onPickDate,
-              icon: const Icon(Icons.calendar_month),
-            )
-          else
-            OutlinedButton.icon(
-              onPressed: onPickDate,
-              icon: const Icon(Icons.calendar_month),
-              label: const Text('Go to date'),
+          // B1 — Date navigation (12px group padding, 10px chevron-date)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                IconButton(
+                  tooltip: 'Previous period',
+                  onPressed: onPrev,
+                  icon: const Icon(Icons.chevron_left),
+                  style: IconButton.styleFrom(
+                    minimumSize: const Size(_controlHeight, _controlHeight),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    visualDensity: VisualDensity.compact,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                InkWell(
+                  onTap: onPickDate,
+                  borderRadius: BorderRadius.circular(4),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+                    child: Text(
+                      weekStartLabel,
+                      style: theme.textTheme.bodyLarge?.copyWith(
+                        fontWeight: FontWeight.w500,
+                        color: theme.colorScheme.onSurface,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                IconButton(
+                  tooltip: 'Next period',
+                  onPressed: onNext,
+                  icon: const Icon(Icons.chevron_right),
+                  style: IconButton.styleFrom(
+                    minimumSize: const Size(_controlHeight, _controlHeight),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    visualDensity: VisualDensity.compact,
+                  ),
+                ),
+              ],
             ),
-          if (isNarrow)
-            IconButton(
-              tooltip: 'Current week',
-              onPressed: onCurrentWeek,
-              icon: const Icon(Icons.today),
-            )
-          else
-            OutlinedButton.icon(
-              onPressed: onCurrentWeek,
-              icon: const Icon(Icons.today),
-              label: const Text('Current week'),
-            ),
-          OutlinedButton.icon(
+          ),
+          _vDivider(),
+          viewControl,
+          _vDivider(),
+          // Zone C — Actions (10–12px between icons)
+          IconButton(
+            tooltip: fitWeek ? 'Unfit' : 'Fit to viewport',
             onPressed: onToggleFit,
             icon: Icon(fitWeek ? Icons.fullscreen_exit : Icons.fit_screen),
-            label: Text(fitWeek ? 'Unfit' : 'Fit week'),
+            style: IconButton.styleFrom(
+              minimumSize: const Size(_controlHeight, _controlHeight),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              visualDensity: VisualDensity.compact,
+            ),
           ),
-          _PractitionerInlineDropdown(
-            clinicId: clinicId,
-            value: value,
-            onChanged: onChanged,
-            compact: isNarrow,
+          const SizedBox(width: _iconGap),
+          IconButton(
+            tooltip: hideCancelled ? 'Show cancelled' : 'Hide cancelled',
+            onPressed: onToggleHideCancelled,
+            icon: Icon(hideCancelled ? Icons.visibility_off : Icons.visibility),
+            style: IconButton.styleFrom(
+              minimumSize: const Size(_controlHeight, _controlHeight),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              visualDensity: VisualDensity.compact,
+            ),
+          ),
+          const SizedBox(width: _iconGap),
+          IconButton(
+            tooltip: hidePatientNames ? 'Show names' : 'Hide names',
+            onPressed: onToggleHidePatientNames,
+            icon: Icon(hidePatientNames ? Icons.person_off : Icons.person),
+            style: IconButton.styleFrom(
+              minimumSize: const Size(_controlHeight, _controlHeight),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              visualDensity: VisualDensity.compact,
+            ),
+          ),
+          const SizedBox(width: _iconGap),
+          IconButton(
+            tooltip: 'Calendar display settings',
+            onPressed: onOpenSettings,
+            icon: const Icon(Icons.settings),
+            style: IconButton.styleFrom(
+              minimumSize: const Size(_controlHeight, _controlHeight),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              visualDensity: VisualDensity.compact,
+            ),
           ),
         ],
       ),
+    );
+  }
+
+  Widget _vDivider() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      child: Container(
+        width: 1,
+        height: _dividerHeight,
+        color: dividerColor,
+      ),
+    );
+  }
+}
+
+/// Segmented control: 1 Day | 3 Days | 7 Days, 32px height, low-contrast bg, active filled.
+class _ViewModeSegmentedControl extends StatelessWidget {
+  final int value;
+  final List<int> values;
+  final List<String> labels;
+  final ValueChanged<int> onChanged;
+  final ThemeData theme;
+
+  const _ViewModeSegmentedControl({
+    required this.value,
+    required this.values,
+    required this.labels,
+    required this.onChanged,
+    required this.theme,
+  });
+
+  static const double _height = 32;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = theme.colorScheme;
+    return Container(
+      height: _height,
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerHighest.withValues(alpha: 0.35),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (int i = 0; i < values.length; i++) ...[
+            if (i > 0)
+              Container(
+                width: 1,
+                height: 16,
+                color: scheme.outline.withValues(alpha: 0.15),
+              ),
+            _Segment(
+              label: labels[i],
+              selected: value == values[i],
+              onTap: () => onChanged(values[i]),
+              theme: theme,
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _Segment extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+  final ThemeData theme;
+
+  const _Segment({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+    required this.theme,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = theme.colorScheme;
+    return Material(
+      color: selected
+          ? scheme.surface
+          : Colors.transparent,
+      borderRadius: BorderRadius.circular(6),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(6),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          alignment: Alignment.center,
+          child: Text(
+            label,
+            style: theme.textTheme.labelLarge?.copyWith(
+              fontWeight: FontWeight.w500,
+              color: selected ? scheme.onSurface : scheme.onSurfaceVariant,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Compact clinician dropdown for Zone A: 240px, 32px height, outlined.
+class _ClinicianDropdownCompact extends StatelessWidget {
+  final String clinicId;
+  final String? value;
+  final ValueChanged<String?> onChanged;
+  final ThemeData theme;
+  final List<String> visiblePractitionerIds;
+  final List<String> orderPractitionerIds;
+
+  const _ClinicianDropdownCompact({
+    required this.clinicId,
+    required this.value,
+    required this.onChanged,
+    required this.theme,
+    this.visiblePractitionerIds = const [],
+    this.orderPractitionerIds = const [],
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return _PractitionerInlineDropdown(
+      clinicId: clinicId,
+      value: value,
+      onChanged: onChanged,
+      compact: true,
+      theme: theme,
+      headerStyle: true,
+      visiblePractitionerIds: visiblePractitionerIds,
+      orderPractitionerIds: orderPractitionerIds,
+    );
+  }
+}
+
+class _ViewModeDropdown extends StatelessWidget {
+  final int value;
+  final ValueChanged<int> onChanged;
+  final ThemeData theme;
+  /// When true, show 1 Day | 7 Days | Month (for header collapsed mode).
+  final bool headerSegments;
+
+  const _ViewModeDropdown({
+    required this.value,
+    required this.onChanged,
+    required this.theme,
+    this.headerSegments = false,
+  });
+
+  static const Map<int, String> _labels = {
+    1: '1 Day',
+    3: '3 Days',
+    5: 'Work Week',
+    7: '7 Days',
+  };
+  static const Map<int, String> _headerLabels = {
+    1: '1 Day',
+    3: '3 Days',
+    7: '7 Days',
+    30: 'Month',
+  };
+
+  @override
+  Widget build(BuildContext context) {
+    final labels = headerSegments ? _headerLabels : _labels;
+    final safeValue = labels.containsKey(value) ? value : (headerSegments ? 7 : 7);
+    return DropdownButton<int>(
+      value: safeValue,
+      style: theme.textTheme.bodyMedium?.copyWith(
+        fontWeight: FontWeight.w500,
+        color: theme.colorScheme.onSurface,
+      ),
+      items: labels.entries
+          .map((e) => DropdownMenuItem(
+                value: e.key,
+                child: Text(
+                  e.value,
+                  style: theme.textTheme.bodyMedium,
+                ),
+              ))
+          .toList(),
+      onChanged: (v) {
+        if (v != null) onChanged(v);
+      },
     );
   }
 }
@@ -1564,12 +2884,21 @@ class _PractitionerInlineDropdown extends StatelessWidget {
   final String? value;
   final ValueChanged<String?> onChanged;
   final bool compact;
+  final ThemeData theme;
+  /// When true, use 32px height and outlined style for header Zone A.
+  final bool headerStyle;
+  final List<String> visiblePractitionerIds;
+  final List<String> orderPractitionerIds;
 
   const _PractitionerInlineDropdown({
     required this.clinicId,
     required this.value,
     required this.onChanged,
     required this.compact,
+    required this.theme,
+    this.headerStyle = false,
+    this.visiblePractitionerIds = const [],
+    this.orderPractitionerIds = const [],
   });
 
   bool _isActiveLike(Map<String, dynamic> data) {
@@ -1581,12 +2910,6 @@ class _PractitionerInlineDropdown extends StatelessWidget {
     if (active is bool) return active;
 
     return true;
-  }
-
-  bool _canScheduleWrite(Map<String, dynamic> data) {
-    final perms = data['permissions'];
-    if (perms is Map) return perms['schedule.write'] == true;
-    return false;
   }
 
   String _labelFor(QueryDocumentSnapshot<Map<String, dynamic>> d) {
@@ -1603,20 +2926,21 @@ class _PractitionerInlineDropdown extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final membersCol = FirebaseFirestore.instance
-        .collection('clinics')
-        .doc(clinicId)
-        .collection('members');
+    // ✅ Use StaffRepository with fallback to query both members and memberships collections (from Provider so stream cache is shared).
+    final staffRepo = context.read<StaffRepository>();
+    final membersStream = staffRepo.watchMembershipsWithFallback(clinicId);
 
     return ConstrainedBox(
       constraints: BoxConstraints(
-        minWidth: compact ? 160 : 240,
-        maxWidth: compact ? 220 : 320,
+        minWidth: headerStyle ? 240 : (compact ? 160 : 240),
+        maxWidth: headerStyle ? 240 : (compact ? 220 : 320),
+        minHeight: headerStyle ? 32 : 0,
+        maxHeight: headerStyle ? 32 : double.infinity,
       ),
-      child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-        stream: membersCol.snapshots(),
+      child: StreamBuilder<List<QueryDocumentSnapshot<Map<String, dynamic>>>>(
+        stream: membersStream,
         builder: (context, snap) {
-          final docs = snap.data?.docs ?? const [];
+          final docs = snap.data ?? const [];
 
           final practitioners = <QueryDocumentSnapshot<Map<String, dynamic>>>[];
           final seen = <String>{};
@@ -1625,38 +2949,84 @@ class _PractitionerInlineDropdown extends StatelessWidget {
             if (!seen.add(d.id)) continue;
             final data = d.data();
             if (!_isActiveLike(data)) continue;
-            if (!_canScheduleWrite(data)) continue;
             practitioners.add(d);
           }
 
-          practitioners.sort((a, b) {
-            final an = (a.data()['displayName'] ?? '').toString();
-            final bn = (b.data()['displayName'] ?? '').toString();
-            return an.compareTo(bn);
-          });
+          if (visiblePractitionerIds.isNotEmpty) {
+            final visibleSet = visiblePractitionerIds.toSet();
+            practitioners.removeWhere((d) => !visibleSet.contains(d.id));
+          }
+          if (orderPractitionerIds.isNotEmpty) {
+            final orderIndex = {for (var i = 0; i < orderPractitionerIds.length; i++) orderPractitionerIds[i]: i};
+            practitioners.sort((a, b) {
+              final ai = orderIndex[a.id] ?? 9999;
+              final bi = orderIndex[b.id] ?? 9999;
+              if (ai != bi) return ai.compareTo(bi);
+              final an = (a.data()['displayName'] ?? '').toString();
+              final bn = (b.data()['displayName'] ?? '').toString();
+              return an.compareTo(bn);
+            });
+          } else {
+            practitioners.sort((a, b) {
+              final an = (a.data()['displayName'] ?? '').toString();
+              final bn = (b.data()['displayName'] ?? '').toString();
+              return an.compareTo(bn);
+            });
+          }
 
           final allowedIds = practitioners.map((d) => d.id).toSet();
           final safeValue =
               (value != null && allowedIds.contains(value)) ? value : null;
 
+          final decoration = headerStyle
+              ? InputDecoration(
+                  labelText: 'Clinician',
+                  hintText: 'All clinicians',
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 4,
+                  ),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    borderSide: BorderSide(
+                      color: theme.colorScheme.outline.withValues(alpha: 0.5),
+                    ),
+                  ),
+                )
+              : InputDecoration(
+                  labelText: compact ? null : 'Clinician',
+                  hintText: 'All',
+                  contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                );
+
           return DropdownButtonFormField<String?>(
-            initialValue: safeValue,
+            value: safeValue,
             isExpanded: true,
-            decoration: InputDecoration(
-              labelText: compact ? null : 'Clinician',
-              hintText: 'All',
-              contentPadding:
-                  const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            style: theme.textTheme.bodyMedium?.copyWith(
+              fontWeight: FontWeight.w500,
+              color: theme.colorScheme.onSurface,
             ),
+            decoration: decoration,
             items: [
-              const DropdownMenuItem<String?>(
+              DropdownMenuItem<String?>(
                 value: null,
-                child: Text('All clinicians'),
+                child: Text(
+                  'All clinicians',
+                  style: theme.textTheme.bodyMedium,
+                ),
               ),
               for (final d in practitioners)
                 DropdownMenuItem<String?>(
                   value: d.id,
-                  child: Text(_labelFor(d), overflow: TextOverflow.ellipsis),
+                  child: Text(
+                    _labelFor(d),
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.bodyMedium,
+                  ),
                 ),
             ],
             onChanged: onChanged,
@@ -2253,11 +3623,13 @@ class _ClosureSegment {
 // ---------------------------------------------------------------------------
 
 class _EditBookingResult {
-  final int minutes;
+  final DateTime start;
+  final DateTime end;
   final String kind; // 'new' | 'followup'
   final String? serviceId;
   const _EditBookingResult({
-    required this.minutes,
+    required this.start,
+    required this.end,
     required this.kind,
     this.serviceId,
   });
@@ -2279,6 +3651,7 @@ class _EditBookingDialog extends StatefulWidget {
 }
 
 class _EditBookingDialogState extends State<_EditBookingDialog> {
+  late DateTime _start;
   late int _minutes;
   late String _kind;
   String? _serviceId;
@@ -2286,6 +3659,7 @@ class _EditBookingDialogState extends State<_EditBookingDialog> {
   @override
   void initState() {
     super.initState();
+    _start = widget.appt.start;
     _minutes =
         widget.appt.end.difference(widget.appt.start).inMinutes.clamp(5, 480);
     _kind = (widget.appt.kind.toLowerCase() == 'new') ? 'new' : 'followup';
@@ -2293,27 +3667,76 @@ class _EditBookingDialogState extends State<_EditBookingDialog> {
         widget.appt.serviceId.trim().isEmpty ? null : widget.appt.serviceId;
   }
 
+  DateTime get _end => _start.add(Duration(minutes: _minutes));
+
+  Future<void> _pickDate() async {
+    final date = await showDatePicker(
+      context: context,
+      initialDate: _start,
+      firstDate: DateTime(_start.year - 1),
+      lastDate: DateTime(_start.year + 2),
+    );
+    if (date == null || !mounted) return;
+    setState(() {
+      _start = DateTime(date.year, date.month, date.day, _start.hour, _start.minute);
+    });
+  }
+
+  Future<void> _pickTime() async {
+    final time = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay(hour: _start.hour, minute: _start.minute),
+    );
+    if (time == null || !mounted) return;
+    setState(() {
+      _start = DateTime(
+        _start.year,
+        _start.month,
+        _start.day,
+        time.hour,
+        time.minute,
+      );
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final lengthOptions = <int>[15, 20, 30, 45, 60, 90, 120];
+    final dateStr = '${_start.day}/${_start.month}/${_start.year}';
+    final timeStr =
+        '${_start.hour.toString().padLeft(2, '0')}:${_start.minute.toString().padLeft(2, '0')}';
 
     return AlertDialog(
       title: const Text('Edit booking'),
       content: SingleChildScrollView(
         child: Column(
           mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             DropdownButtonFormField<String>(
-              initialValue: _kind,
+              value: _kind,
               items: const [
                 DropdownMenuItem(value: 'new', child: Text('New patient (NP)')),
                 DropdownMenuItem(
                     value: 'followup', child: Text('Follow up (FU)')),
               ],
-              onChanged: (v) => setState(() => _kind = (v ?? 'followup')),
+              onChanged: (v) => setState(() => _kind = v ?? 'followup'),
               decoration: const InputDecoration(labelText: 'Appointment type'),
             ),
             const SizedBox(height: 16),
+            ListTile(
+              leading: const Icon(Icons.calendar_today_outlined),
+              title: const Text('Date'),
+              subtitle: Text(dateStr),
+              onTap: _pickDate,
+            ),
+            ListTile(
+              leading: const Icon(Icons.access_time_outlined),
+              title: const Text('Time'),
+              subtitle: Text(timeStr),
+              onTap: _pickTime,
+            ),
+            const SizedBox(height: 8),
             Align(
               alignment: Alignment.centerLeft,
               child:
@@ -2362,7 +3785,8 @@ class _EditBookingDialogState extends State<_EditBookingDialog> {
           onPressed: () => Navigator.pop(
             context,
             _EditBookingResult(
-              minutes: _minutes,
+              start: _start,
+              end: _end,
               kind: _kind,
               serviceId: _serviceId,
             ),
@@ -2436,6 +3860,76 @@ class _TimeGutter extends StatelessWidget {
     final h = (mins ~/ 60) % 24;
     final m = mins % 60;
     return '${h.toString().padLeft(2, '0')}:${m.toString().padLeft(2, '0')}';
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Current time indicator (today column only, updates every 60s)
+// ---------------------------------------------------------------------------
+
+class _CurrentTimeIndicator extends StatefulWidget {
+  final List<DateTime> days;
+  final double dayWidth;
+  final double headerHeight;
+  final int displayStartHour;
+  final int displayEndHour;
+  final double pxPerMinute;
+
+  const _CurrentTimeIndicator({
+    required this.days,
+    required this.dayWidth,
+    required this.headerHeight,
+    required this.displayStartHour,
+    required this.displayEndHour,
+    required this.pxPerMinute,
+  });
+
+  @override
+  State<_CurrentTimeIndicator> createState() => _CurrentTimeIndicatorState();
+}
+
+class _CurrentTimeIndicatorState extends State<_CurrentTimeIndicator> {
+  DateTime _now = DateTime.now();
+
+  @override
+  void initState() {
+    super.initState();
+    _scheduleTick();
+  }
+
+  void _scheduleTick() {
+    Future<void>.delayed(const Duration(seconds: 60), () {
+      if (!mounted) return;
+      setState(() => _now = DateTime.now());
+      _scheduleTick();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final now = _now;
+    final todayIndex = widget.days.indexWhere((d) => DateUtils.isSameDay(d, now));
+    if (todayIndex < 0) return const SizedBox.shrink();
+
+    final startMins = widget.displayStartHour * 60;
+    final endMins = widget.displayEndHour * 60;
+    final nowMins = now.hour * 60 + now.minute;
+    if (nowMins < startMins || nowMins >= endMins) return const SizedBox.shrink();
+
+    final top = widget.headerHeight + (nowMins - startMins) * widget.pxPerMinute;
+    final left = todayIndex * widget.dayWidth;
+
+    return Positioned(
+      left: left,
+      top: top,
+      width: widget.dayWidth,
+      height: 2,
+      child: IgnorePointer(
+        child: Container(
+          color: Theme.of(context).colorScheme.error,
+        ),
+      ),
+    );
   }
 }
 
@@ -2643,7 +4137,7 @@ class _ServicePickerDialog extends StatelessWidget {
         child: StreamBuilder<List<Service>>(
           stream: servicesRepo.activeServices(clinicId),
           builder: (context, snap) {
-            if (snap.connectionState == ConnectionState.waiting) {
+            if (snap.connectionState == ConnectionState.waiting && !snap.hasData) {
               return const Center(child: CircularProgressIndicator());
             }
             if (snap.hasError) {
@@ -2723,7 +4217,7 @@ class _PractitionerPickerDialog extends StatelessWidget {
         child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
           stream: membersCol.snapshots(),
           builder: (context, snap) {
-            if (snap.connectionState == ConnectionState.waiting) {
+            if (snap.connectionState == ConnectionState.waiting && !snap.hasData) {
               return const Center(child: CircularProgressIndicator());
             }
             if (snap.hasError) {
@@ -3244,7 +4738,7 @@ class _PatientFinderDialogState extends State<_PatientFinderDialog> {
               child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
                 stream: _patientsCol.orderBy('lastName').limit(200).snapshots(),
                 builder: (context, snap) {
-                  if (snap.connectionState == ConnectionState.waiting) {
+                  if (snap.connectionState == ConnectionState.waiting && !snap.hasData) {
                     return const Center(child: CircularProgressIndicator());
                   }
                   if (snap.hasError) {
@@ -3306,6 +4800,139 @@ class _PatientFinderDialogState extends State<_PatientFinderDialog> {
   }
 }
 
+/// Returns 'this_only' | 'this_and_following' | 'entire_series', or null if cancelled.
+class _SeriesEditScopeDialog extends StatelessWidget {
+  const _SeriesEditScopeDialog();
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Edit repeating appointment'),
+      content: const Text(
+        'Apply changes to this appointment only, this and following occurrences, or the entire series?',
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context, null),
+          child: const Text('Cancel'),
+        ),
+        TextButton(
+          onPressed: () => Navigator.pop(context, 'this_only'),
+          child: const Text('This appointment only'),
+        ),
+        TextButton(
+          onPressed: () => Navigator.pop(context, 'this_and_following'),
+          child: const Text('This and following'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(context, 'entire_series'),
+          child: const Text('Entire series'),
+        ),
+      ],
+    );
+  }
+}
+
+class _RecurrenceDialog extends StatefulWidget {
+  final DateTime initialDay;
+
+  const _RecurrenceDialog({required this.initialDay});
+
+  @override
+  State<_RecurrenceDialog> createState() => _RecurrenceDialogState();
+}
+
+class _RecurrenceDialogState extends State<_RecurrenceDialog> {
+  static const int _defaultCount = 12;
+  int _step = 0; // 0: No/Yes, 1: How many?
+  final _countController = TextEditingController(text: '$_defaultCount');
+
+  @override
+  void dispose() {
+    _countController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_step == 0) {
+      return AlertDialog(
+        title: const Text('Repeat?'),
+        content: const Text(
+          'Is this a repeating appointment? Choose "No" for a single appointment, '
+          '"Yes" to create a weekly series starting on this day.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, RecurrenceDraft.none),
+            child: const Text('No'),
+          ),
+          FilledButton(
+            onPressed: () => setState(() => _step = 1),
+            child: const Text('Yes'),
+          ),
+        ],
+      );
+    }
+
+    // Step 1: How many times?
+    return AlertDialog(
+      title: const Text('How many appointments?'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Weekly on the same weekday, starting ${widget.initialDay.day}/${widget.initialDay.month}/${widget.initialDay.year}.',
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: _countController,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                labelText: 'Number of appointments',
+                hintText: 'e.g. 12',
+                border: OutlineInputBorder(),
+              ),
+              onSubmitted: (_) => _submitCount(),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context, null),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: _submitCount,
+          child: const Text('Create series'),
+        ),
+      ],
+    );
+  }
+
+  void _submitCount() {
+    final s = _countController.text.trim();
+    int? count = int.tryParse(s);
+    if (count == null || count < 2 || count > 260) {
+      count = _defaultCount;
+    }
+    final byWeekday = RecurrenceDraft.defaultByWeekdayFrom(widget.initialDay);
+    Navigator.pop(
+      context,
+      RecurrenceDraft(
+        freq: 'WEEKLY',
+        interval: 1,
+        byWeekday: byWeekday,
+        count: count,
+      ),
+    );
+  }
+}
+
 class _ConfirmBookingDialog extends StatelessWidget {
   final String kind; // 'new' | 'followup'
   final DateTime slotStart;
@@ -3330,20 +4957,22 @@ class _ConfirmBookingDialog extends StatelessWidget {
 
     return AlertDialog(
       title: const Text('Confirm booking'),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(typeLabel, style: const TextStyle(fontWeight: FontWeight.w700)),
-          const SizedBox(height: 8),
-          Text('When: $date • $time'),
-          const SizedBox(height: 8),
-          Text('Patient: ${patient.fullName}'),
-          Text('DOB: $dob'),
-          const SizedBox(height: 8),
-          Text('Phone: ${patient.phone}'),
-          Text('Email: ${patient.email}'),
-        ],
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(typeLabel, style: const TextStyle(fontWeight: FontWeight.w700)),
+            const SizedBox(height: 8),
+            Text('When: $date • $time'),
+            const SizedBox(height: 8),
+            Text('Patient: ${patient.fullName}'),
+            Text('DOB: $dob'),
+            const SizedBox(height: 8),
+            Text('Phone: ${patient.phone}'),
+            Text('Email: ${patient.email}'),
+          ],
+        ),
       ),
       actions: [
         TextButton(
@@ -3352,6 +4981,111 @@ class _ConfirmBookingDialog extends StatelessWidget {
         FilledButton(
             onPressed: () => Navigator.pop(context, true),
             child: const Text('Confirm')),
+      ],
+    );
+  }
+}
+
+/// F4: Result from waitlist matches modal — book this entry, or dismiss.
+class _WaitlistMatchResult {
+  final String action; // 'book' | 'dismiss'
+  final WaitlistEntry? entry;
+
+  _WaitlistMatchResult({required this.action, this.entry});
+}
+
+class _WaitlistMatchesDialog extends StatelessWidget {
+  final List<WaitlistEntry> matches;
+  final DateTime freedSlotStart;
+  final DateTime freedSlotEnd;
+  final Future<void> Function(WaitlistEntry) onRemove;
+
+  const _WaitlistMatchesDialog({
+    required this.matches,
+    required this.freedSlotStart,
+    required this.freedSlotEnd,
+    required this.onRemove,
+  });
+
+  static String _timeStr(DateTime d) =>
+      '${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final slotStr = '${freedSlotStart.day}/${freedSlotStart.month}/${freedSlotStart.year} ${_timeStr(freedSlotStart)}–${_timeStr(freedSlotEnd)}';
+
+    return AlertDialog(
+      title: const Text('Waitlist matches'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              'Freed slot: $slotStr',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 12),
+            ...matches.map((e) => Card(
+              margin: const EdgeInsets.only(bottom: 8),
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      e.displayLabel,
+                      style: theme.textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    if (e.priority != 0 || (e.notes?.trim().isNotEmpty == true))
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Text(
+                          [
+                            if (e.priority != 0) 'Priority ${e.priority}',
+                            if (e.notes?.trim().isNotEmpty == true) e.notes!.trim(),
+                          ].join(' · '),
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ),
+                    const SizedBox(height: 8),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        TextButton(
+                          onPressed: () async {
+                            await onRemove(e);
+                            if (context.mounted) Navigator.pop(context, _WaitlistMatchResult(action: 'dismiss', entry: null));
+                          },
+                          child: const Text('Remove from waitlist'),
+                        ),
+                        const SizedBox(width: 8),
+                        FilledButton(
+                          onPressed: () => Navigator.pop(context, _WaitlistMatchResult(action: 'book', entry: e)),
+                          child: const Text('Book into slot'),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            )),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context, _WaitlistMatchResult(action: 'dismiss', entry: null)),
+          child: const Text('Close'),
+        ),
       ],
     );
   }

@@ -16,6 +16,9 @@ class StaffRepository {
   final FirebaseFirestore _db;
   final FirebaseFunctions _fn;
 
+  /// Cache members stream per clinicId so multiple widgets get the same stream (avoids cancel/resubscribe and Firestore "Unexpected state" on web).
+  final Map<String, Stream<List<QueryDocumentSnapshot<Map<String, dynamic>>>>> _membersStreamCache = {};
+
   // ✅ Canonical = members (matches rules + MembershipsRepository)
   // 🟡 Legacy fallback = memberships (temporary migration support)
   static const String _membersSubcollection = 'members'; // ✅ canonical
@@ -75,8 +78,8 @@ class StaffRepository {
   // ─────────────────────────────
 
   /// Reads BOTH collections and merges them:
-  /// - canonical (/members) wins if a uid exists in both places
-  /// - legacy-only members are included (migration safety)
+  /// - canonical (/members) wins if a uid exists in both places (no duplicate per uid).
+  /// - legacy-only members are included (migration safety).
   Stream<List<QueryDocumentSnapshot<Map<String, dynamic>>>>
       watchMembershipsWithFallback(
     String clinicId,
@@ -84,14 +87,15 @@ class StaffRepository {
     final c = clinicId.trim();
     if (c.isEmpty) return const Stream.empty();
 
-    final canonRef = _membersCol(c); // ✅ /members
-    final legacyRef = _membershipsCol(c); // 🟡 /memberships
+    return _membersStreamCache.putIfAbsent(c, () {
+      final canonRef = _membersCol(c); // ✅ /members
+      final legacyRef = _membershipsCol(c); // 🟡 /memberships
 
-    debugPrint(
-      '[StaffRepository] watchMembershipsWithFallback canon=${canonRef.path} legacy=${legacyRef.path}',
-    );
+      debugPrint(
+        '[StaffRepository] watchMembershipsWithFallback canon=${canonRef.path} legacy=${legacyRef.path}',
+      );
 
-    return RxCombineLatest2<
+      return RxCombineLatest2<
         QuerySnapshot<Map<String, dynamic>>,
         QuerySnapshot<Map<String, dynamic>>,
         List<QueryDocumentSnapshot<Map<String, dynamic>>>>(
@@ -132,6 +136,7 @@ class StaffRepository {
         return docs;
       },
     );
+    });
   }
 
   // ─────────────────────────────

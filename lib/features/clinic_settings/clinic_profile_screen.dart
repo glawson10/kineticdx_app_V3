@@ -13,6 +13,7 @@ import '../../../../data/repositories/clinic_repository.dart';
 
 import 'clinic_closures_screen.dart';
 import '../clinic_settings/audit/closure_override_audit_screen.dart';
+import 'audit/staff_profile_audit_screen.dart';
 
 // ✅ Opening hours UI
 import '../clinic/settings/ui/clinic_opening_hours_screen.dart';
@@ -22,6 +23,7 @@ import '../../staff/staff_settings_screen.dart';
 import '../notes/ui/notes_settings_screen.dart';
 import '../settings/ui/clinical_test_registry_screen.dart';
 import '../settings/security_screen.dart';
+import '../billing/ui/billing_settings_screen.dart';
 
 /// Settings hub screen (inside Settings tab).
 /// - Clinic profile (edit)
@@ -49,7 +51,7 @@ class ClinicProfileScreen extends StatelessWidget {
     // ✅ Session may not be bootstrapped yet (avoid throwing)
     if (!clinicCtx.hasSession) {
       return Scaffold(
-        appBar: AppBar(title: const Text('Clinic settings')),
+        appBar: AppBar(title: const SizedBox.shrink()), // Title in shell only
         body: const Center(child: CircularProgressIndicator()),
       );
     }
@@ -67,7 +69,7 @@ class ClinicProfileScreen extends StatelessWidget {
         session.permissions.has('members.read') || canManageStaff;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Clinic settings')),
+      appBar: AppBar(title: const SizedBox.shrink()), // Title in shell only
       body: ListView(
         children: [
           const SizedBox(height: 8),
@@ -108,16 +110,34 @@ class ClinicProfileScreen extends StatelessWidget {
           const Divider(height: 1),
 
           // ─────────────────────────────
-          // Staff
+          // Staff (legacy entrypoint — migrating to Settings → Team)
+          // Remove when: Settings → Team has invite (09), practitioner profile (10),
+          // suspend/edit, smoke tests (19), and dogfood pass complete. See docs/STAFF_LEGACY_REMOVAL.md.
           // ─────────────────────────────
           ListTile(
             leading: const Icon(Icons.people_outline),
-            title: const Text('Staff'),
+            title: Row(
+              children: [
+                const Text('Staff'),
+                const SizedBox(width: 8),
+                Chip(
+                  label: Text(
+                    'Legacy',
+                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        ),
+                  ),
+                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  visualDensity: VisualDensity.compact,
+                  side: BorderSide(
+                    color: Theme.of(context).colorScheme.outline.withValues(alpha: 0.5),
+                  ),
+                ),
+              ],
+            ),
             subtitle: Text(
               canReadMembers
-                  ? (canManageStaff
-                      ? 'Invite, suspend, permissions'
-                      : 'Read-only staff list')
+                  ? 'Migrating to Settings → Team. Invite, suspend, permissions.'
                   : 'No permission (members.read required)',
             ),
             enabled: canReadMembers,
@@ -169,6 +189,27 @@ class ClinicProfileScreen extends StatelessWidget {
               MaterialPageRoute(
                 builder: (_) =>
                     ClinicalTestRegistryScreen(clinicId: clinicId),
+              ),
+            ),
+          ),
+
+          const Divider(height: 1),
+
+          // ─────────────────────────────
+          // Billing
+          // ─────────────────────────────
+          ListTile(
+            leading: const Icon(Icons.request_quote_outlined),
+            title: const Text('Billing'),
+            subtitle: Text(
+              canWriteSettings || session.permissions.has('manageBilling')
+                  ? 'Invoice settings, supplier profile, payment methods'
+                  : 'No permission (manageBilling or settings.write required)',
+            ),
+            enabled: canWriteSettings || session.permissions.has('manageBilling'),
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => BillingSettingsScreen(),
               ),
             ),
           ),
@@ -232,6 +273,22 @@ class ClinicProfileScreen extends StatelessWidget {
             ),
           ),
 
+          const Divider(height: 1),
+
+          ListTile(
+            leading: const Icon(Icons.person_outline),
+            title: const Text('Staff profile audit'),
+            subtitle: Text(
+              canAudit
+                  ? 'View profile and availability changes'
+                  : 'No permission (audit.read required)',
+            ),
+            enabled: canAudit,
+            onTap: () => Navigator.of(context).push(
+              StaffProfileAuditScreen.route(),
+            ),
+          ),
+
           const SizedBox(height: 24),
         ],
       ),
@@ -264,6 +321,7 @@ class _ClinicProfileEditScreenState extends State<_ClinicProfileEditScreen> {
 
   String _timezone = 'Europe/Prague';
   String _defaultLanguage = 'en';
+  int _sessionTimeoutMinutes = 120;
 
   bool _dirty = false;
   bool _saving = false;
@@ -285,6 +343,8 @@ class _ClinicProfileEditScreenState extends State<_ClinicProfileEditScreen> {
   ];
 
   static const _languages = <String>['en', 'cs', 'de', 'fr', 'es'];
+
+  static const _sessionTimeoutOptions = <int>[30, 60, 120, 180, 240];
 
   @override
   void dispose() {
@@ -321,6 +381,14 @@ class _ClinicProfileEditScreenState extends State<_ClinicProfileEditScreen> {
       return null;
     }
 
+    final settings = (data['settings'] is Map)
+        ? Map<String, dynamic>.from(data['settings'] as Map)
+        : <String, dynamic>{};
+    final timeout = settings['sessionTimeoutMinutes'];
+    final timeoutInt = timeout is int && _sessionTimeoutOptions.contains(timeout)
+        ? timeout
+        : 120;
+
     return <String, dynamic>{
       'name': pick('name'),
       'logoUrl': pick('logoUrl'),
@@ -332,6 +400,7 @@ class _ClinicProfileEditScreenState extends State<_ClinicProfileEditScreen> {
       'whatsapp': pick('whatsapp'),
       'timezone': pick('timezone'),
       'defaultLanguage': pick('defaultLanguage'),
+      'sessionTimeoutMinutes': timeoutInt,
     };
   }
 
@@ -496,6 +565,7 @@ class _ClinicProfileEditScreenState extends State<_ClinicProfileEditScreen> {
         'whatsapp': _normalizeWhatsappOrNull(_whatsappCtrl.text),
         'timezone': _timezone,
         'defaultLanguage': _defaultLanguage,
+        'sessionTimeoutMinutes': _sessionTimeoutMinutes,
       };
 
       await repo.updateClinicProfile(clinicId: clinicId, patch: patch);
@@ -564,6 +634,10 @@ class _ClinicProfileEditScreenState extends State<_ClinicProfileEditScreen> {
           final lang = p['defaultLanguage'];
           if (lang is String && lang.isNotEmpty) {
             _defaultLanguage = _languages.contains(lang) ? lang : 'en';
+          }
+          final timeout = p['sessionTimeoutMinutes'];
+          if (timeout is int && _sessionTimeoutOptions.contains(timeout)) {
+            _sessionTimeoutMinutes = timeout;
           }
         }
 
@@ -784,6 +858,44 @@ class _ClinicProfileEditScreenState extends State<_ClinicProfileEditScreen> {
                       labelText: 'Clinic timezone (IANA)',
                       helperText:
                           'Used for appointment display and booking rules.',
+                    ),
+                  ),
+
+                  const SizedBox(height: 24),
+                  const Text(
+                    'Session timeout',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+                  ),
+                  const SizedBox(height: 12),
+                  DropdownButtonFormField<int>(
+                    value: _sessionTimeoutOptions.contains(_sessionTimeoutMinutes)
+                        ? _sessionTimeoutMinutes
+                        : 120,
+                    items: _sessionTimeoutOptions
+                        .map((m) => DropdownMenuItem<int>(
+                              value: m,
+                              child: Text(m == 60
+                                  ? '1 hour'
+                                  : m == 120
+                                      ? '2 hours (default)'
+                                      : m == 180
+                                          ? '3 hours'
+                                          : m == 240
+                                              ? '4 hours'
+                                              : '$m minutes'),
+                            ))
+                        .toList(),
+                    onChanged: (v) {
+                      if (v == null) return;
+                      setState(() {
+                        _sessionTimeoutMinutes = v;
+                        _dirty = true;
+                      });
+                    },
+                    decoration: const InputDecoration(
+                      labelText: 'Auto sign-out after inactivity',
+                      helperText:
+                          'Users are signed out after this period with no activity.',
                     ),
                   ),
 

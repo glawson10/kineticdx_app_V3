@@ -5,6 +5,8 @@ import * as admin from "firebase-admin";
 export type AuditEventType =
   | "clinicalNote.created"
   | "clinicalNote.updated"
+  | "clinicalNote.finalized"
+  | "clinicalNote.unfinalized"
   | "note.created"
   | "note.signed"
   | "note.amended"
@@ -28,7 +30,9 @@ export type AuditEventType =
   | "audit.exported"
   | "audit.closureOverride.exported"
   // ✅ Flutter audit screen expects:
-  | "appointment.closed_override";
+  | "appointment.closed_override"
+  | "staff.profile.updated"
+  | "staff.availability.updated";
 
 export type AuditEvent = {
   type: AuditEventType | string;
@@ -112,6 +116,21 @@ async function resolveActorDisplayName(
   }
 }
 
+function removeUndefined(obj: Record<string, any>): Record<string, any> {
+  const cleaned: Record<string, any> = {};
+  for (const [key, value] of Object.entries(obj)) {
+    if (value !== undefined) {
+      // Recursively clean nested objects
+      if (value && typeof value === "object" && !Array.isArray(value) && !(value instanceof admin.firestore.Timestamp)) {
+        cleaned[key] = removeUndefined(value);
+      } else {
+        cleaned[key] = value;
+      }
+    }
+  }
+  return cleaned;
+}
+
 export async function writeAuditEvent(db: Firestore, clinicId: string, event: AuditEvent) {
   const actorUid = safeStr(event.actorUid);
 
@@ -119,10 +138,76 @@ export async function writeAuditEvent(db: Firestore, clinicId: string, event: Au
     safeStr(event.actorDisplayName) ||
     (actorUid ? await resolveActorDisplayName(db, clinicId, actorUid) : "");
 
-  await db.collection("clinics").doc(clinicId).collection("audit").add({
-    ...event,
+  // Filter out undefined values - Firestore doesn't accept undefined
+  const cleanEvent: Record<string, any> = {
+    type: event.type,
     actorUid,
     actorDisplayName: actorDisplayName || null,
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+  };
+
+  if (event.patientId) cleanEvent.patientId = event.patientId;
+  if (event.episodeId) cleanEvent.episodeId = event.episodeId;
+  if (event.noteId) cleanEvent.noteId = event.noteId;
+  if (event.appointmentId) cleanEvent.appointmentId = event.appointmentId;
+  if (event.metadata && Object.keys(event.metadata).length > 0) {
+    // Remove undefined values from metadata object
+    const cleanedMetadata = removeUndefined(event.metadata);
+    if (Object.keys(cleanedMetadata).length > 0) {
+      cleanEvent.metadata = cleanedMetadata;
+    }
+  }
+
+  await db.collection("clinics").doc(clinicId).collection("audit").add(cleanEvent);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Commit 04: Settings audit payload (do not drift)
+// clinics/{clinicId}/audit/{eventId}
+// { clinicId, eventType, actorUserId, entityPath, entityId, changes, createdAt }
+// Only store changed keys inside changes, not full entity snapshots.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type SettingsAuditEventType =
+  | "settings.clinic.updated"
+  | "settings.location.created"
+  | "settings.location.updated"
+  | "settings.location.deactivated"
+  | "settings.location.upserted"
+  | "settings.location.active_set"
+  | "settings.appointmentType.created"
+  | "settings.appointmentType.updated"
+  | "settings.apptType.upserted"
+  | "settings.calendarDisplay.updated"
+  | "settings.publicBooking.updated";
+
+export type SettingsAuditPayload = {
+  clinicId: string;
+  eventType: SettingsAuditEventType | string;
+  actorUserId: string;
+  entityPath: string;
+  entityId: string;
+  changes: Record<string, unknown>;
+  createdAt: admin.firestore.FieldValue;
+};
+
+export async function writeSettingsAuditEvent(
+  db: Firestore,
+  clinicId: string,
+  eventType: SettingsAuditEventType | string,
+  actorUserId: string,
+  entityPath: string,
+  entityId: string,
+  changes: Record<string, unknown>
+): Promise<void> {
+  const ref = db.collection("clinics").doc(clinicId).collection("audit").doc();
+  await ref.set({
+    clinicId,
+    eventType,
+    actorUserId: (actorUserId ?? "").toString().trim(),
+    entityPath,
+    entityId,
+    changes: changes ?? {},
     createdAt: admin.firestore.FieldValue.serverTimestamp(),
   });
 }

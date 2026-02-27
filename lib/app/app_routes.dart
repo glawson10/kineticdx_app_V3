@@ -33,7 +33,7 @@ class AppRoutes {
   static const String intakeStart = '/intake/start';
 
   /// ✅ General questionnaire token entry (public)
-  /// Example: /q/general/<token>
+  /// Example: /q/general/`<token>`
   static const String generalQuestionnaireTokenBase = '/q/general';
 
   // ─────────────────────────────
@@ -50,4 +50,24 @@ class AppRoutes {
   /// Accept invite (auth required). Token in query: ?token=...
   /// Supports composite token: clinicId.rawToken
   static const String acceptInvite = '/invite/accept';
+
+  // ─────────────────────────────
+  // Settings (under /c/{clinicId}, auth + membership required)
+  // ─────────────────────────────
+
+  /// Settings home. Deep link: /c/{clinicId}/settings
+  static String settingsHome(String clinicId) => '/c/$clinicId/settings';
+
+  /// Settings section. Deep link: /c/{clinicId}/settings/{section}
+  static String settingsSection(String clinicId, String section) =>
+      '/c/$clinicId/settings/$section';
+
+  /// Section slugs for settings left nav (for routing / deep links).
+  static const String settingsClinic = 'clinic';
+  static const String settingsLocations = 'locations';
+  static const String settingsTeam = 'team';
+  static const String settingsScheduling = 'scheduling';
+  static const String settingsCommunication = 'communication';
+  static const String settingsBilling = 'billing';
+  static const String settingsData = 'data';
 }

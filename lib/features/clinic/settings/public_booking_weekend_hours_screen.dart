@@ -1,6 +1,11 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
+import '../../../data/repositories/public_booking_settings_repository.dart';
+
+/// Weekend hours for public booking. Commit 15: reads from Firestore;
+/// writes via settingsUpdatePublicBookingConfig callable only (no direct Firestore write).
 class PublicBookingWeekendHoursScreen extends StatefulWidget {
   final String clinicId;
 
@@ -128,22 +133,20 @@ class _PublicBookingWeekendHoursScreenState
   }
 
   Map<String, dynamic> _buildWeeklyHoursPatch() {
-    // We only patch sat/sun (leave everything else untouched).
-    final patch = <String, dynamic>{};
-
-    patch['weeklyHours.sat'] = _satOpen
-        ? [
-            {'start': _toHm(_satStart), 'end': _toHm(_satEnd)}
-          ]
-        : [];
-
-    patch['weeklyHours.sun'] = _sunOpen
-        ? [
-            {'start': _toHm(_sunStart), 'end': _toHm(_sunEnd)}
-          ]
-        : [];
-
-    return patch;
+    return {
+      'weeklyHours': <String, dynamic>{
+        'sat': _satOpen
+            ? [
+                {'start': _toHm(_satStart), 'end': _toHm(_satEnd)}
+              ]
+            : [],
+        'sun': _sunOpen
+            ? [
+                {'start': _toHm(_sunStart), 'end': _toHm(_sunEnd)}
+              ]
+            : [],
+      },
+    };
   }
 
   String? _validate() {
@@ -169,9 +172,9 @@ class _PublicBookingWeekendHoursScreenState
     });
 
     try {
-      // Merge patch into existing doc
+      final repo = context.read<PublicBookingSettingsRepository>();
       final patch = _buildWeeklyHoursPatch();
-      await _docRef.set(patch, SetOptions(merge: true));
+      await repo.updateSettings(widget.clinicId, patch);
 
       if (!mounted) return;
       setState(() => _saving = false);
@@ -326,8 +329,8 @@ class _PublicBookingWeekendHoursScreenState
                   child: Padding(
                     padding: EdgeInsets.all(12),
                     child: Text(
-                      'This updates clinics/{clinicId}/settings/publicBooking.weeklyHours.sat/sun.\n'
-                      'Your public slot listing + booking validation will reflect it immediately.',
+                      'Updates public booking weekend hours via callable.\n'
+                      'Your public slot listing + booking validation will reflect it after the mirror runs.',
                     ),
                   ),
                 ),

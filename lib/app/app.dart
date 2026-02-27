@@ -8,6 +8,7 @@
 // - If you have something like `static const routes = { '/x': (_) => ... }`
 //   in app_routes.dart or elsewhere, change it to `static final` (or remove const).
 
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -17,14 +18,19 @@ import 'clinic_context.dart';
 import 'clinic_session_scope.dart';
 import 'app_routes.dart';
 
+import '../data/repositories/appointment_types_repository.dart';
 import '../data/repositories/appointments_repository.dart';
+import '../data/repositories/public_booking_settings_repository.dart';
+import '../data/repositories/calendar_display_settings_repository.dart';
 import '../data/repositories/memberships_repository.dart';
 import '../data/repositories/services_repository.dart';
 import '../data/repositories/clinic_repository.dart';
+import '../data/repositories/locations_repository.dart';
 
 // Staff repos
 import '../data/repositories/staff_repository.dart';
 import '../data/repositories/staff_profile_repository.dart';
+import '../data/repositories/waitlist_repository.dart';
 
 // Public UI
 import '../features/public/ui/intro_screen.dart';
@@ -326,13 +332,26 @@ class MyApp extends StatelessWidget {
   // Router
   // ---------------------------------------------------------------------------
 
-  /// Returns clinicId if path is /c/{clinicId}, else null.
+  /// Returns clinicId if path is /c/{clinicId}[ anything], else null.
   String? _clinicIdFromPortalPath(String normalizedPath) {
     if (!normalizedPath.startsWith('/c/')) return null;
     final segments = normalizedPath.split('/').where((s) => s.isNotEmpty).toList();
     if (segments.length >= 2 && segments[0] == 'c') {
       final id = segments[1].trim();
       return id.isEmpty ? null : id;
+    }
+    return null;
+  }
+
+  /// If path is /c/{clinicId}/settings or /c/{clinicId}/settings/{section},
+  /// returns '' for settings home (default section) or the section slug (e.g. "locations").
+  /// Returns null when path is just /c/{clinicId} (no settings deep link).
+  String? _settingsSectionFromPortalPath(String normalizedPath) {
+    if (!normalizedPath.startsWith('/c/')) return null;
+    final segments = normalizedPath.split('/').where((s) => s.isNotEmpty).toList();
+    if (segments.length >= 3 && segments[0] == 'c' && segments[2] == 'settings') {
+      if (segments.length == 3) return ''; // open settings home, default section
+      if (segments.length >= 4) return segments[3];
     }
     return null;
   }
@@ -353,27 +372,28 @@ class MyApp extends StatelessWidget {
       _log('   kReleaseMode=$kReleaseMode kDebugMode=$kDebugMode');
     }
 
-    // Clinic-specific login portal: /c/{clinicId}
+    // Clinic-specific login portal: /c/{clinicId} or /c/{clinicId}/settings[/section]
     final portalClinicId = _clinicIdFromPortalPath(normalizedPath);
     if (portalClinicId != null) {
+      final settingsSection = _settingsSectionFromPortalPath(normalizedPath);
       return MaterialPageRoute(
         settings: settings,
-        builder: (_) => AuthGate(clinicId: portalClinicId),
+        builder: (_) => AuthGate(
+          clinicId: portalClinicId,
+          initialSettingsSection: settingsSection,
+        ),
       );
     }
 
     switch (normalizedPath) {
       case '/': {
         final clinicId = _resolveClinicIdFromBrowserQuery();
-        final corp = _resolveCorpFromBrowserQuery();
+        _resolveCorpFromBrowserQuery(); // used for side effect / future use
 
         if (clinicId != null && clinicId.isNotEmpty) {
           return MaterialPageRoute(
             settings: settings,
-            builder: (_) => IntroScreen(
-              clinicId: clinicId,
-              corporateCode: corp,
-            ),
+            builder: (_) => const PublicHomeScreen(),
           );
         }
 
@@ -391,15 +411,9 @@ class MyApp extends StatelessWidget {
       }
 
       case AppRoutes.publicIntro: {
-        final clinicId = _clinicIdFor(settings, routeUri);
-        final corp = _corpFor(settings, routeUri);
-
         return MaterialPageRoute(
           settings: settings,
-          builder: (_) => IntroScreen(
-            clinicId: clinicId,
-            corporateCode: corp,
-          ),
+          builder: (_) => const PublicHomeScreen(),
         );
       }
 
@@ -527,11 +541,16 @@ class MyApp extends StatelessWidget {
     return MultiProvider(
       providers: [
         Provider<MembershipsRepository>(create: (_) => MembershipsRepository()),
+        Provider<AppointmentTypesRepository>(create: (_) => AppointmentTypesRepository(FirebaseFirestore.instance)),
         Provider<AppointmentsRepository>(create: (_) => AppointmentsRepository()),
+        Provider<PublicBookingSettingsRepository>(create: (_) => PublicBookingSettingsRepository(FirebaseFirestore.instance)),
+        Provider<CalendarDisplaySettingsRepository>(create: (_) => CalendarDisplaySettingsRepository()),
         Provider<ServicesRepository>(create: (_) => ServicesRepository()),
         Provider<ClinicRepository>(create: (_) => ClinicRepository()),
+        Provider<LocationsRepository>(create: (_) => LocationsRepository()),
         Provider<StaffRepository>(create: (_) => StaffRepository()),
         Provider<StaffProfileRepository>(create: (_) => StaffProfileRepository()),
+        Provider<WaitlistRepository>(create: (_) => WaitlistRepository()),
         ChangeNotifierProvider<ClinicContext>(create: (_) => ClinicContext()),
       ],
       child: ClinicSessionScope(
@@ -541,6 +560,13 @@ class MyApp extends StatelessWidget {
           theme: ThemeData(
             useMaterial3: true,
             fontFamily: 'OpenSans',
+            appBarTheme: const AppBarTheme(
+              titleTextStyle: TextStyle(
+                fontFamily: 'OpenSans',
+                fontSize: 20,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
           ),
           initialRoute: initialRouteFull,
           onGenerateRoute: _onGenerateRoute,

@@ -1,6 +1,6 @@
 // functions/src/index.ts
 import * as admin from "firebase-admin";
-import { onCall } from "firebase-functions/v2/https";
+import { onCall, onRequest } from "firebase-functions/v2/https";
 import type { CallableRequest } from "firebase-functions/v2/https";
 import { defineSecret } from "firebase-functions/params";
 
@@ -31,6 +31,11 @@ import { createClinic } from "./clinic/createClinic";
 import { inviteMember } from "./clinic/inviteMember";
 import { acceptInvite } from "./clinic/acceptInvite";
 import { updateClinicProfile } from "./clinic/updateClinicProfile";
+import { upsertLocation } from "./clinic/settings/upsertLocation";
+import { setLocationActive } from "./clinic/settings/setLocationActive";
+import { upsertAppointmentType } from "./clinic/settings/upsertAppointmentType";
+import { updateCalendarDisplayConfig } from "./clinic/settings/updateCalendarDisplayConfig";
+import { updatePublicBookingConfig } from "./clinic/settings/updatePublicBookingConfig";
 import { setMembershipStatus } from "./clinic/setMembershipStatus";
 import { updateMember } from "./clinic/updateMember";
 import { syncMyDisplayName } from "./clinic/syncMyDisplayName";
@@ -48,9 +53,13 @@ import { deleteClosure } from "./clinic/closures/deleteClosure";
 // Booking / patients / episodes
 // ─────────────────────────────
 import { createAppointment } from "./clinic/createAppointment";
+import { createAppointmentSeries } from "./clinic/appointments/createAppointmentSeries";
 import { cancelAppointment } from "./clinic/cancelAppointment";
 import { deleteAppointment } from "./clinic/deleteAppointment";
 import { updateAppointment } from "./clinic/updateAppointment";
+import { updateAppointmentOccurrence } from "./clinic/appointments/updateAppointmentOccurrence";
+import { updateAppointmentSeries } from "./clinic/appointments/updateAppointmentSeries";
+import { splitAppointmentSeries } from "./clinic/appointments/splitAppointmentSeries";
 import { updateAppointmentStatus } from "./clinic/updateAppointmentStatus";
 
 import { createPatient } from "./clinic/patients/createPatient";
@@ -67,6 +76,7 @@ import { closeEpisode } from "./clinic/episode/closeEpisode";
 // ─────────────────────────────
 import { createClinicalNote } from "./clinic/notes/createClinicalNote";
 import { amendClinicalNote } from "./clinic/notes/amendClinicalNote";
+import { finalizeSoapNote, unfinalizeSoapNote } from "./clinic/notes/finalizeSoapNote";
 
 // ─────────────────────────────
 // Registries
@@ -82,6 +92,19 @@ import { deleteOutcomeMeasure } from "./clinic/registries/deleteOutcomeMeasure";
 import { submitAssessment } from "./clinic/assessments/submitAssessment";
 import { generateAssessmentPdf } from "./clinic/assessments/generateAssessmentPdf";
 import { getAssessmentPack } from "./clinic/assessments/getAssessmentPack";
+
+// ─────────────────────────────
+// Billing
+// ─────────────────────────────
+import { createCharge } from "./clinic/billing/createCharge";
+import { createInvoiceDraft } from "./clinic/billing/createInvoiceDraft";
+import { issueInvoice } from "./clinic/billing/issueInvoice";
+import { recordManualPayment } from "./clinic/billing/recordManualPayment";
+import { issueCreditNote } from "./clinic/billing/issueCreditNote";
+import { updateBillingSettings } from "./clinic/billing/updateBillingSettings";
+import { createStripePaymentIntent } from "./clinic/billing/createStripePaymentIntent";
+import { handleStripeWebhook } from "./clinic/billing/stripeWebhook";
+import { generateInvoicePdf, getInvoicePdfDownloadUrl } from "./clinic/billing/generateInvoicePdf";
 
 
 
@@ -103,7 +126,7 @@ import { exportClosureOverrideAuditReport } from "./clinic/audit/exportClosureOv
 // Public booking
 // ─────────────────────────────
 import { bootstrapPublicBookingSettings } from "./clinic/bootstrapPublicBookingSettings";
-import { listPublicSlotsFn } from "./public/listPublicSlots";
+import { listPublicSlotsFn, getPublicMonthAvailabilityFn } from "./public/listPublicSlots";
 import {
   getManageContext,
   cancelBookingWithToken,
@@ -141,9 +164,36 @@ export const acceptInviteFn = onCall(
   acceptInvite
 );
 
+// Commit 04: settings.* callable naming (filterable in logs)
+export const settingsUpdateClinicProfile = onCall(
+  { region: REGION, cors: true },
+  updateClinicProfile
+);
+// Legacy alias for backward compatibility
 export const updateClinicProfileFn = onCall(
   { region: REGION, cors: true },
   updateClinicProfile
+);
+
+export const settingsUpsertLocation = onCall(
+  { region: REGION, cors: true },
+  upsertLocation
+);
+export const settingsSetLocationActive = onCall(
+  { region: REGION, cors: true },
+  setLocationActive
+);
+export const settingsUpsertAppointmentType = onCall(
+  { region: REGION, cors: true },
+  upsertAppointmentType
+);
+export const settingsUpdateCalendarDisplayConfig = onCall(
+  { region: REGION, cors: true },
+  updateCalendarDisplayConfig
+);
+export const settingsUpdatePublicBookingConfig = onCall(
+  { region: REGION, cors: true },
+  updatePublicBookingConfig
 );
 
 export const setMembershipStatusFn = onCall(
@@ -192,6 +242,11 @@ export const createAppointmentFn = onCall(
   createAppointment
 );
 
+export const createAppointmentSeriesFn = onCall(
+  { region: REGION, cors: true },
+  createAppointmentSeries
+);
+
 export const deleteAppointmentFn = onCall(
   { region: REGION, cors: true },
   deleteAppointment
@@ -200,6 +255,21 @@ export const deleteAppointmentFn = onCall(
 export const updateAppointmentFn = onCall(
   { region: REGION, cors: true },
   updateAppointment
+);
+
+export const updateAppointmentOccurrenceFn = onCall(
+  { region: REGION, cors: true },
+  updateAppointmentOccurrence
+);
+
+export const updateAppointmentSeriesFn = onCall(
+  { region: REGION, cors: true },
+  updateAppointmentSeries
+);
+
+export const splitAppointmentSeriesFn = onCall(
+  { region: REGION, cors: true },
+  splitAppointmentSeries
 );
 
 export const updateAppointmentStatusFn = onCall(
@@ -260,6 +330,16 @@ export const amendClinicalNoteFn = onCall(
   amendClinicalNote
 );
 
+export const finalizeSoapNoteFn = onCall(
+  { region: REGION, cors: true },
+  finalizeSoapNote
+);
+
+export const unfinalizeSoapNoteFn = onCall(
+  { region: REGION, cors: true },
+  unfinalizeSoapNote
+);
+
 // Registries
 export const upsertClinicalTestFn = onCall(
   { region: REGION, cors: true },
@@ -297,6 +377,67 @@ export const generateAssessmentPdfFn = onCall(
   generateAssessmentPdf
 );
 
+// Billing
+export const billingCreateChargeFn = onCall(
+  { region: REGION, cors: true },
+  createCharge
+);
+
+export const billingCreateInvoiceDraftFn = onCall(
+  { region: REGION, cors: true },
+  createInvoiceDraft
+);
+
+export const billingIssueInvoiceFn = onCall(
+  { region: REGION, cors: true },
+  issueInvoice
+);
+
+export const billingRecordManualPaymentFn = onCall(
+  { region: REGION, cors: true },
+  recordManualPayment
+);
+
+export const billingIssueCreditNoteFn = onCall(
+  { region: REGION, cors: true },
+  issueCreditNote
+);
+
+export const billingUpdateSettingsFn = onCall(
+  { region: REGION, cors: true },
+  updateBillingSettings
+);
+
+export const billingCreateStripePaymentIntentFn = onCall(
+  { region: REGION, cors: true },
+  createStripePaymentIntent
+);
+
+export const billingGenerateInvoicePdfFn = onCall(
+  { region: REGION, cors: true, memory: "2GiB" as const, timeoutSeconds: 120 },
+  generateInvoicePdf
+);
+
+export const billingGetInvoicePdfDownloadUrlFn = onCall(
+  { region: REGION, cors: true },
+  getInvoicePdfDownloadUrl
+);
+
+// Stripe webhook (HTTP function, not callable)
+// Note: Stripe webhooks require raw body for signature verification
+// May need to configure body parsing in Firebase Functions settings
+export const billingStripeWebhookFn = onRequest(
+  { 
+    region: REGION, 
+    cors: true,
+    // Raw body needed for Stripe signature verification
+    // Note: May need to configure in Firebase Console or use express middleware
+  },
+  async (req, res) => {
+    await handleStripeWebhook(req, res);
+  }
+);
+
 // Intake
 export const submitIntakeSessionFn = onCall(
   { region: REGION, cors: true },
@@ -318,11 +459,12 @@ export { onPublicBookingSettingsWrite } from "./public/onPublicBookingSettingsWr
 export { onAppointmentWrite_toBusyBlock } from "./availability/onAppointmentWrite_toBusyBlock";
 export { mirrorPractitionerToPublic } from "./projections/practitionerPublicMirror";
 export { onClinicalNoteWrite } from "./clinic/notes/onClinicalNoteWrite";
+export { onSoapNoteWrite } from "./clinic/notes/onSoapNoteWrite";
 
 // ─────────────────────────────
 // Public booking (NO AUTH)
 // ─────────────────────────────
-export { listPublicSlotsFn };
+export { listPublicSlotsFn, getPublicMonthAvailabilityFn };
 export const getManageContextFn = getManageContext;
 export const cancelBookingWithTokenFn = cancelBookingWithToken;
 export const rescheduleBookingWithTokenFn = rescheduleBookingWithToken;
@@ -330,6 +472,8 @@ export const rescheduleBookingWithTokenFn = rescheduleBookingWithToken;
 export { testCallable } from "./testCallable";
 export { onClinicCreatedProvisionDefaults } from "./clinic/settings/provisionClinicDefaults";
 export { backfillNotificationsSettings } from "./clinic/settings/backfillNotifications";
+export { backfillRoles } from "./clinic/settings/backfillRoles";
+export { backfillMemberPermissions } from "./clinic/settings/backfillMemberPermissions";
 export { consumeIntakeInviteFn } from "./intake/consumeIntakeInviteFn";
 
 export const bootstrapPublicBookingSettingsFn = onCall(

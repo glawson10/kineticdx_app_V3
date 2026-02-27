@@ -28,9 +28,18 @@ class StaffMemberScreen extends StatefulWidget {
   const StaffMemberScreen({
     super.key,
     required this.memberUid,
+    this.clinicId,
+    this.embeddedInSettings = false,
+    this.initialTab,
   });
 
   final String memberUid;
+  /// When set, used instead of ClinicContext (e.g. when opened from Settings).
+  final String? clinicId;
+  /// When true, opened from Settings → Team → Members: minimal AppBar, no legacy framing.
+  final bool embeddedInSettings;
+  /// Optional initial tab key (future use); ignored for now.
+  final String? initialTab;
 
   @override
   State<StaffMemberScreen> createState() => _StaffMemberScreenState();
@@ -44,8 +53,10 @@ class _StaffMemberScreenState extends State<StaffMemberScreen>
   // Profile controllers (Phase A)
   // ─────────────────────────────
   final _displayNameCtl = TextEditingController();
+  final _titleCtl = TextEditingController();
   final _phoneCtl = TextEditingController();
   final _emailCtl = TextEditingController();
+  String? _experienceLevel; // 'junior' or 'senior'
 
   bool _savingProfile = false;
   String? _saveErr;
@@ -93,6 +104,7 @@ class _StaffMemberScreenState extends State<StaffMemberScreen>
   void dispose() {
     _tabs.dispose();
     _displayNameCtl.dispose();
+    _titleCtl.dispose();
     _phoneCtl.dispose();
     _emailCtl.dispose();
     super.dispose();
@@ -108,15 +120,23 @@ class _StaffMemberScreenState extends State<StaffMemberScreen>
   bool _profileHydrated = false;
   void _hydrateProfileControllersIfNeeded({
     required String displayName,
+    required String title,
     required String phone,
     required String email,
+    String? experienceLevel,
   }) {
     if (_profileHydrated) return;
-    if (displayName.isEmpty && phone.isEmpty && email.isEmpty) return;
+    if (displayName.isEmpty && title.isEmpty && phone.isEmpty && email.isEmpty && experienceLevel == null) {
+      return;
+    }
 
     _displayNameCtl.text = displayName;
+    _titleCtl.text = title;
     _phoneCtl.text = phone;
     _emailCtl.text = email;
+    if (experienceLevel != null) {
+      _experienceLevel = experienceLevel;
+    }
 
     _profileHydrated = true;
   }
@@ -207,7 +227,10 @@ class _StaffMemberScreenState extends State<StaffMemberScreen>
   @override
   Widget build(BuildContext context) {
     final clinicCtx = context.watch<ClinicContext>();
-    final clinicId = clinicCtx.clinicId;
+    final clinicId = (widget.clinicId?.trim().isNotEmpty == true
+            ? widget.clinicId!.trim()
+            : clinicCtx.clinicId)
+        .trim();
 
     final guard = PermissionGuard(clinicCtx.permissions);
     final canManage = guard.has('members.manage');
@@ -216,7 +239,7 @@ class _StaffMemberScreenState extends State<StaffMemberScreen>
     final staffRepo = context.read<StaffRepository>();
     final profileRepo = context.read<StaffProfileRepository>();
 
-    if (clinicId.trim().isEmpty) {
+    if (clinicId.isEmpty) {
       return const Scaffold(
         body: Center(child: Text('No clinic selected.')),
       );
@@ -228,9 +251,13 @@ class _StaffMemberScreenState extends State<StaffMemberScreen>
       );
     }
 
+    final appBarTitle = widget.embeddedInSettings
+        ? 'Practitioner profile'
+        : 'Staff member';
+
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Staff member'),
+        title: Text(appBarTitle),
         bottom: TabBar(
           controller: _tabs,
           tabs: const [
@@ -283,8 +310,8 @@ class _StaffMemberScreenState extends State<StaffMemberScreen>
           final isSelf =
               clinicCtx.hasUid && clinicCtx.uid.trim() == widget.memberUid.trim();
 
-          // Phase A: only managers can edit others.
-          final canEditThisProfile = canManage;
+          // Edit requires members.manage; self can edit own profile (existing permission).
+          final canEditThisProfile = canManage || isSelf;
 
           final allowSuspend = canManage && !isSelf;
 
@@ -328,6 +355,16 @@ class _StaffMemberScreenState extends State<StaffMemberScreen>
                   }
                 },
               ),
+              if (!canManage)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                  child: Text(
+                    'You don\'t have permission to edit practitioner settings.',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        ),
+                  ),
+                ),
               const Divider(height: 1),
               Expanded(
                 child: TabBarView(
@@ -343,6 +380,7 @@ class _StaffMemberScreenState extends State<StaffMemberScreen>
                             profileRepo: profileRepo,
                             staffRepo: staffRepo,
                             displayNameCtl: _displayNameCtl,
+                            titleCtl: _titleCtl,
                             phoneCtl: _phoneCtl,
                             emailCtl: _emailCtl,
                             enabled: canEditThisProfile,
@@ -352,6 +390,8 @@ class _StaffMemberScreenState extends State<StaffMemberScreen>
                                 setState(() => _savingProfile = v),
                             onSetError: (v) => setState(() => _saveErr = v),
                             hydrateIfNeeded: _hydrateProfileControllersIfNeeded,
+                            getExperienceLevel: () => _experienceLevel,
+                            setExperienceLevel: (v) => setState(() => _experienceLevel = v),
                             onSaved: () => _toast('Profile saved'),
                           )
                         : const SizedBox.shrink(),
@@ -425,6 +465,7 @@ class _ProfileTabBody extends StatelessWidget {
     required this.profileRepo,
     required this.staffRepo,
     required this.displayNameCtl,
+    required this.titleCtl,
     required this.phoneCtl,
     required this.emailCtl,
     required this.enabled,
@@ -433,6 +474,8 @@ class _ProfileTabBody extends StatelessWidget {
     required this.onSetSaving,
     required this.onSetError,
     required this.hydrateIfNeeded,
+    required this.getExperienceLevel,
+    required this.setExperienceLevel,
     required this.onSaved,
   });
 
@@ -442,6 +485,7 @@ class _ProfileTabBody extends StatelessWidget {
   final StaffRepository staffRepo;
 
   final TextEditingController displayNameCtl;
+  final TextEditingController titleCtl;
   final TextEditingController phoneCtl;
   final TextEditingController emailCtl;
 
@@ -454,9 +498,14 @@ class _ProfileTabBody extends StatelessWidget {
 
   final void Function({
     required String displayName,
+    required String title,
     required String phone,
     required String email,
+    String? experienceLevel,
   }) hydrateIfNeeded;
+
+  final String? Function() getExperienceLevel;
+  final void Function(String?) setExperienceLevel;
 
   final VoidCallback onSaved;
 
@@ -467,20 +516,26 @@ class _ProfileTabBody extends StatelessWidget {
       builder: (context, snap) {
         final data = snap.data?.data();
 
+        final experienceLevel = (data?['experienceLevel'] ?? '').toString().trim();
         hydrateIfNeeded(
           displayName: (data?['displayName'] ?? '').toString(),
+          title: (data?['title'] ?? '').toString(),
           phone: (data?['contact'] is Map)
               ? ((data?['contact']?['phone'] ?? '').toString())
               : '',
           email: (data?['contact'] is Map)
               ? ((data?['contact']?['email'] ?? '').toString())
               : '',
+          experienceLevel: experienceLevel.isNotEmpty ? experienceLevel : null,
         );
 
         return _ProfileTab(
           displayNameCtl: displayNameCtl,
+          titleCtl: titleCtl,
           phoneCtl: phoneCtl,
           emailCtl: emailCtl,
+          experienceLevel: getExperienceLevel(),
+          onExperienceLevelChanged: setExperienceLevel,
           enabled: enabled,
           saving: saving,
           error: error,
@@ -491,17 +546,24 @@ class _ProfileTabBody extends StatelessWidget {
             onSetError(null);
 
             try {
+              final patch = <String, dynamic>{
+                'schemaVersion': 1,
+                'displayName': displayNameCtl.text.trim(),
+                if (titleCtl.text.trim().isNotEmpty)
+                  'title': titleCtl.text.trim(),
+                'contact': <String, dynamic>{
+                  'phone': phoneCtl.text.trim(),
+                  'email': emailCtl.text.trim(),
+                },
+              };
+              final level = getExperienceLevel();
+              if (level != null && level.isNotEmpty) {
+                patch['experienceLevel'] = level;
+              }
               await profileRepo.upsertStaffProfile(
                 clinicId: clinicId,
                 uid: memberUid,
-                patch: <String, dynamic>{
-                  'schemaVersion': 1,
-                  'displayName': displayNameCtl.text.trim(),
-                  'contact': <String, dynamic>{
-                    'phone': phoneCtl.text.trim(),
-                    'email': emailCtl.text.trim(),
-                  },
-                },
+                patch: patch,
               );
 
               final name = displayNameCtl.text.trim();
@@ -725,8 +787,11 @@ class _MemberHeader extends StatelessWidget {
 class _ProfileTab extends StatelessWidget {
   const _ProfileTab({
     required this.displayNameCtl,
+    required this.titleCtl,
     required this.phoneCtl,
     required this.emailCtl,
+    required this.experienceLevel,
+    required this.onExperienceLevelChanged,
     required this.enabled,
     required this.saving,
     required this.error,
@@ -734,8 +799,11 @@ class _ProfileTab extends StatelessWidget {
   });
 
   final TextEditingController displayNameCtl;
+  final TextEditingController titleCtl;
   final TextEditingController phoneCtl;
   final TextEditingController emailCtl;
+  final String? experienceLevel;
+  final void Function(String?) onExperienceLevelChanged;
   final bool enabled;
   final bool saving;
   final String? error;
@@ -765,6 +833,30 @@ class _ProfileTab extends StatelessWidget {
           enabled: effectiveEnabled,
           decoration: const InputDecoration(labelText: 'Email'),
           keyboardType: TextInputType.emailAddress,
+        ),
+        const SizedBox(height: 16),
+        const Text(
+          'Experience Level',
+          style: TextStyle(fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(height: 8),
+        RadioListTile<String>(
+          title: const Text('Junior'),
+          subtitle: const Text('Simpler defaults (e.g. hide differential diagnoses)'),
+          value: 'junior',
+          groupValue: experienceLevel ?? 'senior',
+          onChanged: effectiveEnabled
+              ? (v) => onExperienceLevelChanged(v)
+              : null,
+        ),
+        RadioListTile<String>(
+          title: const Text('Senior'),
+          subtitle: const Text('Full IFOMT-level options'),
+          value: 'senior',
+          groupValue: experienceLevel ?? 'senior',
+          onChanged: effectiveEnabled
+              ? (v) => onExperienceLevelChanged(v)
+              : null,
         ),
         const SizedBox(height: 16),
         if (!enabled) ...[

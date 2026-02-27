@@ -27,7 +27,7 @@ class ClinicRepository {
     required String clinicId,
     required Map<String, dynamic> patch,
   }) async {
-    final callable = _functions.httpsCallable('updateClinicProfileFn');
+    final callable = _functions.httpsCallable('settingsUpdateClinicProfile');
 
     // Ensure JSON-safe map (no controllers, timestamps, etc accidentally)
     final safePatch = <String, dynamic>{};
@@ -44,11 +44,11 @@ class ClinicRepository {
       final data = res.data;
       if (data is Map && data['ok'] == true) return;
 
-      throw StateError('updateClinicProfileFn returned unexpected payload: $data');
+      throw StateError('settingsUpdateClinicProfile returned unexpected payload: $data');
     } on FirebaseFunctionsException catch (e) {
       // Show clean cloud-function errors
       final msg = (e.message ?? e.code).trim();
-      throw StateError('updateClinicProfileFn failed: $msg');
+      throw StateError('settingsUpdateClinicProfile failed: $msg');
     }
   }
 

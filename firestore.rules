@@ -73,18 +73,23 @@ service cloud.firestore {
     // ─────────────────────────────
     match /clinics/{clinicId} {
 
-      // Clinic root
+      // Clinic root (calendar needs appearance/bookingStructure; allow schedule.read too)
       allow create, delete: if false;
-      allow read: if hasPerm(clinicId, "settings.read");
+      allow read:
+        if hasPerm(clinicId, "settings.read")
+        || hasPerm(clinicId, "schedule.read");
       allow update: if hasPerm(clinicId, "settings.write");
 
       // ─────────────────────────────
       // Clinic Settings
       // clinics/{clinicId}/settings/{docId}
+      // calendarDisplay and publicBooking are callable-only (Commit 13, Commit 15).
       // ─────────────────────────────
       match /settings/{docId} {
         allow read: if hasPerm(clinicId, "settings.read");
-        allow create, update, delete: if hasPerm(clinicId, "settings.write");
+        allow create, update, delete: if hasPerm(clinicId, "settings.write")
+            && docId != "calendarDisplay"
+            && docId != "publicBooking";
       }
 
       // Notes settings (Phase 5)
@@ -141,6 +146,18 @@ service cloud.firestore {
         allow write: if hasPerm(clinicId, "members.manage");
       }
 
+      // Locations (Commit 06: read-only list; writes via callable in Commit 07)
+      match /locations/{locationId} {
+        allow read: if hasPerm(clinicId, "settings.read");
+        allow write: if false;
+      }
+
+      // Appointment types (Commit 11: read-only list; writes callable-only in Commit 12)
+      match /appointmentTypes/{id} {
+        allow read: if hasPerm(clinicId, "settings.read");
+        allow write: if false;
+      }
+
       // ─────────────────────────────
       // Staff Profiles (HR-ish)
       // clinics/{clinicId}/staffProfiles/{uid}
@@ -173,6 +190,12 @@ service cloud.firestore {
   allow read: if hasPerm(clinicId, "schedule.read");
   allow create, update, delete: if false;
 }
+
+      // Appointment series (recurrence rule docs; function-only writes)
+      match /appointmentSeries/{seriesId} {
+        allow read: if hasPerm(clinicId, "schedule.read");
+        allow create, update, delete: if false;
+      }
 
       // ─────────────────────────────
       // Closures (calendar modifiers)
@@ -260,20 +283,28 @@ match /closures/{closureId} {
           allow create, update, delete: if hasPerm(clinicId, "patients.write");
         }
 
-        // Structured SOAP notes (Initial Assessment, follow-ups)
+        // Structured SOAP notes (SOAP only; legacy initial assessment docs remain)
         // Path: clinics/{clinicId}/patients/{patientId}/soapNotes/{noteId}
         match /soapNotes/{noteId} {
           allow read:
             if hasPerm(clinicId, "clinical.read")
             || hasPerm(clinicId, "notes.read");
 
-          allow create, update:
+          allow create:
             if hasPerm(clinicId, "clinical.write")
             || hasPerm(clinicId, "notes.write.own")
             || hasPerm(clinicId, "notes.write.any");
 
-          // Notes are immutable after finalize at the application layer;
-          // hard deletes are not allowed from clients.
+          // Update: draft notes editable by normal write perms; final notes
+          // only by privileged (notes.write.any or settings.write) for unfinalize.
+          allow update:
+            if (hasPerm(clinicId, "clinical.write")
+            || hasPerm(clinicId, "notes.write.own")
+            || hasPerm(clinicId, "notes.write.any"))
+            && (resource.data.status != 'final'
+            || hasPerm(clinicId, "notes.write.any")
+            || hasPerm(clinicId, "settings.write"));
+
           allow delete: if false;
         }
       }
@@ -331,6 +362,65 @@ match /closures/{closureId} {
 
         allow update: if false;
         allow delete: if false;
+      }
+
+      // ─────────────────────────────
+      // BILLING (function-authoritative)
+      // Paths: clinics/{clinicId}/billing/_/{collection}/{doc} (placeholder _ for subcollections)
+      // ─────────────────────────────
+      match /billing/_/settings/{docId} {
+        allow read: if hasPerm(clinicId, "manageBilling");
+        allow write: if false; // Function-only
+      }
+
+      match /billing/_/meta/{docId} {
+        allow read: if hasPerm(clinicId, "manageBilling") || hasPerm(clinicId, "viewFinancialReports");
+        allow write: if false;
+      }
+
+      match /billing/_/charges/{chargeId} {
+        allow read: if hasPerm(clinicId, "manageBilling") || hasPerm(clinicId, "viewFinancialReports");
+        allow write: if false; // Function-only
+      }
+
+      match /billing/_/invoices/{invoiceId} {
+        allow read: if hasPerm(clinicId, "manageBilling") || hasPerm(clinicId, "viewFinancialReports");
+        allow write: if false; // Function-only
+      }
+
+      match /billing/_/payments/{paymentId} {
+        allow read: if hasPerm(clinicId, "manageBilling") || hasPerm(clinicId, "viewFinancialReports");
+        allow write: if false; // Function-only
+      }
+
+      match /billing/_/creditNotes/{creditNoteId} {
+        allow read: if hasPerm(clinicId, "manageBilling") || hasPerm(clinicId, "viewFinancialReports");
+        allow write: if false; // Function-only
+      }
+
+      match /billing/_/refunds/{refundId} {
+        allow read: if hasPerm(clinicId, "manageBilling") || hasPerm(clinicId, "issueRefunds") || hasPerm(clinicId, "viewFinancialReports");
+        allow write: if false; // Function-only
+      }
+
+      match /billing/_/invoicees/{invoiceeId} {
+        allow read: if hasPerm(clinicId, "manageBilling") || hasPerm(clinicId, "viewFinancialReports");
+        allow write: if false; // Function-only (or allow if needed)
+      }
+
+      match /billing/_/audit/{eventId} {
+        allow read: if hasPerm(clinicId, "manageBilling") || hasPerm(clinicId, "viewFinancialReports");
+        allow write: if false; // Function-only
+      }
+
+      // Idempotency: function-only (no client read needed; list not exposed)
+      match /billing/_/idempotency/{key} {
+        allow read, write: if false;
+      }
+
+      // Stripe events: function-only
+      match /billing/_/stripeEvents/{eventId} {
+        allow read, write: if false;
       }
 
       // Default deny inside clinic
