@@ -21,6 +21,7 @@ import 'app_routes.dart';
 import '../data/repositories/appointment_types_repository.dart';
 import '../data/repositories/appointments_repository.dart';
 import '../data/repositories/public_booking_settings_repository.dart';
+import '../data/repositories/public_booking_mirror_repository.dart';
 import '../data/repositories/calendar_display_settings_repository.dart';
 import '../data/repositories/memberships_repository.dart';
 import '../data/repositories/services_repository.dart';
@@ -544,6 +545,7 @@ class MyApp extends StatelessWidget {
         Provider<AppointmentTypesRepository>(create: (_) => AppointmentTypesRepository(FirebaseFirestore.instance)),
         Provider<AppointmentsRepository>(create: (_) => AppointmentsRepository()),
         Provider<PublicBookingSettingsRepository>(create: (_) => PublicBookingSettingsRepository(FirebaseFirestore.instance)),
+        Provider<PublicBookingMirrorRepository>(create: (_) => PublicBookingMirrorRepository(FirebaseFirestore.instance)),
         Provider<CalendarDisplaySettingsRepository>(create: (_) => CalendarDisplaySettingsRepository()),
         Provider<ServicesRepository>(create: (_) => ServicesRepository()),
         Provider<ClinicRepository>(create: (_) => ClinicRepository()),

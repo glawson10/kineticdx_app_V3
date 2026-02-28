@@ -6,216 +6,151 @@ import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:url_launcher/url_launcher.dart';
+import 'package:provider/provider.dart';
 
 import '../../../app/app_routes.dart';
+import '../../booking/ui/public_booking_mirror_health_banner.dart';
+import '../../../ui/design_tokens.dart';
+import '../widgets/public_header.dart';
+import '../widgets/public_shell.dart';
+import '../widgets/public_contact_actions.dart';
+import '../widgets/inline_month_calendar.dart';
+import '../widgets/therapy_loading_indicator.dart';
 
-/// ---------------------------------------------------------------------------
-/// Public contact actions (top-right icons)
-///
-/// Reads from public mirror:
-///   clinics/{clinicId}/public/config/publicBooking/publicBooking
-///
-/// ✅ Supports BOTH schemas:
-/// A) Nested map:
-///   contact: { landingUrl?, websiteUrl?, email?, phone?, whatsapp? }
-/// B) Root keys (legacy/new):
-///   landingUrl, websiteUrl, email, phone, whatsapp
-///
-/// Icons shown:
-/// - Website (landingUrl else websiteUrl)
-/// - Email
-/// - WhatsApp (whatsapp if present; else phone used to build wa.me/digits)
-///
-/// If NOTHING is configured:
-/// - returns SizedBox.shrink() in release
-/// - in debug mode it can show a small "no links" pill so you can confirm it
-///   is mounted and the issue is data, not layout.
-/// ---------------------------------------------------------------------------
-class _PublicContactActions extends StatelessWidget {
-  final String clinicId;
+/// Selectable slot tile — fixed height, centered label, grid-friendly.
+class SlotTile extends StatefulWidget {
+  static const double height = 58;
 
-  /// When true, shows a small debug pill when no links are found.
-  /// Useful while wiring.
-  final bool debugWhenEmpty;
+  final String label;
+  final VoidCallback? onTap;
+  final bool corporate;
+  final bool selected;
+  final bool disabled;
+  /// Optional subtle badge (e.g. 'Earliest') shown below the time.
+  final String? badge;
 
-  const _PublicContactActions({
-    required this.clinicId,
-    this.debugWhenEmpty = false,
+  const SlotTile({
+    super.key,
+    required this.label,
+    this.onTap,
+    this.corporate = false,
+    this.selected = false,
+    this.disabled = false,
+    this.badge,
   });
 
-  DocumentReference<Map<String, dynamic>> get _publicBookingDoc =>
-      FirebaseFirestore.instance
-          .collection('clinics')
-          .doc(clinicId)
-          .collection('public')
-          .doc('config')
-          .collection('publicBooking')
-          .doc('publicBooking');
+  @override
+  State<SlotTile> createState() => _SlotTileState();
+}
 
-  static String _s(dynamic v) => (v ?? '').toString().trim();
+class _SlotTileState extends State<SlotTile> {
+  bool _hovered = false;
+  final FocusNode _focusNode = FocusNode();
 
-  static Uri? _tryParseUrl(String raw) {
-    final s = raw.trim();
-    if (s.isEmpty) return null;
-
-    final hasScheme = s.startsWith('http://') || s.startsWith('https://');
-    final normalized = hasScheme ? s : 'https://$s';
-
-    try {
-      final u = Uri.parse(normalized);
-      if (!u.hasScheme) return null;
-      return u;
-    } catch (_) {
-      return null;
-    }
+  @override
+  void initState() {
+    super.initState();
+    _focusNode.addListener(() => setState(() {}));
   }
 
-  static Uri? _mailto(String email) {
-    final e = email.trim();
-    if (e.isEmpty || !e.contains('@')) return null;
-    return Uri(scheme: 'mailto', path: e);
-  }
-
-  static Uri? _whatsappFrom(String whatsappOrPhone) {
-    final s = whatsappOrPhone.trim();
-    if (s.isEmpty) return null;
-
-    // Allow full links
-    if (s.startsWith('http://') || s.startsWith('https://')) {
-      return _tryParseUrl(s);
-    }
-    // Allow wa.me/...
-    if (s.startsWith('wa.me/')) return _tryParseUrl('https://$s');
-
-    // Otherwise treat as phone-like
-    final digits = s.replaceAll(RegExp(r'[^0-9]'), '');
-    if (digits.isEmpty) return null;
-    return Uri.parse('https://wa.me/$digits');
-  }
-
-  static Future<void> _launch(BuildContext context, Uri uri) async {
-    final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
-    if (!ok && context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not open: $uri')),
-      );
-    }
+  @override
+  void dispose() {
+    _focusNode.dispose();
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-      stream: _publicBookingDoc.snapshots(),
-      builder: (context, snap) {
-        final data = snap.data?.data() ?? const <String, dynamic>{};
+    final theme = Theme.of(context);
+    final primary = theme.colorScheme.primary;
+    final isInteractive = !widget.disabled && widget.onTap != null;
+    final existingColor = widget.corporate
+        ? Colors.orange.withValues(alpha: 0.25)
+        : (widget.selected ? primary.withValues(alpha: 0.5) : Colors.black12);
 
-        // ✅ Prefer nested contact map, but support root keys too.
-        final contact = (data['contact'] is Map)
-            ? Map<String, dynamic>.from(data['contact'] as Map)
-            : const <String, dynamic>{};
-
-        String pick(String key) {
-          final fromContact = _s(contact[key]);
-          if (fromContact.isNotEmpty) return fromContact;
-          return _s(data[key]);
-        }
-
-        final landingUrl = pick('landingUrl');
-        final websiteUrl = pick('websiteUrl');
-        final email = pick('email');
-        final phone = pick('phone');
-        final whatsapp = pick('whatsapp');
-
-        final Uri? webUri =
-            _tryParseUrl(landingUrl.isNotEmpty ? landingUrl : websiteUrl);
-        final Uri? mailUri = _mailto(email);
-
-        // ✅ WhatsApp preference: whatsapp field, else phone field
-        final waSource = whatsapp.isNotEmpty ? whatsapp : phone;
-        final Uri? waUri = _whatsappFrom(waSource);
-
-        final actions = <Widget>[];
-
-        if (webUri != null) {
-          actions.add(
-            IconButton(
-              tooltip: 'Website',
-              icon: const Icon(Icons.public),
-              onPressed: () => _launch(context, webUri),
-            ),
-          );
-        }
-
-        if (mailUri != null) {
-          actions.add(
-            IconButton(
-              tooltip: 'Email',
-              icon: const Icon(Icons.email_outlined),
-              onPressed: () => _launch(context, mailUri),
-            ),
-          );
-        }
-
-        if (waUri != null) {
-          actions.add(
-            IconButton(
-              tooltip: 'WhatsApp',
-              icon: const Icon(Icons.chat_bubble_outline),
-              onPressed: () => _launch(context, waUri),
-            ),
-          );
-        }
-
-        // Nothing configured
-        if (actions.isEmpty) {
-          if (kDebugMode && debugWhenEmpty) {
-            return Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-              child: DecoratedBox(
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: Material(
+        elevation: _hovered ? 1 : 0,
+        borderRadius: BorderRadius.circular(AppRadius.element),
+        color: widget.selected
+            ? primary.withValues(alpha: 0.08)
+            : Colors.transparent,
+        child: Focus(
+          focusNode: _focusNode,
+          child: Builder(
+            builder: (context) {
+              final isFocused = _focusNode.hasFocus;
+              return Container(
                 decoration: BoxDecoration(
-                  color: Colors.orange.withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(999),
-                  border:
-                      Border.all(color: Colors.orange.withValues(alpha: 0.35)),
+                  borderRadius: BorderRadius.circular(AppRadius.element),
+                  border: isFocused
+                      ? Border.all(
+                          color: theme.colorScheme.primary,
+                          width: 2,
+                        )
+                      : null,
                 ),
-                child: const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                  child: Text(
-                    'No public links',
-                    style: TextStyle(fontSize: 12),
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(AppRadius.element),
+                  onTap: isInteractive ? widget.onTap! : null,
+                  child: Container(
+                    height: SlotTile.height,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(AppRadius.element),
+                      border: Border.all(
+                        color: _hovered
+                            ? primary.withValues(alpha: 0.4)
+                            : existingColor,
+                        width: widget.selected ? 2 : 1,
+                      ),
+                    ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Text(
+                          widget.label,
+                          style: theme.textTheme.titleSmall?.copyWith(
+                            fontWeight: widget.selected ? FontWeight.w600 : null,
+                            color: widget.disabled
+                                ? theme.colorScheme.onSurface.withValues(alpha: 0.38)
+                                : (widget.selected ? theme.colorScheme.primary : null),
+                          ),
+                        ),
+                        if (widget.badge != null) ...[
+                          const SizedBox(height: 2),
+                          Text(
+                            widget.badge!,
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
                   ),
                 ),
-              ),
-            );
-          }
-          return const SizedBox.shrink();
-        }
-
-        return DecoratedBox(
-          decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: 0.85),
-            borderRadius: BorderRadius.circular(999),
-            boxShadow: const [
-              BoxShadow(
-                color: Color(0x14000000),
-                blurRadius: 10,
-                offset: Offset(0, 4),
-              ),
-            ],
+              );
+            },
           ),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 4),
-            child: Row(mainAxisSize: MainAxisSize.min, children: actions),
-          ),
-        );
-      },
+        ),
+      ),
     );
   }
 }
 
 class PatientBookingSimpleScreen extends StatefulWidget {
   static const String routeName = AppRoutes.patientBookSimple;
+
+  /// Width breakpoint for two-column layout. Card max width is 720 so use 600 to get two columns on desktop.
+  static const double twoColBreakpoint = 600;
+  /// Fixed width of the left column (month calendar) on desktop.
+  static const double calendarColWidth = 320;
+  /// Desktop: width of the right column (slots); narrow so only 2 columns of times, giving calendar more space.
+  static const double slotsColMaxWidth = 200;
 
   final String clinicId;
 
@@ -242,7 +177,29 @@ class _PatientBookingSimpleScreenState
     extends State<PatientBookingSimpleScreen> {
   // --- Date state ---
   DateTime _selectedDay = _dateOnly(DateTime.now());
+  late DateTime _visibleMonth;
   static DateTime _dateOnly(DateTime d) => DateTime(d.year, d.month, d.day);
+
+  // --- Month availability (drives calendar dots and bold available dates) ---
+  Map<String, DayAvailability> _monthAvail = {};
+  bool _loadingMonthAvail = false;
+  String? _monthAvailError;
+
+  /// Request token to ignore stale async results and prevent race-condition flicker.
+  int _requestToken = 0;
+
+  /// Cache for month availability keyed by 'YYYY-MM' (silent prefetch).
+  final Map<String, Map<String, DayAvailability>> _monthAvailCache = {};
+
+  /// Slot cache keyed by 'practitionerId|yyyy-mm-dd'. Prefetch only; no UI update unless that day is selected.
+  final Map<String, List<_PublicSlot>> _slotsCache = {};
+  bool _slotsPrefetchBusy = false;
+
+  // --- Scroll / nudge (premium flow) ---
+  final ScrollController _scrollCtrl = ScrollController();
+  final GlobalKey _clinicianKey = GlobalKey();
+  final GlobalKey _calendarKey = GlobalKey();
+  final GlobalKey _slotsKey = GlobalKey();
 
   // --- UX timings ---
   static const Duration _confirmTimeout = Duration(seconds: 25);
@@ -258,23 +215,11 @@ class _PatientBookingSimpleScreenState
   bool _authReady = false;
   String? _authError;
 
-  // --- Day metadata (from Cloud Function response dayFlags) ---
-  bool _loadingDayMeta = false;
-  String? _dayMetaError;
-
-  bool _isCorporateDay = false;
-  String _locationLabel = '';
-  CorporateMode? _corpMode;
-  String? _corpDisplayName;
-
-  // User-entered / deep-linked corporate code
-  String _corporateCode = '';
-
   // --- Slots ---
   bool _loadingSlots = false;
   String? _slotsError;
   List<_PublicSlot> _slots = [];
-  Map<String, dynamic> _dayFlags = {};
+  _PublicSlot? _selectedSlot;
 
   // --- Practitioners (public booking must run listPublicSlotsFn against a practitionerId) ---
   bool _loadingPractitioners = false;
@@ -294,7 +239,7 @@ class _PatientBookingSimpleScreenState
   @override
   void initState() {
     super.initState();
-    _corporateCode = (widget.initialCorporateCodeFromUrl ?? '').trim();
+    _visibleMonth = DateTime(_selectedDay.year, _selectedDay.month, 1);
 
     // If deep-linked clinicianId exists, set initial selection immediately.
     final deepLinked = (widget.clinicianId ?? '').trim();
@@ -305,12 +250,17 @@ class _PatientBookingSimpleScreenState
     _initAndLoad();
   }
 
+  @override
+  void dispose() {
+    _scrollCtrl.dispose();
+    super.dispose();
+  }
+
   Future<void> _initAndLoad() async {
     setState(() {
       _authReady = false;
       _authError = null;
       _slotsError = null;
-      _dayMetaError = null;
       _practitionersError = null;
     });
 
@@ -323,6 +273,7 @@ class _PatientBookingSimpleScreenState
       setState(() => _authReady = true);
 
       await _refreshAll();
+      if (mounted) _loadMonthAvailability();
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -333,65 +284,8 @@ class _PatientBookingSimpleScreenState
   }
 
   Future<void> _refreshAll() async {
-    // ✅ practitioners must be loaded before slots (needs practitionerId)
     await _loadPractitionersIfNeeded();
     await _loadSlots();
-    await _loadDayMetaFromDayFlags();
-  }
-
-  Future<void> _loadDayMetaFromDayFlags() async {
-    setState(() {
-      _loadingDayMeta = true;
-      _dayMetaError = null;
-      _isCorporateDay = false;
-      _locationLabel = '';
-      _corpMode = null;
-      _corpDisplayName = null;
-    });
-
-    try {
-      final ymd = _ymdFromLocalDay(_selectedDay);
-      final raw = _dayFlags[ymd];
-
-      if (raw is Map) {
-        final corporateOnly = raw['corporateOnly'] == true;
-        final mode = (raw['mode'] ?? '').toString().trim();
-        final displayName = (raw['displayName'] ?? '').toString().trim();
-        final locationLabel = (raw['locationLabel'] ?? '').toString().trim();
-
-        setState(() {
-          _isCorporateDay = corporateOnly;
-          _corpMode = (mode == 'CODE_UNLOCK')
-              ? CorporateMode.codeUnlock
-              : (mode == 'LINK_ONLY')
-                  ? CorporateMode.linkOnly
-                  : null;
-          _corpDisplayName = displayName.isEmpty ? null : displayName;
-          _locationLabel = locationLabel;
-        });
-      } else {
-        setState(() {
-          _isCorporateDay = false;
-          _locationLabel = '';
-        });
-      }
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _dayMetaError = 'Failed to load day details: $e';
-        _isCorporateDay = false;
-        _locationLabel = '';
-      });
-    } finally {
-      if (mounted) setState(() => _loadingDayMeta = false);
-    }
-  }
-
-  static String _ymdFromLocalDay(DateTime d) {
-    final y = d.year.toString().padLeft(4, '0');
-    final m = d.month.toString().padLeft(2, '0');
-    final day = d.day.toString().padLeft(2, '0');
-    return '$y-$m-$day';
   }
 
   DocumentReference<Map<String, dynamic>> get _publicBookingDoc =>
@@ -599,11 +493,22 @@ class _PatientBookingSimpleScreenState
       _selectedPractitionerId = next;
     });
 
-    // Practitioner affects slots (and may affect "openingWindows" semantics), so reload.
     await _refreshAll();
+    if (mounted) _loadMonthAvailability();
+
+    if (mounted && _slots.isNotEmpty) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _scrollToSlots();
+      });
+    }
   }
 
-  List<_PublicSlot> _applySlotFilters(List<_PublicSlot> input) {
+  static String _slotsCacheKey(String practitionerId, DateTime date) {
+    final d = DateTime(date.year, date.month, date.day);
+    return '$practitionerId|${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+  }
+
+  List<_PublicSlot> _applySlotFilters(List<_PublicSlot> input, [DateTime? forDay]) {
     final now = DateTime.now();
     final cutoff = now.add(_minLeadTime);
 
@@ -613,7 +518,7 @@ class _PatientBookingSimpleScreenState
         d.millisecond == 0 &&
         d.microsecond == 0;
 
-    final selectedDate = _dateOnly(_selectedDay);
+    final selectedDate = _dateOnly(forDay ?? _selectedDay);
     final today = _dateOnly(now);
 
     return input.where((s) {
@@ -630,27 +535,45 @@ class _PatientBookingSimpleScreenState
   }
 
   Future<void> _loadSlots() async {
+    final token = ++_requestToken;
+
+    await _loadPractitionersIfNeeded();
+    if (token != _requestToken) return;
+
+    final practitionerId = (_selectedPractitionerId ?? '').trim();
+    if (practitionerId.isEmpty) {
+      setState(() {
+        _loadingSlots = false;
+        _slotsError = null;
+        _slots = [];
+      });
+      return;
+    }
+
+    final startLocal = _selectedDay;
+    final cacheKey = _slotsCacheKey(practitionerId, startLocal);
+    final cached = _slotsCache[cacheKey];
+    if (cached != null && mounted && token == _requestToken) {
+      setState(() {
+        _slots = cached;
+        _loadingSlots = false;
+        _slotsError = null;
+      });
+      _refreshSlotsInBackground(practitionerId, startLocal, token);
+      return;
+    }
+
     setState(() {
       _loadingSlots = true;
       _slotsError = null;
       _slots = [];
-      _dayFlags = {};
     });
 
-    final startLocal = _selectedDay;
     final startUtc =
         DateTime.utc(startLocal.year, startLocal.month, startLocal.day, 0, 0);
     final endUtc = startUtc.add(const Duration(days: 1));
 
     try {
-      // Ensure practitioners are ready and we have a practitionerId
-      await _loadPractitionersIfNeeded();
-      final practitionerId = (_selectedPractitionerId ?? '').trim();
-      if (practitionerId.isEmpty) {
-        throw StateError(
-            'Booking not available: Missing practitioner selection.');
-      }
-
       final functions = FirebaseFunctions.instanceFor(region: 'europe-west3');
       final fn = functions.httpsCallable('listPublicSlotsFn');
 
@@ -661,10 +584,10 @@ class _PatientBookingSimpleScreenState
         'rangeStartMs': startUtc.millisecondsSinceEpoch,
         'rangeEndMs': endUtc.millisecondsSinceEpoch,
         'tz': 'Europe/Prague',
-        if (_corporateCode.trim().isNotEmpty) 'corpCode': _corporateCode.trim(),
       };
 
       final res = await fn.call(payload).timeout(_confirmTimeout);
+      if (token != _requestToken) return;
 
       final rawData = res.data;
       if (rawData is! Map) {
@@ -681,41 +604,392 @@ class _PatientBookingSimpleScreenState
           .toList();
 
       final filtered = _applySlotFilters(slots);
-
-      final df = data['dayFlags'];
-      final dayFlags =
-          (df is Map) ? Map<String, dynamic>.from(df) : <String, dynamic>{};
+      _slotsCache[cacheKey] = filtered;
 
       if (!mounted) return;
-      setState(() {
-        _slots = filtered;
-        _dayFlags = dayFlags;
-      });
+      if (token != _requestToken) return;
+      setState(() => _slots = filtered);
     } catch (e) {
       if (!mounted) return;
+      if (token != _requestToken) return;
       setState(() => _slotsError = 'Failed to load availability: $e');
     } finally {
       if (mounted) setState(() => _loadingSlots = false);
     }
   }
 
-  Future<void> _pickDay() async {
-    final now = DateTime.now();
-    final picked = await showDatePicker(
-      context: context,
-      initialDate: _selectedDay,
-      firstDate: _dateOnly(now),
-      lastDate: _dateOnly(now.add(const Duration(days: 365))),
-    );
-    if (picked != null) {
-      setState(() => _selectedDay = _dateOnly(picked));
-      await _refreshAll();
+  /// Background refresh for current day only; updates cache and state only if still the selected day and token matches.
+  Future<void> _refreshSlotsInBackground(String practitionerId, DateTime forDay, int token) async {
+    final startUtc = DateTime.utc(forDay.year, forDay.month, forDay.day, 0, 0);
+    final endUtc = startUtc.add(const Duration(days: 1));
+    try {
+      final fn = FirebaseFunctions.instanceFor(region: 'europe-west3').httpsCallable('listPublicSlotsFn');
+      final res = await fn.call(<String, dynamic>{
+        'clinicId': widget.clinicId.trim(),
+        'serviceId': 'default',
+        'practitionerId': practitionerId,
+        'rangeStartMs': startUtc.millisecondsSinceEpoch,
+        'rangeEndMs': endUtc.millisecondsSinceEpoch,
+        'tz': 'Europe/Prague',
+      }).timeout(_confirmTimeout);
+      final rawData = res.data;
+      if (rawData is! Map || token != _requestToken) return;
+      final data = Map<String, dynamic>.from(rawData);
+      final rawSlots = (data['slots'] as List?) ?? const [];
+      final slots = rawSlots
+          .whereType<Map>()
+          .map((m) => Map<String, dynamic>.from(m))
+          .map(_PublicSlot.fromMap)
+          .toList();
+      final filtered = _applySlotFilters(slots, forDay);
+      final key = _slotsCacheKey(practitionerId, forDay);
+      _slotsCache[key] = filtered;
+      if (mounted && token == _requestToken && _dateOnly(_selectedDay) == _dateOnly(forDay)) {
+        setState(() => _slots = filtered);
+      }
+    } catch (_) {
+      // ignore background refresh errors
     }
   }
 
-  void _clearCorporateCode() {
-    setState(() => _corporateCode = '');
-    _refreshAll();
+  /// Prefetch slots for a single day into cache only. One at a time; no UI update.
+  Future<void> _prefetchSlotsForDay(DateTime day) async {
+    if (_slotsPrefetchBusy) return;
+    final practitionerId = (_selectedPractitionerId ?? '').trim();
+    if (practitionerId.isEmpty) return;
+
+    _slotsPrefetchBusy = true;
+    try {
+      final startUtc = DateTime.utc(day.year, day.month, day.day, 0, 0);
+      final endUtc = startUtc.add(const Duration(days: 1));
+      final fn = FirebaseFunctions.instanceFor(region: 'europe-west3').httpsCallable('listPublicSlotsFn');
+      final res = await fn.call(<String, dynamic>{
+        'clinicId': widget.clinicId.trim(),
+        'serviceId': 'default',
+        'practitionerId': practitionerId,
+        'rangeStartMs': startUtc.millisecondsSinceEpoch,
+        'rangeEndMs': endUtc.millisecondsSinceEpoch,
+        'tz': 'Europe/Prague',
+      }).timeout(const Duration(seconds: 15));
+      final rawData = res.data;
+      if (rawData is! Map) return;
+      final data = Map<String, dynamic>.from(rawData);
+      final rawSlots = (data['slots'] as List?) ?? const [];
+      final slots = rawSlots
+          .whereType<Map>()
+          .map((m) => Map<String, dynamic>.from(m))
+          .map(_PublicSlot.fromMap)
+          .toList();
+      final filtered = _applySlotFilters(slots, day);
+      _slotsCache[_slotsCacheKey(practitionerId, day)] = filtered;
+    } catch (_) {
+      // ignore prefetch errors
+    } finally {
+      _slotsPrefetchBusy = false;
+    }
+  }
+
+  Future<void> _setSelectedDay(DateTime day) async {
+    final hasClinician = (_selectedPractitionerId ?? '').trim().isNotEmpty;
+
+    setState(() {
+      _selectedDay = _dateOnly(day);
+      _visibleMonth = DateTime(_selectedDay.year, _selectedDay.month, 1);
+      _selectedSlot = null;
+      // Keep calendar expanded so it stays visible (no collapse on date select)
+    });
+
+    if (!hasClinician) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _scrollToKey(_clinicianKey);
+      });
+    }
+
+    await _refreshAll();
+
+    // Auto-scroll to slots after date selection (calendar has collapsed)
+    if (mounted) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        final ctx = _slotsKey.currentContext;
+        if (ctx != null && mounted) {
+          Scrollable.ensureVisible(
+            ctx,
+            duration: const Duration(milliseconds: 260),
+            curve: Curves.easeOut,
+            alignment: 0.1,
+          );
+        }
+      });
+    }
+  }
+
+  static const int _nextAvailableMaxDays = 90;
+
+  /// Finds the first day with availability from [selectedDay] + 1 using month availability cache (no slot fetch). Max horizon 90 days.
+  Future<DateTime?> _findNextAvailableDate() async {
+    final practitionerId = (_selectedPractitionerId ?? '').trim();
+    if (practitionerId.isEmpty) return null;
+    DateTime cursor = _dateOnly(_selectedDay.add(const Duration(days: 1)));
+    final end = _dateOnly(DateTime.now().add(const Duration(days: _nextAvailableMaxDays)));
+    while (!cursor.isAfter(end)) {
+      final monthKey = '${cursor.year}-${cursor.month.toString().padLeft(2, '0')}';
+      Map<String, DayAvailability>? monthData = _monthAvailCache[monthKey];
+      if (monthData == null) {
+        await _loadMonthAvailability(forMonth: DateTime(cursor.year, cursor.month, 1), silent: true);
+        if (!mounted) return null;
+        monthData = _monthAvailCache[monthKey];
+        if (monthData == null) {
+          cursor = _dateOnly(DateTime(cursor.year, cursor.month + 1, 1));
+          continue;
+        }
+      }
+      final ymd = '${cursor.year.toString().padLeft(4, '0')}-${cursor.month.toString().padLeft(2, '0')}-${cursor.day.toString().padLeft(2, '0')}';
+      final a = monthData[ymd];
+      if (a != null && a.hasAvailability) return cursor;
+      cursor = _dateOnly(cursor.add(const Duration(days: 1)));
+    }
+    return null;
+  }
+
+  /// Next available: use month availability to find next day with slots, then set day and load slots.
+  Future<void> _jumpToNextAvailable() async {
+    if ((_selectedPractitionerId ?? '').trim().isEmpty) return;
+    if (mounted) {
+      setState(() {
+        _loadingSlots = true;
+        _slotsError = null;
+        _slots = [];
+      });
+    }
+    final next = await _findNextAvailableDate();
+    if (!mounted) return;
+    if (next == null) {
+      setState(() {
+        _loadingSlots = false;
+        _slotsError = 'No appointments found in the next $_nextAvailableMaxDays days.';
+      });
+      return;
+    }
+    setState(() {
+      _selectedDay = next;
+      _visibleMonth = DateTime(next.year, next.month, 1);
+      _selectedSlot = null;
+      _loadingSlots = true;
+      _slotsError = null;
+      _slots = [];
+    });
+    await _loadSlots();
+    if (!mounted) return;
+    _loadMonthAvailability();
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Next available: ${_prettyLongDate(next)}'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
+  }
+
+  void _setVisibleMonth(DateTime month) {
+    setState(() {
+      _visibleMonth = DateTime(month.year, month.month, 1);
+    });
+    _loadMonthAvailability();
+  }
+
+  Future<void> _scrollToKey(GlobalKey key) async {
+    final ctx = key.currentContext;
+    if (ctx == null) return;
+    await Scrollable.ensureVisible(
+      ctx,
+      duration: const Duration(milliseconds: 320),
+      curve: Curves.easeOut,
+      alignment: 0.05,
+    );
+  }
+
+  void _scrollToSlots() {
+    final ctx = _slotsKey.currentContext;
+    if (ctx != null && mounted) {
+      Scrollable.ensureVisible(
+        ctx,
+        duration: const Duration(milliseconds: 260),
+        curve: Curves.easeOut,
+        alignment: 0.1,
+      );
+    }
+  }
+
+  Future<void> _loadMonthAvailability({DateTime? forMonth, bool silent = false}) async {
+    final practitionerId = (_selectedPractitionerId ?? '').trim();
+    if (practitionerId.isEmpty) {
+      if (!silent && mounted) setState(() => _monthAvail = {});
+      return;
+    }
+
+    final month = forMonth ?? _visibleMonth;
+    final monthKey = '${month.year}-${month.month.toString().padLeft(2, '0')}';
+
+    final token = ++_requestToken;
+
+    if (!silent) {
+      setState(() {
+        _loadingMonthAvail = true;
+        _monthAvailError = null;
+      });
+    }
+
+    try {
+      final startUtc = DateTime.utc(month.year, month.month, 1);
+      final endUtc = month.month == 12
+          ? DateTime.utc(month.year + 1, 1, 1)
+          : DateTime.utc(month.year, month.month + 1, 1);
+
+      final functions = FirebaseFunctions.instanceFor(region: 'europe-west3');
+      final fn = functions.httpsCallable('getPublicMonthAvailabilityFn');
+
+      final res = await fn.call(<String, dynamic>{
+        'clinicId': widget.clinicId.trim(),
+        'serviceId': 'default',
+        'practitionerId': practitionerId,
+        'monthStartMs': startUtc.millisecondsSinceEpoch,
+        'monthEndMs': endUtc.millisecondsSinceEpoch,
+        'tz': 'Europe/Prague',
+      }).timeout(const Duration(seconds: 15));
+
+      if (token != _requestToken) return;
+
+      final data = res.data;
+      if (data is! Map) {
+        if (!silent && mounted) setState(() => _monthAvail = {});
+        return;
+      }
+
+      final days = data['days'];
+      final out = <String, DayAvailability>{};
+      if (days is Map) {
+        for (final e in days.entries) {
+          final k = e.key as String?;
+          final v = e.value;
+          if (k == null || v is! Map) continue;
+          final count = (v['count'] is num) ? (v['count'] as num).toInt() : 0;
+          final corporateOnly = v['corporateOnly'] == true;
+          out[k] = DayAvailability(count: count, corporateOnly: corporateOnly);
+        }
+      }
+
+      _monthAvailCache[monthKey] = out;
+
+      if (!silent && mounted && token == _requestToken) {
+        setState(() => _monthAvail = out);
+        _prefetchNextMonthAvailability();
+        _prefetchSlotsForFirstAvailableDay();
+      }
+    } on FirebaseFunctionsException catch (_) {
+      if (!silent && mounted && token == _requestToken) {
+        setState(() {
+          _monthAvail = {};
+          _monthAvailError = 'Availability preview unavailable';
+        });
+      }
+    } catch (_) {
+      if (!silent && mounted && token == _requestToken) {
+        setState(() {
+          _monthAvail = {};
+          _monthAvailError = 'Availability preview unavailable';
+        });
+      }
+    } finally {
+      if (!silent && mounted) setState(() => _loadingMonthAvail = false);
+    }
+  }
+
+  void _prefetchNextMonthAvailability() {
+    final nextMonth = _visibleMonth.month == 12
+        ? DateTime(_visibleMonth.year + 1, 1, 1)
+        : DateTime(_visibleMonth.year, _visibleMonth.month + 1, 1);
+    _loadMonthAvailability(forMonth: nextMonth, silent: true);
+  }
+
+  /// First available day in visible month (>= today); prefetch slots for it.
+  void _prefetchSlotsForFirstAvailableDay() {
+    final today = _dateOnly(DateTime.now());
+    final year = _visibleMonth.year;
+    final month = _visibleMonth.month;
+    final lastDay = DateTime(year, month + 1, 0).day;
+    for (int day = 1; day <= lastDay; day++) {
+      final d = DateTime(year, month, day);
+      if (d.isBefore(today)) continue;
+      final ymd = '${year.toString().padLeft(4, '0')}-${month.toString().padLeft(2, '0')}-${day.toString().padLeft(2, '0')}';
+      final a = _monthAvail[ymd];
+      if (a != null && a.hasAvailability) {
+        _prefetchSlotsForDay(d);
+        return;
+      }
+    }
+  }
+
+  static const int _nextMonthWithAvailabilityMaxMonths = 6;
+
+  /// Whether the currently visible month has any day with availability (from cache).
+  bool _currentMonthHasAnyAvailability() {
+    return _monthAvail.values.any((a) => a.hasAvailability);
+  }
+
+  /// Find next month that has at least one day with availability; use cache or load silently. Max 6 months.
+  Future<DateTime?> _findNextMonthWithAvailability() async {
+    final practitionerId = (_selectedPractitionerId ?? '').trim();
+    if (practitionerId.isEmpty) return null;
+    DateTime cursor = _visibleMonth.month == 12
+        ? DateTime(_visibleMonth.year + 1, 1, 1)
+        : DateTime(_visibleMonth.year, _visibleMonth.month + 1, 1);
+    for (int i = 0; i < _nextMonthWithAvailabilityMaxMonths; i++) {
+      final key = '${cursor.year}-${cursor.month.toString().padLeft(2, '0')}';
+      var monthData = _monthAvailCache[key];
+      if (monthData == null) {
+        await _loadMonthAvailability(forMonth: cursor, silent: true);
+        if (!mounted) return null;
+        monthData = _monthAvailCache[key];
+        if (monthData == null) {
+          cursor = cursor.month == 12 ? DateTime(cursor.year + 1, 1, 1) : DateTime(cursor.year, cursor.month + 1, 1);
+          continue;
+        }
+      }
+      final hasAny = monthData.values.any((a) => a.hasAvailability);
+      if (hasAny) return cursor;
+      cursor = cursor.month == 12 ? DateTime(cursor.year + 1, 1, 1) : DateTime(cursor.year, cursor.month + 1, 1);
+    }
+    return null;
+  }
+
+  /// Jump to next month with availability and optionally select first available day.
+  Future<void> _goToNextMonthWithAvailability() async {
+    final next = await _findNextMonthWithAvailability();
+    if (!mounted || next == null) return;
+    setState(() => _visibleMonth = next);
+    await _loadMonthAvailability(forMonth: next);
+    if (!mounted) return;
+    final year = next.year;
+    final month = next.month;
+    final lastDay = DateTime(year, month + 1, 0).day;
+    final monthData = _monthAvailCache['$year-${month.toString().padLeft(2, '0')}'];
+    if (monthData != null) {
+      final today = _dateOnly(DateTime.now());
+      for (int day = 1; day <= lastDay; day++) {
+        final d = DateTime(year, month, day);
+        if (d.isBefore(today)) continue;
+        final ymd = '${year.toString().padLeft(4, '0')}-${month.toString().padLeft(2, '0')}-${day.toString().padLeft(2, '0')}';
+        if (monthData[ymd]?.hasAvailability == true) {
+          setState(() {
+            _selectedDay = d;
+            _selectedSlot = null;
+          });
+          await _loadSlots();
+          return;
+        }
+      }
+    }
   }
 
   static String _two(int n) => n.toString().padLeft(2, '0');
@@ -724,398 +998,6 @@ class _PatientBookingSimpleScreenState
   static String _prettyTime(DateTime d) => '${_two(d.hour)}:${_two(d.minute)}';
   static String _prettyDateTime(DateTime d) =>
       '${_prettyDate(d)} ${_prettyTime(d)}';
-
-  Future<_AppointmentType?> _askAppointmentType() async {
-    return showDialog<_AppointmentType>(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Choose appointment type'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.timer_outlined),
-              title: const Text('Initial consultation (60 mins) — 1300 Kč'),
-              subtitle: const Text(
-                'Initial consultation, mobility assessment & manual techniques',
-              ),
-              onTap: () => Navigator.pop(
-                context,
-                const _AppointmentType(
-                  minutes: 60,
-                  kind: BookingKind.newPatient,
-                  label: 'Initial consultation (60 mins)',
-                  priceText: '1300 Kč',
-                  description:
-                      'Initial consultation, mobility assessment & manual techniques',
-                ),
-              ),
-            ),
-            const Divider(height: 1),
-            ListTile(
-              leading: const Icon(Icons.timer),
-              title: const Text('Follow-up (45 mins) — 1000 Kč'),
-              subtitle: const Text(
-                'Follow-up focusing on movement progression & soft-tissue work',
-              ),
-              onTap: () => Navigator.pop(
-                context,
-                const _AppointmentType(
-                  minutes: 45,
-                  kind: BookingKind.followUp,
-                  label: 'Follow-up (45 mins)',
-                  priceText: '1000 Kč',
-                  description:
-                      'Follow-up focusing on movement progression & soft-tissue work',
-                ),
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, null),
-            child: const Text('Cancel'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Future<bool> _promptForCorporateCode() async {
-    final controller = TextEditingController(text: _corporateCode);
-    String? errorText;
-
-    final ok = await showDialog<bool>(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) {
-        return StatefulBuilder(
-          builder: (ctx, setState) {
-            return AlertDialog(
-              title: const Text('Corporate booking code'),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'This day is reserved for corporate appointments.\n'
-                    'Enter your company booking code to continue.',
-                  ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: controller,
-                    autofocus: true,
-                    decoration: InputDecoration(
-                      hintText: 'Enter code',
-                      errorText: errorText,
-                    ),
-                  ),
-                ],
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(ctx, false),
-                  child: const Text('Cancel'),
-                ),
-                FilledButton(
-                  onPressed: () {
-                    final entered = controller.text.trim();
-                    if (entered.isEmpty) {
-                      setState(() => errorText = 'Please enter a code');
-                      return;
-                    }
-                    Navigator.pop(ctx, true);
-                  },
-                  child: const Text('Continue'),
-                ),
-              ],
-            );
-          },
-        );
-      },
-    );
-
-    if (ok == true) {
-      setState(() => _corporateCode = controller.text.trim());
-      _refreshAll();
-      return true;
-    }
-    return false;
-  }
-
-  Future<bool> _ensureCorporateAccessForSelectedDay() async {
-    if (!_isCorporateDay) return true;
-
-    final needsCode = (_corpMode == CorporateMode.codeUnlock);
-
-    if (!needsCode) {
-      final proceed = await showDialog<bool>(
-        context: context,
-        builder: (_) => AlertDialog(
-          title: Text(
-            _corpDisplayName?.isNotEmpty == true
-                ? _corpDisplayName!
-                : 'Corporate day',
-          ),
-          content: const Text(
-            'This day is reserved for corporate appointments.\n\n'
-            'If you are not a corporate client, please choose another date or contact the clinic.',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('Choose another date'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('I am a corporate client'),
-            ),
-          ],
-        ),
-      );
-      return proceed == true;
-    }
-
-    if (_corporateCode.trim().isNotEmpty) return true;
-    return _promptForCorporateCode();
-  }
-
-  Future<_PatientFormResult?> _askPatientDetailsPopup(BookingKind kind) async {
-    final firstNameCtrl = TextEditingController();
-    final lastNameCtrl = TextEditingController();
-    final emailCtrl = TextEditingController();
-    final phoneCtrl = TextEditingController();
-    final addressCtrl = TextEditingController();
-
-    DateTime? dob;
-    bool acceptsPolicies = false;
-
-    Future<void> pickDob(StateSetter setState) async {
-      final now = DateTime.now();
-      final picked = await showDatePicker(
-        context: context,
-        initialDate: DateTime(now.year - 30, now.month, now.day),
-        firstDate: DateTime(1900, 1, 1),
-        lastDate: now,
-      );
-      if (picked != null) setState(() => dob = picked);
-    }
-
-    bool valid() {
-      if (firstNameCtrl.text.trim().isEmpty) return false;
-      if (lastNameCtrl.text.trim().isEmpty) return false;
-      if (dob == null) return false;
-      if (emailCtrl.text.trim().isEmpty) return false;
-      if (phoneCtrl.text.trim().isEmpty) return false;
-      if (!acceptsPolicies) return false;
-      return true;
-    }
-
-    final result = await showDialog<_PatientFormResult>(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => StatefulBuilder(
-        builder: (ctx, setState) => AlertDialog(
-          title: Text(
-            kind == BookingKind.newPatient
-                ? 'New client details'
-                : 'Client details',
-          ),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextField(
-                  controller: firstNameCtrl,
-                  decoration: const InputDecoration(labelText: 'First name'),
-                ),
-                const SizedBox(height: 10),
-                TextField(
-                  controller: lastNameCtrl,
-                  decoration: const InputDecoration(labelText: 'Last name'),
-                ),
-                const SizedBox(height: 10),
-                Row(
-                  children: [
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        icon: const Icon(Icons.cake_outlined),
-                        onPressed: () => pickDob(setState),
-                        label: Text(
-                          dob == null ? 'Date of birth' : _prettyDate(dob!),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 10),
-                TextField(
-                  controller: phoneCtrl,
-                  decoration: const InputDecoration(labelText: 'Phone'),
-                ),
-                const SizedBox(height: 10),
-                TextField(
-                  controller: emailCtrl,
-                  decoration: const InputDecoration(labelText: 'Email'),
-                ),
-                const SizedBox(height: 10),
-                TextField(
-                  controller: addressCtrl,
-                  decoration:
-                      const InputDecoration(labelText: 'Address (optional)'),
-                ),
-                const SizedBox(height: 12),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Checkbox(
-                          value: acceptsPolicies,
-                          onChanged: (v) =>
-                              setState(() => acceptsPolicies = v ?? false),
-                        ),
-                        const Expanded(
-                          child: Text(
-                            'I have read and understand the policies (privacy, consent & cancellation).',
-                          ),
-                        ),
-                      ],
-                    ),
-                    Padding(
-                      padding: const EdgeInsets.only(left: 48, top: 4),
-                      child: InkWell(
-                        onTap: () {
-                          showDialog<void>(
-                            context: context,
-                            builder: (_) => const _PolicyPreviewDialog(),
-                          );
-                        },
-                        child: Text(
-                          'View policies (Preview)',
-                          style: TextStyle(
-                            fontSize: 13,
-                            color: Theme.of(context).colorScheme.primary,
-                            decoration: TextDecoration.underline,
-                          ),
-                        ),
-                      ),
-                    ),
-                    if (!acceptsPolicies)
-                      const Padding(
-                        padding: EdgeInsets.only(left: 48, top: 6),
-                        child: Text(
-                          'Required to continue.',
-                          style: TextStyle(fontSize: 12),
-                        ),
-                      ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, null),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () {
-                if (!valid()) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text(
-                        'Please complete all required fields and accept the policies.',
-                      ),
-                    ),
-                  );
-                  return;
-                }
-                Navigator.pop(
-                  ctx,
-                  _PatientFormResult(
-                    firstName: firstNameCtrl.text.trim(),
-                    lastName: lastNameCtrl.text.trim(),
-                    dob: dob!,
-                    phone: phoneCtrl.text.trim(),
-                    email: emailCtrl.text.trim(),
-                    address: addressCtrl.text.trim(),
-                    acceptsPolicies: acceptsPolicies,
-                  ),
-                );
-              },
-              child: const Text('Continue'),
-            ),
-          ],
-        ),
-      ),
-    );
-
-    firstNameCtrl.dispose();
-    lastNameCtrl.dispose();
-    emailCtrl.dispose();
-    phoneCtrl.dispose();
-    addressCtrl.dispose();
-
-    return result;
-  }
-
-  Future<bool> _confirmBookingPopup({
-    required DateTime slotStartLocal,
-    required _AppointmentType apptType,
-  }) async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Confirm booking'),
-        content: Text(
-          'You are booking:\n\n'
-          '${apptType.label} (${apptType.priceText})\n'
-          '${_prettyDateTime(slotStartLocal)}\n\n'
-          'Proceed?',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Confirm'),
-          ),
-        ],
-      ),
-    );
-    return ok == true;
-  }
-
-  Future<void> _showSubmittingDialog() async {
-    if (!mounted) return;
-    await showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => const AlertDialog(
-        title: Text('Submitting booking…'),
-        content: Padding(
-          padding: EdgeInsets.only(top: 8),
-          child: Row(
-            children: [
-              SizedBox(
-                width: 18,
-                height: 18,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              ),
-              SizedBox(width: 12),
-              Expanded(
-                child: Text('Please wait while we confirm your appointment.'),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
 
   Future<void> _showPreparingQuestionnaireDialog() async {
     if (!mounted) return;
@@ -1173,28 +1055,6 @@ class _PatientBookingSimpleScreenState
     if (!mounted) return;
     final nav = Navigator.of(context);
     if (nav.canPop()) nav.pop();
-  }
-
-  Future<void> _bookingConfirmedPopup({
-    required DateTime slotStartLocal,
-    required _AppointmentType apptType,
-  }) async {
-    await showDialog<void>(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Booking confirmed'),
-        content: Text(
-          'Your appointment (${apptType.label}, ${apptType.priceText}) has been booked on '
-          '${_prettyDateTime(slotStartLocal)}.\n\n',
-        ),
-        actions: [
-          FilledButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Continue'),
-          ),
-        ],
-      ),
-    );
   }
 
   /// ✅ Updated: ask which questionnaire to complete after booking
@@ -1342,13 +1202,6 @@ class _PatientBookingSimpleScreenState
         'description': appt.description,
       },
 
-      if (_isCorporateDay)
-        'corporate': {
-          'corporateOnly': true,
-          'corporateCodeUsed': _corporateCode.trim(),
-          if (_locationLabel.trim().isNotEmpty)
-            'locationLabel': _locationLabel.trim(),
-        },
     };
 
     try {
@@ -1447,6 +1300,20 @@ class _PatientBookingSimpleScreenState
     return completer.future;
   }
 
+  /// Used by BookingDetailsScreen to submit booking (create + wait for result).
+  Future<Map<String, dynamic>?> _submitBookingFromDetails(
+    _PublicSlot slot,
+    _AppointmentType appt,
+    _PatientFormResult patient,
+  ) async {
+    final ref = await _createBookingRequest(
+      startLocal: slot.startLocal,
+      appt: appt,
+      patient: patient,
+    );
+    return _waitForBookingRequestResult(ref);
+  }
+
   Future<void> _onTapSlot(_PublicSlot slot) async {
     if (!_ready) return;
 
@@ -1481,87 +1348,55 @@ class _PatientBookingSimpleScreenState
       return;
     }
 
-    final okCorp = await _ensureCorporateAccessForSelectedDay();
-    if (!mounted || !okCorp) return;
-
-    final apptType = await _askAppointmentType();
-    if (!mounted || apptType == null) return;
-
-    final patient = await _askPatientDetailsPopup(apptType.kind);
-    if (!mounted || patient == null) return;
-
-    final confirmed = await _confirmBookingPopup(
-      slotStartLocal: slot.startLocal,
-      apptType: apptType,
-    );
-    if (!mounted || !confirmed) return;
-
-    try {
-      final reqRef = await _createBookingRequest(
-        startLocal: slot.startLocal,
-        appt: apptType,
-        patient: patient,
-      );
-
-      // show spinner without awaiting
-      unawaited(_showSubmittingDialog());
-
-      try {
-        final data = await _waitForBookingRequestResult(reqRef);
-        if (!mounted) return;
-
-        final status = (data['status'] ?? '').toString();
-
-        if (status == 'rejected') {
-          final reason =
-              (data['rejectionReason'] ?? 'Booking rejected.').toString();
-
-          _closeDialogIfOpen();
-          if (!mounted) return;
-
-          await showDialog<void>(
-            context: context,
-            builder: (_) => AlertDialog(
-              title: const Text('Booking not available'),
-              content: Text(reason),
-              actions: [
-                FilledButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text('OK'),
+    if (!mounted) return;
+    setState(() => _selectedSlot = slot);
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (_) => BookingDetailsScreen(
+          slot: slot,
+          clinicId: widget.clinicId,
+          prettyDateTime: _prettyDateTime,
+          onSubmit: (appt, patient) =>
+              _submitBookingFromDetails(slot, appt, patient),
+          onSuccess: (
+            Map<String, dynamic> data,
+            _AppointmentType appt,
+            _PatientFormResult patient,
+          ) {
+            if (!mounted) return;
+            final path = (data['path'] ?? '').toString().trim();
+            final id = path.isNotEmpty
+                ? path.split('/').last
+                : (data['bookingRequestId'] ?? '').toString().trim();
+            Navigator.of(context).pop(); // pop details
+            Navigator.of(context).push<void>(
+              MaterialPageRoute(
+                builder: (_) => BookingConfirmationScreen(
+                  slotStartLocal: slot.startLocal,
+                  apptType: appt,
+                  bookingRequestId: id,
+                  patient: patient,
+                  clinicId: widget.clinicId,
+                  onBackToBooking: () => Navigator.of(context).pop(),
+                  onContinue: (p, reqId) =>
+                      _askPreassessmentNextStep(p, bookingRequestId: reqId),
+                  onGoHome: () {
+                    Navigator.of(context).pushNamedAndRemoveUntil(
+                      AppRoutes.publicHome,
+                      (r) => false,
+                      arguments: {'clinicId': widget.clinicId},
+                    );
+                  },
                 ),
-              ],
-            ),
-          );
-          return;
-        }
-      } catch (e) {
-        _closeDialogIfOpen();
-        rethrow;
-      } finally {
-        _closeDialogIfOpen();
-      }
-
-      if (!mounted) return;
-      await _bookingConfirmedPopup(
-        slotStartLocal: slot.startLocal,
-        apptType: apptType,
-      );
-
-      await _askPreassessmentNextStep(
-        patient,
-        bookingRequestId: reqRef.id,
-      );
-
-      await _refreshAll();
-    } catch (e) {
-      _closeDialogIfOpen();
-      if (!mounted) return;
-
-      final msg = e.toString().replaceFirst('Exception: ', '').trim();
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(msg.isEmpty ? 'Booking failed.' : msg)),
-      );
-    }
+              ),
+            ).then((_) {
+              if (mounted) _refreshAll();
+            });
+          },
+        ),
+      ),
+    );
+    if (mounted) _refreshAll();
   }
 
   @override
@@ -1569,6 +1404,7 @@ class _PatientBookingSimpleScreenState
     final cid = widget.clinicId.trim();
     if (cid.isEmpty) {
       return Scaffold(
+        backgroundColor: AppColors.surface,
         appBar: AppBar(title: const Text('Book an appointment')),
         body: const Center(
           child: Padding(
@@ -1585,6 +1421,7 @@ class _PatientBookingSimpleScreenState
 
     if (_authError != null) {
       return Scaffold(
+        backgroundColor: AppColors.surface,
         appBar: AppBar(title: const Text('Book an appointment')),
         body: Center(
           child: Padding(
@@ -1614,301 +1451,881 @@ class _PatientBookingSimpleScreenState
 
     if (!_ready) {
       return Scaffold(
+        backgroundColor: AppColors.surface,
         appBar: AppBar(title: const Text('Book an appointment')),
-        body: const Center(child: CircularProgressIndicator()),
+        body: Center(
+          child: SizedBox(
+            width: 28,
+            height: 28,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+        ),
       );
     }
 
-    final showCorporateBanner = _isCorporateDay && !_loadingDayMeta;
-
-    final now = DateTime.now();
-    final leadCutoff = now.add(_minLeadTime);
-
-    final selectedPractitionerLabel = (() {
-      final id = (_selectedPractitionerId ?? '').trim();
-      if (id.isEmpty) return '';
-      final match =
-          _practitioners.where((p) => p.id == id).toList(growable: false);
-      if (match.isEmpty) return _shortId(id);
-      return match.first.displayName;
-    })();
-
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Book an appointment'),
-        actions: [
-          _PublicContactActions(
-            clinicId: cid,
-            debugWhenEmpty: kDebugMode,
-          ),
-          IconButton(
-            tooltip: 'Home',
-            icon: const Icon(Icons.home_outlined),
-            onPressed: () {
-              Navigator.of(context).pushNamedAndRemoveUntil(
-                AppRoutes.publicHome,
-                (r) => false,
-                arguments: {'clinicId': widget.clinicId},
-              );
-            },
-          ),
-          if (_corporateCode.trim().isNotEmpty)
-            IconButton(
-              tooltip: 'Clear corporate code',
-              icon: const Icon(Icons.filter_alt_off),
-              onPressed: _clearCorporateCode,
-            ),
-          IconButton(
-            tooltip: 'Refresh',
-            icon: const Icon(Icons.refresh),
-            onPressed: () => _refreshAll(),
-          ),
-        ],
+    final controlsWidget = KeyedSubtree(
+      key: _clinicianKey,
+      child: _BookingControls(
+        selectedDay: _selectedDay,
+        practitioners: _practitioners,
+        selectedPractitionerId: _selectedPractitionerId,
+        onPractitionerChanged: _onPractitionerChanged,
+        loadingPractitioners: _loadingPractitioners,
+        practitionersError: _practitionersError,
+        selectedPractitionerLabel: _selectedPractitionerLabel(),
       ),
-      body: Column(
-        children: [
-          const SizedBox(height: 8),
+    );
 
-          // Date picker
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: OutlinedButton.icon(
-              onPressed: _pickDay,
-              icon: const Icon(Icons.calendar_today),
-              label: Text('Date: ${_prettyDate(_selectedDay)}'),
-            ),
-          ),
-
-          // Practitioner selector
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
-            child: InputDecorator(
-              decoration: const InputDecoration(
-                labelText: 'Clinician',
-                border: OutlineInputBorder(),
-                isDense: true,
-              ),
-              child: DropdownButtonHideUnderline(
-                child: DropdownButton<String>(
-                  isExpanded: true,
-                  value: (_selectedPractitionerId ?? '').trim().isEmpty
-                      ? null
-                      : _selectedPractitionerId,
-                  hint: const Text('Select a clinician'),
-                  items: _practitioners
-                      .map(
-                        (p) => DropdownMenuItem<String>(
-                          value: p.id,
-                          child: Text(p.displayName),
-                        ),
-                      )
-                      .toList(),
-                  onChanged:
-                      _loadingPractitioners ? null : _onPractitionerChanged,
+    final hasClinician = (_selectedPractitionerId ?? '').trim().isNotEmpty;
+    final monthNoAvailabilityHint = hasClinician &&
+            _monthAvail.isNotEmpty &&
+            !_currentMonthHasAnyAvailability()
+        ? Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'No availability this month',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.7),
+                    ),
+                  ),
                 ),
+                Tooltip(
+                  message: 'Skips months with no available times',
+                  child: FilledButton(
+                    onPressed: () => _goToNextMonthWithAvailability(),
+                    child: const Text('Next month with availability'),
+                  ),
+                ),
+              ],
+            ),
+          )
+        : null;
+
+    final availableTimesPanelWidget = KeyedSubtree(
+      key: _slotsKey,
+      child: _AvailableTimesPanel(
+        selectedDay: _selectedDay,
+        hasClinician: hasClinician,
+        practitionerId: _selectedPractitionerId,
+        loadingSlots: _loadingSlots,
+        slotsError: _slotsError,
+        slots: _slots,
+        selectedSlot: _selectedSlot,
+        isCorporateDay: false,
+        prettyTime: _prettyTime,
+        onSlotTap: _onTapSlot,
+        onRefresh: _refreshAll,
+        onNextAvailable: _jumpToNextAvailable,
+        prettyDayLabel: _prettyLongDate,
+        practitionerLabel: _selectedPractitionerLabel(),
+      ),
+    );
+
+    return PublicBookingMirrorHealthBanner(
+      clinicId: cid,
+      child: PublicShell(
+        title: null,
+        subtitle: null,
+        showBack: true,
+        topRight: PublicContactActions(clinicId: cid, debugWhenEmpty: kDebugMode),
+        scrollableCard: false,
+        showPoweredBy: false,
+        child: LayoutBuilder(
+        builder: (context, constraints) {
+          final isTwoCol =
+              constraints.maxWidth >= PatientBookingSimpleScreen.twoColBreakpoint;
+
+          if (isTwoCol) {
+            return _TwoColumnBookingPanel(
+              header: const PublicHeader(
+                title: 'Choose a time',
+                subtitle: 'Select clinician, then pick a day.',
               ),
+              stepIndicator: const _BookingStepIndicator(step: 1),
+              hasClinician: hasClinician,
+              visibleMonth: _visibleMonth,
+              selectedDay: _selectedDay,
+              firstAllowedDay: _dateOnly(DateTime.now()),
+              lastAllowedDay: _dateOnly(DateTime.now().add(const Duration(days: 365))),
+              onMonthChanged: _setVisibleMonth,
+              onDaySelected: _setSelectedDay,
+              onRefresh: () async {
+                await _refreshAll();
+                if (mounted) _loadMonthAvailability();
+              },
+              availabilityByYmd: _monthAvail,
+              loadingMonthAvail: _loadingMonthAvail,
+              monthAvailError: _monthAvailError,
+              controls: controlsWidget,
+              slotSection: availableTimesPanelWidget,
+              monthAvailabilityHint: monthNoAvailabilityHint,
+            );
+          }
+
+          return _SingleColumnBookingPanel(
+            scrollController: _scrollCtrl,
+            calendarKey: _calendarKey,
+            hasClinician: hasClinician,
+            visibleMonth: _visibleMonth,
+            selectedDay: _selectedDay,
+            onDaySelected: _setSelectedDay,
+            onMonthChanged: _setVisibleMonth,
+            monthAvail: _monthAvail,
+            loadingMonthAvail: _loadingMonthAvail,
+            monthAvailError: _monthAvailError,
+            onRefreshAll: _refreshAll,
+            loadMonthAvailability: _loadMonthAvailability,
+            controls: controlsWidget,
+            selectedSlot: _selectedSlot,
+            prettyTime: _prettyTime,
+            slotSection: availableTimesPanelWidget,
+            monthAvailabilityHint: monthNoAvailabilityHint,
+          );
+        },
+        ),
+      ),
+    );
+  }
+
+  String _selectedPractitionerLabel() {
+    final id = (_selectedPractitionerId ?? '').trim();
+    if (id.isEmpty) return '';
+    final match = _practitioners.where((p) => p.id == id).toList(growable: false);
+    if (match.isEmpty) return _shortId(id);
+    return match.first.displayName;
+  }
+}
+
+DateTime _dateOnlyForBooking(DateTime d) =>
+    DateTime(d.year, d.month, d.day);
+
+String _twoDigits(int n) => n.toString().padLeft(2, '0');
+
+const List<String> _monthNames = [
+  'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December',
+];
+
+const List<String> _weekdaysShort = [
+  'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun',
+];
+
+String _weekdayShort(DateTime d) => _weekdaysShort[d.weekday - 1];
+
+String _prettyLongDate(DateTime d) =>
+    '${_weekdayShort(d)} ${d.day} ${_monthNames[d.month - 1]} ${d.year}';
+
+/// Step indicator for the booking grid screen (Step 1 of 3).
+class _BookingStepIndicator extends StatelessWidget {
+  final int step;
+
+  const _BookingStepIndicator({required this.step});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Step $step of 3',
+          style: theme.textTheme.labelSmall?.copyWith(
+            color: Colors.black54,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          'Type — Details — Confirm',
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: Colors.black45,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _BookingControls extends StatelessWidget {
+  final DateTime selectedDay;
+  final List<_PractitionerOption> practitioners;
+  final String? selectedPractitionerId;
+  final void Function(String?) onPractitionerChanged;
+  final bool loadingPractitioners;
+  final String? practitionersError;
+  final String selectedPractitionerLabel;
+
+  const _BookingControls({
+    required this.selectedDay,
+    required this.practitioners,
+    required this.selectedPractitionerId,
+    required this.onPractitionerChanged,
+    required this.loadingPractitioners,
+    required this.practitionersError,
+    required this.selectedPractitionerLabel,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final now = DateTime.now();
+    final leadCutoff = now.add(const Duration(hours: 1));
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        InputDecorator(
+          decoration: InputDecoration(
+            labelText: 'Clinician',
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(AppRadius.element),
+            ),
+            isDense: true,
+          ),
+          child: DropdownButtonHideUnderline(
+            child: DropdownButton<String>(
+              isExpanded: true,
+              value: (selectedPractitionerId ?? '').trim().isEmpty
+                  ? null
+                  : selectedPractitionerId,
+              hint: const Text('Select a clinician'),
+              items: practitioners
+                  .map(
+                    (p) => DropdownMenuItem<String>(
+                      value: p.id,
+                      child: Text(p.displayName),
+                    ),
+                  )
+                  .toList(),
+              onChanged: loadingPractitioners ? null : onPractitionerChanged,
             ),
           ),
-
-          // Helper text (lead time)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 6, 16, 0),
-            child: Text(
-              'Clinician: ${selectedPractitionerLabel.isEmpty ? '—' : selectedPractitionerLabel}\n'
-              'Showing hourly start times only. '
-              '${_dateOnly(_selectedDay) == _dateOnly(now) ? 'Earliest bookable: ${_prettyTime(leadCutoff)}' : 'Book at least ${_minLeadTime.inMinutes} mins in advance.'}',
-              style: TextStyle(
-                fontSize: 12,
+        ),
+        const SizedBox(height: 8),
+        Text(
+          _dateOnlyForBooking(selectedDay) == _dateOnlyForBooking(now)
+              ? 'Earliest bookable today: ${_twoDigits(leadCutoff.hour)}:${_twoDigits(leadCutoff.minute)}'
+              : 'Book at least 1 hour in advance.',
+          style: Theme.of(context).textTheme.labelSmall?.copyWith(
                 color: Theme.of(context).textTheme.bodySmall?.color,
               ),
-              textAlign: TextAlign.center,
+        ),
+        if (loadingPractitioners)
+          const Padding(
+            padding: EdgeInsets.only(top: 10),
+            child: SizedBox(
+              height: 18,
+              width: 18,
+              child: CircularProgressIndicator(strokeWidth: 2),
             ),
           ),
+        if (practitionersError != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Text(
+              practitionersError!,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: Theme.of(context).colorScheme.error,
+                  ),
+            ),
+          ),
+      ],
+    );
+  }
+}
 
-          if (_loadingPractitioners)
-            const Padding(
-              padding: EdgeInsets.only(top: 10),
-              child: SizedBox(
-                height: 18,
-                width: 18,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              ),
-            ),
-          if (_practitionersError != null)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
-              child: Text(
-                _practitionersError!,
-                style: TextStyle(
-                  color: Theme.of(context).colorScheme.error,
-                  fontSize: 12,
-                ),
-                textAlign: TextAlign.center,
-              ),
-            ),
+/// Right-column panel: stable header + body states (no clinician, loading, no slots, slots).
+class _AvailableTimesPanel extends StatelessWidget {
+  final DateTime selectedDay;
+  final bool hasClinician;
+  final String? practitionerId;
+  final bool loadingSlots;
+  final String? slotsError;
+  final List<_PublicSlot> slots;
+  final _PublicSlot? selectedSlot;
+  final bool isCorporateDay;
+  final String Function(DateTime) prettyTime;
+  final void Function(_PublicSlot) onSlotTap;
+  final VoidCallback onRefresh;
+  final VoidCallback? onNextAvailable;
+  final String Function(DateTime) prettyDayLabel;
+  final String? practitionerLabel;
 
-          if (_loadingDayMeta)
-            const Padding(
-              padding: EdgeInsets.only(top: 10),
-              child: SizedBox(
-                height: 18,
-                width: 18,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              ),
-            ),
-          if (_dayMetaError != null)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
-              child: Text(
-                _dayMetaError!,
-                style: TextStyle(
-                  color: Theme.of(context).colorScheme.error,
-                  fontSize: 12,
-                ),
-                textAlign: TextAlign.center,
-              ),
-            ),
+  const _AvailableTimesPanel({
+    required this.selectedDay,
+    required this.hasClinician,
+    this.practitionerId,
+    required this.loadingSlots,
+    this.slotsError,
+    required this.slots,
+    this.selectedSlot,
+    required this.isCorporateDay,
+    required this.prettyTime,
+    required this.onSlotTap,
+    required this.onRefresh,
+    this.onNextAvailable,
+    required this.prettyDayLabel,
+    this.practitionerLabel,
+  });
 
-          if (showCorporateBanner)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
-              child: Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: Colors.orangeAccent),
+  static const double slotTileHeight = 58;
+  static const double gridSpacing = AppSpacing.elementGap;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final formattedSelectedDate = hasClinician ? prettyDayLabel(selectedDay) : null;
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final maxH = constraints.hasBoundedHeight && constraints.maxHeight.isFinite
+            ? constraints.maxHeight
+            : 400.0;
+        return SizedBox(
+          height: maxH,
+          child: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Available times',
+              style: theme.textTheme.titleMedium,
+            ),
+            const SizedBox(height: 4),
+            if (formattedSelectedDate != null)
+              Text(
+                formattedSelectedDate,
+                style: theme.textTheme.titleLarge?.copyWith(
+                  fontWeight: FontWeight.w600,
                 ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        const Icon(Icons.business, size: 18),
-                        const SizedBox(width: 8),
-                        Text(
-                          _corpDisplayName?.isNotEmpty == true
-                              ? _corpDisplayName!
-                              : 'Corporate day',
-                          style: Theme.of(context)
-                              .textTheme
-                              .titleSmall
-                              ?.copyWith(fontWeight: FontWeight.w700),
-                        ),
-                        const Spacer(),
-                        if (_corpMode == CorporateMode.codeUnlock)
-                          OutlinedButton(
-                            onPressed: _promptForCorporateCode,
-                            child: Text(
-                              _corporateCode.trim().isEmpty
-                                  ? 'Enter code'
-                                  : 'Change code',
-                            ),
-                          ),
-                      ],
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      (_corpMode == CorporateMode.codeUnlock)
-                          ? 'This day is reserved for corporate appointments. You need a booking code.'
-                          : 'This day is reserved for corporate appointments.',
-                      style: const TextStyle(fontSize: 12),
-                    ),
-                    if (_locationLabel.trim().isNotEmpty) ...[
-                      const SizedBox(height: 6),
-                      Text(
-                        'Location: ${_locationLabel.trim()}',
-                        style: const TextStyle(
-                          fontSize: 12,
-                          color: Colors.black54,
-                        ),
+              )
+            else
+              Text('Select a date'),
+          ],
+        ),
+        const SizedBox(height: 16),
+        if (selectedSlot != null && practitionerLabel != null && practitionerLabel!.isNotEmpty) ...[
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  '$practitionerLabel · ${prettyTime(selectedSlot!.startLocal)}',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurface.withValues(alpha: 0.8),
+                  ),
+                ),
+                if (kIsWeb)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 2),
+                    child: Text(
+                      'Times shown in local time',
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
                       ),
-                    ],
-                  ],
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
+        Expanded(
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(AppRadius.element),
+            child: _buildBody(context),
+          ),
+        ),
+      ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildBody(BuildContext context) {
+    if (!hasClinician) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(AppSpacing.screenPadding),
+          child: Text(
+            'Select a clinician to see availability.',
+            textAlign: TextAlign.center,
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+              color: Colors.black54,
+            ),
+          ),
+        ),
+      );
+    }
+    if (loadingSlots) {
+      return _LoadingPlaceholderGrid();
+    }
+    if (slotsError != null) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(AppSpacing.elementGap),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.error_outline,
+                size: 40,
+                color: Theme.of(context).colorScheme.error,
+              ),
+              const SizedBox(height: 10),
+              Text(
+                slotsError!,
+                textAlign: TextAlign.center,
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
+              const SizedBox(height: 12),
+              FilledButton.icon(
+                onPressed: onRefresh,
+                icon: const Icon(Icons.refresh),
+                label: const Text('Try again'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+    if (slots.isEmpty) {
+      return SingleChildScrollView(
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(AppSpacing.screenPadding),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  'No appointments available',
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: Colors.black87,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Try another day or jump to the next available time.',
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: Colors.black45,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                if (onNextAvailable != null)
+                  FilledButton.icon(
+                    onPressed: onNextAvailable,
+                    icon: const Icon(Icons.calendar_today, size: 18),
+                    label: const Text('Next available'),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 220),
+      switchInCurve: Curves.easeOut,
+      switchOutCurve: Curves.easeIn,
+      transitionBuilder: (child, animation) {
+        return FadeTransition(
+          opacity: animation,
+          child: SlideTransition(
+            position: Tween<Offset>(
+              begin: const Offset(0.02, 0),
+              end: Offset.zero,
+            ).animate(animation),
+            child: child,
+          ),
+        );
+      },
+      child: Container(
+        key: ValueKey(
+            '${selectedDay.toIso8601String()}-${practitionerId ?? 'any'}'),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: Tooltip(
+                message: 'First available time on this day',
+                child: Text(
+                  'Earliest available',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6),
+                  ),
                 ),
               ),
             ),
+            Expanded(
+              child: LayoutBuilder(
+          builder: (context, constraints) {
+            final width = constraints.maxWidth;
+            final crossAxisCount = width < 260 ? 2 : (width < 520 ? 3 : (width < 900 ? 4 : 5));
+            final childWidth = (width - (crossAxisCount - 1) * gridSpacing) / crossAxisCount;
+            final childAspectRatio = childWidth / slotTileHeight;
+            return SingleChildScrollView(
+              child: GridView.builder(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                padding: const EdgeInsets.only(top: 8),
+                gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: crossAxisCount,
+                  mainAxisSpacing: gridSpacing,
+                  crossAxisSpacing: gridSpacing,
+                  childAspectRatio: childAspectRatio,
+                ),
+                itemCount: slots.length,
+                itemBuilder: (context, i) {
+                  final s = slots[i];
+                  final selected = selectedSlot != null &&
+                      selectedSlot!.startLocal.millisecondsSinceEpoch == s.startLocal.millisecondsSinceEpoch;
+                  return SlotTile(
+                    label: prettyTime(s.startLocal),
+                    corporate: isCorporateDay,
+                    selected: selected,
+                    badge: i == 0 ? 'Earliest' : null,
+                    onTap: () => onSlotTap(s),
+                  );
+                },
+              ),
+            );
+          },
+        ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
 
-          const SizedBox(height: 8),
+/// 6–8 disabled placeholder tiles while loading (or searching next available).
+class _LoadingPlaceholderGrid extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final width = constraints.maxWidth;
+        final crossAxisCount = width < 260 ? 2 : (width < 520 ? 3 : (width < 900 ? 4 : 5));
+        final childWidth = (width - (crossAxisCount - 1) * _AvailableTimesPanel.gridSpacing) / crossAxisCount;
+        final childAspectRatio = childWidth / _AvailableTimesPanel.slotTileHeight;
+        const placeholders = 8;
+        return GridView.builder(
+          padding: const EdgeInsets.only(top: 8),
+          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: crossAxisCount,
+            mainAxisSpacing: _AvailableTimesPanel.gridSpacing,
+            crossAxisSpacing: _AvailableTimesPanel.gridSpacing,
+            childAspectRatio: childAspectRatio,
+          ),
+          itemCount: placeholders,
+          itemBuilder: (context, i) => Opacity(
+            opacity: 0.5,
+            child: SlotTile(
+              label: '--:--',
+              disabled: true,
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
 
+/// Desktop layout: clinician fixed at top; below, two columns — left = month calendar, right = time slots.
+class _TwoColumnBookingPanel extends StatelessWidget {
+  final Widget header;
+  final Widget stepIndicator;
+  final bool hasClinician;
+  final DateTime visibleMonth;
+  final DateTime selectedDay;
+  final DateTime firstAllowedDay;
+  final DateTime lastAllowedDay;
+  final ValueChanged<DateTime> onMonthChanged;
+  final ValueChanged<DateTime> onDaySelected;
+  final VoidCallback onRefresh;
+  final Map<String, DayAvailability> availabilityByYmd;
+  final bool loadingMonthAvail;
+  final String? monthAvailError;
+  final Widget controls;
+  final Widget slotSection;
+  final Widget? monthAvailabilityHint;
+
+  const _TwoColumnBookingPanel({
+    required this.header,
+    required this.stepIndicator,
+    required this.hasClinician,
+    required this.visibleMonth,
+    required this.selectedDay,
+    required this.firstAllowedDay,
+    required this.lastAllowedDay,
+    required this.onMonthChanged,
+    required this.onDaySelected,
+    required this.onRefresh,
+    required this.availabilityByYmd,
+    required this.loadingMonthAvail,
+    this.monthAvailError,
+    required this.controls,
+    required this.slotSection,
+    this.monthAvailabilityHint,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final h = MediaQuery.sizeOf(context).height;
+    // Taller panel so the calendar has more vertical space (needs height more than width).
+    final panelH = (h - 180).clamp(580.0, 820.0);
+
+    return SizedBox(
+      height: panelH,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // 1) Clinician fixed at top (full width)
+          header,
+          const SizedBox(height: 16),
+          stepIndicator,
+          const SizedBox(height: 16),
+          controls,
+          const SizedBox(height: 16),
+          // 2) Below: two columns — left = month calendar (gets remaining space), right = narrow scrollable slots
           Expanded(
-            child: _loadingSlots
-                ? const Center(child: CircularProgressIndicator())
-                : (_slotsError != null)
-                    ? Center(
-                        child: Padding(
-                          padding: const EdgeInsets.all(16),
-                          child: Column(
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                return Row(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    // Left: month calendar (Expanded so it gets more room; right column is fixed width)
+                    Expanded(
+                      child: LayoutBuilder(
+                        builder: (context, innerConstraints) {
+                          final calMaxHeight = (innerConstraints.maxHeight - 32).clamp(200.0, double.infinity);
+                          return Column(
                             mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              const Icon(Icons.error_outline, size: 40),
-                              const SizedBox(height: 10),
-                              Text(_slotsError!, textAlign: TextAlign.center),
-                              const SizedBox(height: 12),
-                              FilledButton.icon(
-                                onPressed: _refreshAll,
-                                icon: const Icon(Icons.refresh),
-                                label: const Text('Try again'),
-                              ),
-                            ],
-                          ),
-                        ),
-                      )
-                    : (_slots.isEmpty)
-                        ? const Center(
-                            child: Padding(
-                              padding: EdgeInsets.all(18),
-                              child: Text(
-                                'No available hourly slots for this day.\n\nPlease choose another date.',
-                                textAlign: TextAlign.center,
+                              if (monthAvailabilityHint != null) ...[
+                                monthAvailabilityHint!,
+                                const SizedBox(height: 8),
+                              ],
+                              ConstrainedBox(
+                                constraints: BoxConstraints(
+                                  minHeight: 320.0.clamp(0.0, calMaxHeight),
+                                  maxWidth: 400,
+                                  maxHeight: calMaxHeight,
+                                ),
+                                child: InlineMonthCalendar(
+                                    visibleMonth: visibleMonth,
+                                    selectedDay: selectedDay,
+                                    firstAllowedDay: firstAllowedDay,
+                                    lastAllowedDay: lastAllowedDay,
+                                    onDaySelected: onDaySelected,
+                                    onMonthChanged: onMonthChanged,
+                                    availabilityByYmd: availabilityByYmd,
+                                    loadingAvailability: loadingMonthAvail,
+                                    disableDaysWithoutAvailability: hasClinician,
+                                    maxHeight: calMaxHeight,
+                                    footer: Tooltip(
+                                      message: 'Based on number of available times',
+                                      child: const InlineMonthCalendarLegend(),
+                                    ),
+                                    trailingAction: IconButton(
+                                      tooltip: 'Refresh',
+                                      icon: loadingMonthAvail
+                                          ? const SizedBox(
+                                              height: 24,
+                                              width: 24,
+                                              child: CircularProgressIndicator(strokeWidth: 2),
+                                            )
+                                          : const Icon(Icons.refresh),
+                                      onPressed: loadingMonthAvail
+                                          ? null
+                                          : onRefresh,
+                                    ),
+                                  ),
+                                ),
+                          if (monthAvailError != null) ...[
+                            const SizedBox(height: 6),
+                            Text(
+                              monthAvailError!,
+                              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                color: Theme.of(context).colorScheme.error,
                               ),
                             ),
-                          )
-                        : ListView.separated(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 16,
-                              vertical: 8,
-                            ),
-                            itemCount: _slots.length,
-                            separatorBuilder: (_, __) =>
-                                const Divider(height: 1),
-                            itemBuilder: (context, i) {
-                              final s = _slots[i];
-                              return ListTile(
-                                leading: const Icon(Icons.schedule),
-                                title: Text(_prettyTime(s.startLocal)),
-                                subtitle: Text(_prettyDate(s.startLocal)),
-                                trailing: _isCorporateDay
-                                    ? Container(
-                                        padding: const EdgeInsets.symmetric(
-                                          horizontal: 8,
-                                          vertical: 4,
-                                        ),
-                                        decoration: BoxDecoration(
-                                          borderRadius:
-                                              BorderRadius.circular(12),
-                                          border: Border.all(
-                                            color: Colors.orangeAccent,
-                                          ),
-                                        ),
-                                        child: const Text(
-                                          'Corporate',
-                                          style: TextStyle(
-                                            fontSize: 11,
-                                            fontWeight: FontWeight.w600,
-                                          ),
-                                        ),
-                                      )
-                                    : null,
-                                onTap: () => _onTapSlot(s),
-                              );
-                            },
-                          ),
+                          ],
+                        ],
+                      );
+                  },
+                ),
+              ),
+              const SizedBox(width: 24),
+              // Right: _AvailableTimesPanel — give bounded height so inner Expanded doesn't overflow
+              SizedBox(
+                width: PatientBookingSimpleScreen.slotsColMaxWidth,
+                height: constraints.maxHeight,
+                child: slotSection,
+              ),
+            ],
+          );
+        },
+      ),
+    ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Mobile layout: one column — clinician → full calendar (fixed height) → time slots. Calendar always fully visible.
+class _SingleColumnBookingPanel extends StatelessWidget {
+  final ScrollController scrollController;
+  final GlobalKey calendarKey;
+  final bool hasClinician;
+  final DateTime visibleMonth;
+  final DateTime selectedDay;
+  final ValueChanged<DateTime> onDaySelected;
+  final ValueChanged<DateTime> onMonthChanged;
+  final Map<String, DayAvailability> monthAvail;
+  final bool loadingMonthAvail;
+  final String? monthAvailError;
+  final Future<void> Function() onRefreshAll;
+  final Future<void> Function() loadMonthAvailability;
+  final Widget controls;
+  final _PublicSlot? selectedSlot;
+  final String Function(DateTime) prettyTime;
+  final Widget slotSection;
+  final Widget? monthAvailabilityHint;
+
+  const _SingleColumnBookingPanel({
+    required this.scrollController,
+    required this.calendarKey,
+    required this.hasClinician,
+    required this.visibleMonth,
+    required this.selectedDay,
+    required this.onDaySelected,
+    required this.onMonthChanged,
+    required this.monthAvail,
+    required this.loadingMonthAvail,
+    this.monthAvailError,
+    required this.onRefreshAll,
+    required this.loadMonthAvailability,
+    required this.controls,
+    required this.selectedSlot,
+    required this.prettyTime,
+    required this.slotSection,
+    this.monthAvailabilityHint,
+  });
+
+  static DateTime _dateOnly(DateTime d) => DateTime(d.year, d.month, d.day);
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      controller: scrollController,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const PublicHeader(
+            title: 'Choose a time',
+            subtitle: 'Select clinician, then pick a day.',
+          ),
+          const SizedBox(height: 16),
+          const _BookingStepIndicator(step: 1),
+          const SizedBox(height: 12),
+          controls,
+          const SizedBox(height: 16),
+          // 2) Calendar — fixed height so full 6-row month is always visible (no "only week" problem)
+          if (monthAvailabilityHint != null) ...[
+            monthAvailabilityHint!,
+            const SizedBox(height: 8),
+          ],
+          SizedBox(
+            height: _calendarHeightForMobile(context),
+            child: KeyedSubtree(
+              key: calendarKey,
+              child: InlineMonthCalendar(
+                visibleMonth: visibleMonth,
+                selectedDay: selectedDay,
+                firstAllowedDay: _dateOnly(DateTime.now()),
+                lastAllowedDay: _dateOnly(DateTime.now().add(const Duration(days: 365))),
+                onDaySelected: onDaySelected,
+                onMonthChanged: onMonthChanged,
+                availabilityByYmd: monthAvail,
+                loadingAvailability: loadingMonthAvail,
+                disableDaysWithoutAvailability: hasClinician,
+                footer: Tooltip(
+                  message: 'Based on number of available times',
+                  child: const InlineMonthCalendarLegend(),
+                ),
+                trailingAction: IconButton(
+                  tooltip: 'Refresh',
+                  icon: loadingMonthAvail
+                      ? const SizedBox(
+                          height: 24,
+                          width: 24,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.refresh),
+                  onPressed: loadingMonthAvail
+                      ? null
+                      : () async {
+                          await onRefreshAll();
+                          await loadMonthAvailability();
+                        },
+                ),
+              ),
+            ),
+          ),
+          if (monthAvailError != null) ...[
+            const SizedBox(height: 6),
+            Text(
+              monthAvailError!,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: Theme.of(context).colorScheme.error,
+              ),
+            ),
+          ],
+          const SizedBox(height: AppSpacing.sectionGap),
+          if (selectedSlot != null) ...[
+            Text(
+              'Selected: ${prettyTime(selectedSlot!.startLocal)}',
+              style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                color: Theme.of(context).colorScheme.primary,
+              ),
+            ),
+            const SizedBox(height: 6),
+          ],
+          SizedBox(
+            height: 420,
+            child: slotSection,
           ),
         ],
       ),
     );
   }
+}
+
+/// Fixed height so the full 6-row calendar grid is always visible on mobile (no scrolling the calendar).
+double _calendarHeightForMobile(BuildContext context) {
+  final w = MediaQuery.sizeOf(context).width;
+  final cellW = (w - (AppSpacing.screenPadding * 2)) / 7;
+  final cell = cellW.clamp(34.0, 44.0);
+  const header = 48.0;
+  const weekday = 18.0;
+  const gaps = 8.0 + 6.0 + 8.0;
+  final grid = cell * 6;
+  const footer = 24.0 + 8.0;
+  return header + weekday + gaps + grid + footer;
 }
 
 enum BookingKind { newPatient, followUp }
@@ -1977,6 +2394,671 @@ class _PractitionerOption {
     required this.id,
     required this.displayName,
   });
+}
+
+// -----------------------------------------------------------------------------
+// Full-screen booking flow (replaces appointment type, patient details, confirm dialogs)
+// -----------------------------------------------------------------------------
+
+class BookingDetailsScreen extends StatefulWidget {
+  final _PublicSlot slot;
+  final String clinicId;
+  final String Function(DateTime) prettyDateTime;
+  final Future<Map<String, dynamic>?> Function(
+    _AppointmentType appt,
+    _PatientFormResult patient,
+  ) onSubmit;
+  final void Function(
+    Map<String, dynamic> data,
+    _AppointmentType appt,
+    _PatientFormResult patient,
+  ) onSuccess;
+
+  const BookingDetailsScreen({
+    super.key,
+    required this.slot,
+    required this.clinicId,
+    required this.prettyDateTime,
+    required this.onSubmit,
+    required this.onSuccess,
+  });
+
+  @override
+  State<BookingDetailsScreen> createState() => _BookingDetailsScreenState();
+}
+
+class _BookingDetailsScreenState extends State<BookingDetailsScreen> {
+  int _step = 0;
+  _AppointmentType? _apptType;
+  _PatientFormResult? _patient;
+  bool _submitting = false;
+  String? _error;
+
+  static const _typeInitial = _AppointmentType(
+    minutes: 60,
+    kind: BookingKind.newPatient,
+    label: 'Initial consultation (60 mins)',
+    priceText: '1300 Kč',
+    description:
+        'Initial consultation, mobility assessment & manual techniques',
+  );
+  static const _typeFollowUp = _AppointmentType(
+    minutes: 45,
+    kind: BookingKind.followUp,
+    label: 'Follow-up (45 mins)',
+    priceText: '1000 Kč',
+    description:
+        'Follow-up focusing on movement progression & soft-tissue work',
+  );
+
+  static const Duration _stepTransitionDuration = Duration(milliseconds: 240);
+
+  @override
+  Widget build(BuildContext context) {
+    return PublicShell(
+      showBack: true,
+      scrollableCard: true,
+      showPoweredBy: false,
+      title: null,
+      subtitle: null,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _buildStepIndicator(context),
+          const SizedBox(height: AppSpacing.sectionGap),
+          AnimatedSize(
+            duration: _stepTransitionDuration,
+            curve: Curves.easeOut,
+            alignment: Alignment.topCenter,
+            child: AnimatedSwitcher(
+              duration: _stepTransitionDuration,
+              switchInCurve: Curves.easeOut,
+              switchOutCurve: Curves.easeIn,
+              transitionBuilder: (child, anim) {
+                final fade = FadeTransition(opacity: anim, child: child);
+                final offsetAnim = Tween<Offset>(
+                  begin: const Offset(0, 0.03),
+                  end: Offset.zero,
+                ).animate(CurvedAnimation(parent: anim, curve: Curves.easeOut));
+                return SlideTransition(position: offsetAnim, child: fade);
+              },
+              child: KeyedSubtree(
+                key: ValueKey<int>(_submitting ? 3 : _step),
+                child: _buildStepBody(),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStepBody() {
+    if (_submitting) return _buildSubmitting();
+    switch (_step) {
+      case 0:
+        return _buildStepType();
+      case 1:
+        return _buildStepPatient();
+      default:
+        return _buildStepConfirm();
+    }
+  }
+
+  Widget _buildStepIndicator(BuildContext context) {
+    final theme = Theme.of(context);
+    final step = _submitting ? 3 : (_step + 1);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Step $step of 3',
+          style: theme.textTheme.labelSmall?.copyWith(
+            color: Colors.black54,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          'Appointment type → Details → Confirm',
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: Colors.black45,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildSubmitting() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 32),
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TherapyLoadingIndicator(
+              size: 40,
+              color: Theme.of(context).colorScheme.primary,
+              iconAssetPaths: TherapyLoadingIndicator.therapyIconPaths,
+            ),
+            const SizedBox(height: 16),
+            Text(
+              'Submitting booking…',
+              style: Theme.of(context).textTheme.titleSmall,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildStepType() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const PublicHeader(
+          title: 'Choose appointment type',
+          subtitle: 'Select one option to continue.',
+        ),
+        const SizedBox(height: AppSpacing.sectionGap),
+        _TypeOptionTile(
+          type: _typeInitial,
+          onTap: () {
+            setState(() {
+              _apptType = _typeInitial;
+              _step = 1;
+              _error = null;
+            });
+          },
+        ),
+        const SizedBox(height: AppSpacing.elementGap),
+        _TypeOptionTile(
+          type: _typeFollowUp,
+          onTap: () {
+            setState(() {
+              _apptType = _typeFollowUp;
+              _step = 1;
+              _error = null;
+            });
+          },
+        ),
+      ],
+    );
+  }
+
+  Widget _buildStepPatient() {
+    return _PatientFormStep(
+      kind: _apptType!.kind,
+      onCancel: () => setState(() => _step = 0),
+      onContinue: (result) {
+        setState(() {
+          _patient = result;
+          _step = 2;
+          _error = null;
+        });
+      },
+    );
+  }
+
+  Widget _buildStepConfirm() {
+    final theme = Theme.of(context);
+    final appt = _apptType!;
+    final patient = _patient!;
+
+    return SingleChildScrollView(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const PublicHeader(
+            title: 'Confirm booking',
+            subtitle: 'Review and confirm your appointment.',
+          ),
+          const SizedBox(height: AppSpacing.sectionGap),
+          Text(
+            '${appt.label} — ${appt.priceText}',
+            style: theme.textTheme.titleMedium?.copyWith(
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            widget.prettyDateTime(widget.slot.startLocal),
+            style: theme.textTheme.bodyMedium?.copyWith(
+              color: Colors.black54,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            '${patient.firstName} ${patient.lastName}',
+            style: theme.textTheme.bodyMedium,
+          ),
+          Text(
+            patient.email,
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: Colors.black54,
+            ),
+          ),
+          if (_error != null) ...[
+            const SizedBox(height: 16),
+            Text(
+              _error!,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.error,
+              ),
+            ),
+          ],
+          const SizedBox(height: 24),
+          Row(
+            children: [
+              TextButton(
+                onPressed: () => setState(() => _step = 1),
+                child: const Text('Back'),
+              ),
+              const SizedBox(width: AppSpacing.elementGap),
+              Expanded(
+                child: SizedBox(
+                  height: AppSizes.buttonHeight,
+                  child: FilledButton(
+                    onPressed: _confirmTap,
+                    child: const Text('Confirm booking'),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _confirmTap() async {
+    if (_apptType == null || _patient == null) return;
+    setState(() {
+      _submitting = true;
+      _error = null;
+    });
+
+    try {
+      final data = await widget.onSubmit(_apptType!, _patient!);
+      if (!mounted) return;
+
+      final status = (data?['status'] ?? '').toString();
+      if (status == 'rejected') {
+        final reason = (data?['rejectionReason'] ?? 'Booking rejected.').toString();
+        setState(() {
+          _submitting = false;
+          _error = reason;
+        });
+        return;
+      }
+
+      if (status == 'approved' || data != null) {
+        widget.onSuccess(data!, _apptType!, _patient!);
+        return;
+      }
+
+      setState(() => _submitting = false);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _submitting = false;
+        _error = e.toString().replaceFirst('Exception: ', '').trim();
+      });
+    }
+  }
+}
+
+class _TypeOptionTile extends StatelessWidget {
+  final _AppointmentType type;
+  final VoidCallback onTap;
+
+  const _TypeOptionTile({required this.type, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(AppRadius.element),
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(
+          vertical: 16,
+          horizontal: 16,
+        ),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(AppRadius.element),
+          border: Border.all(color: AppColors.subtleBorder),
+        ),
+        child: Row(
+          children: [
+            Icon(
+              type.kind == BookingKind.newPatient
+                  ? Icons.timer_outlined
+                  : Icons.timer,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '${type.label} — ${type.priceText}',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    type.description,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: Colors.black54,
+                        ),
+                  ),
+                ],
+              ),
+            ),
+            const Icon(Icons.arrow_forward_ios, size: 14),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _PatientFormStep extends StatefulWidget {
+  final BookingKind kind;
+  final VoidCallback onCancel;
+  final void Function(_PatientFormResult result) onContinue;
+
+  const _PatientFormStep({
+    required this.kind,
+    required this.onCancel,
+    required this.onContinue,
+  });
+
+  @override
+  State<_PatientFormStep> createState() => _PatientFormStepState();
+}
+
+class _PatientFormStepState extends State<_PatientFormStep> {
+  final _firstNameCtrl = TextEditingController();
+  final _lastNameCtrl = TextEditingController();
+  final _emailCtrl = TextEditingController();
+  final _phoneCtrl = TextEditingController();
+  final _addressCtrl = TextEditingController();
+  DateTime? _dob;
+  bool _acceptsPolicies = false;
+
+  static String _prettyDate(DateTime d) {
+    final day = d.day.toString().padLeft(2, '0');
+    final month = d.month.toString().padLeft(2, '0');
+    return '$day/$month/${d.year}';
+  }
+
+  @override
+  void dispose() {
+    _firstNameCtrl.dispose();
+    _lastNameCtrl.dispose();
+    _emailCtrl.dispose();
+    _phoneCtrl.dispose();
+    _addressCtrl.dispose();
+    super.dispose();
+  }
+
+  bool _valid() {
+    return _firstNameCtrl.text.trim().isNotEmpty &&
+        _lastNameCtrl.text.trim().isNotEmpty &&
+        _dob != null &&
+        _emailCtrl.text.trim().isNotEmpty &&
+        _phoneCtrl.text.trim().isNotEmpty &&
+        _acceptsPolicies;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          PublicHeader(
+            title: widget.kind == BookingKind.newPatient
+                ? 'Your details'
+                : 'Client details',
+            subtitle: 'We need these to confirm your appointment.',
+          ),
+          const SizedBox(height: AppSpacing.sectionGap),
+          TextField(
+            controller: _firstNameCtrl,
+            decoration: const InputDecoration(
+              labelText: 'First name',
+              border: OutlineInputBorder(),
+            ),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _lastNameCtrl,
+            decoration: const InputDecoration(
+              labelText: 'Last name',
+              border: OutlineInputBorder(),
+            ),
+          ),
+          const SizedBox(height: 12),
+          OutlinedButton.icon(
+            icon: const Icon(Icons.cake_outlined),
+            onPressed: () async {
+              final now = DateTime.now();
+              final picked = await showDatePicker(
+                context: context,
+                initialDate: DateTime(now.year - 30, now.month, now.day),
+                firstDate: DateTime(1900, 1, 1),
+                lastDate: now,
+              );
+              if (picked != null) setState(() => _dob = picked);
+            },
+            label: Text(_dob == null ? 'Date of birth' : _prettyDate(_dob!)),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _phoneCtrl,
+            decoration: const InputDecoration(
+              labelText: 'Phone',
+              border: OutlineInputBorder(),
+            ),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _emailCtrl,
+            decoration: const InputDecoration(
+              labelText: 'Email',
+              border: OutlineInputBorder(),
+            ),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _addressCtrl,
+            decoration: const InputDecoration(
+              labelText: 'Address (optional)',
+              border: OutlineInputBorder(),
+            ),
+          ),
+          const SizedBox(height: 16),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Checkbox(
+                value: _acceptsPolicies,
+                onChanged: (v) =>
+                    setState(() => _acceptsPolicies = v ?? false),
+              ),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'I have read and understand the policies (privacy, consent & cancellation).',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                    TextButton(
+                      onPressed: () {
+                        showDialog<void>(
+                          context: context,
+                          builder: (_) => const _PolicyPreviewDialog(),
+                        );
+                      },
+                      child: const Text('View policies'),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 24),
+          Row(
+            children: [
+              TextButton(
+                onPressed: widget.onCancel,
+                child: const Text('Back'),
+              ),
+              const SizedBox(width: AppSpacing.elementGap),
+              Expanded(
+                child: SizedBox(
+                  height: AppSizes.buttonHeight,
+                  child: FilledButton(
+                    onPressed: () {
+                      if (!_valid()) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text(
+                              'Please complete all required fields and accept the policies.',
+                            ),
+                          ),
+                        );
+                        return;
+                      }
+                      widget.onContinue(
+                        _PatientFormResult(
+                          firstName: _firstNameCtrl.text.trim(),
+                          lastName: _lastNameCtrl.text.trim(),
+                          dob: _dob!,
+                          phone: _phoneCtrl.text.trim(),
+                          email: _emailCtrl.text.trim(),
+                          address: _addressCtrl.text.trim(),
+                          acceptsPolicies: _acceptsPolicies,
+                        ),
+                      );
+                    },
+                    child: const Text('Continue'),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class BookingConfirmationScreen extends StatelessWidget {
+  final DateTime slotStartLocal;
+  final _AppointmentType apptType;
+  final String bookingRequestId;
+  final _PatientFormResult patient;
+  final String clinicId;
+  final VoidCallback onBackToBooking;
+  final void Function(_PatientFormResult patient, String bookingRequestId)
+      onContinue;
+  final VoidCallback onGoHome;
+
+  const BookingConfirmationScreen({
+    super.key,
+    required this.slotStartLocal,
+    required this.apptType,
+    required this.bookingRequestId,
+    required this.patient,
+    required this.clinicId,
+    required this.onBackToBooking,
+    required this.onContinue,
+    required this.onGoHome,
+  });
+
+  static String _prettyDateTime(DateTime d) {
+    final day = d.day.toString().padLeft(2, '0');
+    final month = d.month.toString().padLeft(2, '0');
+    final hour = d.hour.toString().padLeft(2, '0');
+    final min = d.minute.toString().padLeft(2, '0');
+    return '$day/$month/${d.year} $hour:$min';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return PublicShell(
+      showBack: true,
+      maxWidth: AppSizes.welcomeMaxWidth,
+      showPoweredBy: false,
+      title: null,
+      subtitle: null,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            Icons.check_circle_outline,
+            size: 56,
+            color: theme.colorScheme.primary,
+          ),
+          const SizedBox(height: 16),
+          Text(
+            'Your appointment is confirmed',
+            style: theme.textTheme.headlineSmall?.copyWith(
+              fontWeight: FontWeight.w600,
+            ),
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 8),
+          Text(
+            '${apptType.label} — ${apptType.priceText}\n'
+            '${_prettyDateTime(slotStartLocal)}',
+            style: theme.textTheme.bodyMedium?.copyWith(
+              color: Colors.black54,
+            ),
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 32),
+          SizedBox(
+            width: double.infinity,
+            height: AppSizes.buttonHeight,
+            child: FilledButton(
+              onPressed: () {
+                onBackToBooking();
+                onContinue(patient, bookingRequestId);
+              },
+              child: const Text('Continue'),
+            ),
+          ),
+          const SizedBox(height: 12),
+          TextButton(
+            onPressed: onBackToBooking,
+            child: const Text('Back to booking'),
+          ),
+          const SizedBox(height: 8),
+          TextButton(
+            onPressed: onGoHome,
+            style: TextButton.styleFrom(
+              foregroundColor: theme.textTheme.bodySmall?.color,
+            ),
+            child: Text(
+              'Home',
+              style: theme.textTheme.bodySmall?.copyWith(
+                decoration: TextDecoration.underline,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 // -----------------------------------------------------------------------------

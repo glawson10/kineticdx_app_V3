@@ -4,9 +4,7 @@ import * as admin from "firebase-admin";
 import { logger } from "firebase-functions/logger";
 import { enforceRateLimit } from "./rateLimit";
 
-// ✅ Adjust this import path to match your project
-// e.g. "../clinic/writePublicBookingMirror" or "../clinic/publicProjectionWriter"
-import { writePublicBookingMirror } from "../clinic/writePublicBookingMirror";
+// Commit 17: Availability reads only from public/config/publicBooking/config (no writePublicBookingMirror / private settings).
 
 if (!admin.apps.length) admin.initializeApp();
 const db = admin.firestore();
@@ -611,48 +609,124 @@ type DayFlag = {
   displayName?: string;
 };
 
-// ✅ NEW: self-healing loader for public settings
-async function loadPublicSettingsOrRebuildMirror(clinicId: string): Promise<PublicSettings> {
-  const mirrorRef = db.doc(
-    `clinics/${clinicId}/public/config/publicBooking/publicBooking`
-  );
+// Commit 17: Availability engine reads only from public mirror (config doc). No private settings reads.
+const CONFIG_DOC_PATH = (clinicId: string) =>
+  `clinics/${clinicId}/public/config/publicBooking/config`;
+const FULL_MIRROR_PATH = (clinicId: string) =>
+  `clinics/${clinicId}/public/config/publicBooking/publicBooking`;
 
-  const mirrorSnap = await mirrorRef.get();
-  if (mirrorSnap.exists) {
-    const d = (mirrorSnap.data() ?? {}) as PublicSettings;
+const DAY_KEYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] as const;
 
-    // If it looks healthy, use it.
-    // (We consider it healthy if it has at least one of weeklyHours/openingHours.)
-    const hasHours =
-      (d.weeklyHours && typeof d.weeklyHours === "object") ||
-      (d.openingHours && typeof d.openingHours === "object");
+function defaultWeeklyHours(): Record<string, Array<{ start: string; end: string }>> {
+  return Object.fromEntries(DAY_KEYS.map((k) => [k, []])) as Record<
+    string,
+    Array<{ start: string; end: string }>
+  >;
+}
 
-    if (hasHours) return d;
+/** Load booking rules + weeklyHours from mirror config doc only. Uses defaults if missing. */
+async function loadPublicConfigFromMirror(clinicId: string): Promise<{
+  timezone: string;
+  slotStepMinutes: number;
+  minNoticeMinutes: number;
+  maxAdvanceDays: number;
+  weeklyHours: Record<string, Array<{ start: string; end: string }>>;
+}> {
+  const configRef = db.doc(CONFIG_DOC_PATH(clinicId));
+  const configSnap = await configRef.get();
 
-    logger.warn("Public booking mirror exists but appears incomplete; attempting rebuild", {
+  if (!configSnap.exists || !configSnap.data()) {
+    logger.warn("[projection/publicBooking] public booking config missing; using defaults", {
       clinicId,
-      hasWeeklyHours: !!d.weeklyHours,
-      hasOpeningHours: !!d.openingHours,
     });
+    return {
+      timezone: "UTC",
+      slotStepMinutes: 15,
+      minNoticeMinutes: 0,
+      maxAdvanceDays: 90,
+      weeklyHours: defaultWeeklyHours(),
+    };
   }
 
-  // If mirror missing OR incomplete -> rebuild from settings
-  const settingsRef = db.doc(`clinics/${clinicId}/settings/publicBooking`);
-  const settingsSnap = await settingsRef.get();
+  const d = configSnap.data() as any;
+  const jurisdiction = d?.jurisdiction && typeof d.jurisdiction === "object" ? d.jurisdiction : {};
+  const rules = d?.bookingRules && typeof d.bookingRules === "object" ? d.bookingRules : {};
+  const wh = d?.weeklyHours && typeof d.weeklyHours === "object" ? d.weeklyHours : {};
 
-  if (!settingsSnap.exists) {
-    throw new HttpsError(
-      "failed-precondition",
-      "Public booking not configured (missing settings/publicBooking)."
-    );
+  const timezone = safeStr(jurisdiction.timezone) || "UTC";
+  const slotStepMinutes =
+    typeof rules.slotStepMinutes === "number" && [5, 10, 15, 20, 30].includes(rules.slotStepMinutes)
+      ? rules.slotStepMinutes
+      : 15;
+  const minNoticeMinutes =
+    typeof rules.minNoticeMinutes === "number" && rules.minNoticeMinutes >= 0
+      ? rules.minNoticeMinutes
+      : 0;
+  const maxAdvanceDays =
+    typeof rules.maxAdvanceDays === "number" && rules.maxAdvanceDays >= 7 && rules.maxAdvanceDays <= 365
+      ? rules.maxAdvanceDays
+      : 90;
+
+  const weeklyHours = defaultWeeklyHours();
+  for (const day of DAY_KEYS) {
+    const v = wh[day];
+    if (Array.isArray(v)) {
+      weeklyHours[day] = v
+        .filter((it: any) => it && typeof it === "object" && safeStr(it.start) && safeStr(it.end))
+        .map((it: any) => ({ start: safeStr(it.start), end: safeStr(it.end) }));
+    }
   }
 
-  const rawSettings = (settingsSnap.data() ?? {}) as any;
+  return {
+    timezone,
+    slotStepMinutes,
+    minNoticeMinutes,
+    maxAdvanceDays,
+    weeklyHours,
+  };
+}
 
-  // This writes the mirror + returns the projection
-  const projection = await writePublicBookingMirror(clinicId, rawSettings);
+/** Load practitioners + corporatePrograms from full mirror (for allowlist). Does not read private settings. */
+async function loadFullMirrorExtras(clinicId: string): Promise<{
+  practitioners: PublicPractitioner[];
+  corporatePrograms: PublicSettings["corporatePrograms"];
+}> {
+  const fullRef = db.doc(FULL_MIRROR_PATH(clinicId));
+  const snap = await fullRef.get();
+  if (!snap.exists || !snap.data()) return { practitioners: [], corporatePrograms: undefined };
 
-  return (projection ?? {}) as PublicSettings;
+  const d = snap.data() as any;
+  const raw =
+    Array.isArray(d?.practitioners) ? d.practitioners : Array.isArray(d?.publicBooking?.practitioners)
+      ? d.publicBooking.practitioners
+      : [];
+  const practitioners: PublicPractitioner[] = [];
+  for (const item of raw) {
+    if (item && typeof item === "object") {
+      const id = safeStr((item as any).id);
+      if (id) practitioners.push({ id, displayName: safeStr((item as any).displayName), serviceIdsAllowed: (item as any).serviceIdsAllowed, sortOrder: (item as any).sortOrder });
+    }
+  }
+  const corporatePrograms = Array.isArray(d?.corporatePrograms) ? d.corporatePrograms : undefined;
+  return { practitioners, corporatePrograms };
+}
+
+/** Commit 17: Load settings for availability from mirror config only. No private settings fallback. */
+async function loadPublicSettingsFromMirror(clinicId: string): Promise<PublicSettings> {
+  const [config, extras] = await Promise.all([
+    loadPublicConfigFromMirror(clinicId),
+    loadFullMirrorExtras(clinicId),
+  ]);
+
+  return {
+    timezone: config.timezone,
+    slotStepMinutes: config.slotStepMinutes,
+    minNoticeMinutes: config.minNoticeMinutes,
+    maxAdvanceDays: config.maxAdvanceDays,
+    weeklyHours: config.weeklyHours,
+    practitioners: extras.practitioners,
+    corporatePrograms: extras.corporatePrograms,
+  } as PublicSettings;
 }
 
 export const listPublicSlotsFn = onCall(
@@ -709,19 +783,41 @@ export const listPublicSlotsFn = onCall(
         });
       }
 
-      // ✅ Use self-healing settings loader
-      const settings = await loadPublicSettingsOrRebuildMirror(clinicId);
+      // ✅ Commit 17: Read only from mirror config (no private settings)
+      const settings = await loadPublicSettingsFromMirror(clinicId);
 
-      // Validate practitionerId against allowlist (only if practitionerId provided)
+      // Validate practitionerId against allowlist (only if practitionerId provided AND not openingWindows)
+      // For openingWindows (internal calendar), we allow any practitioner - they just need to exist in the clinic
+      const isOpeningWindows = purpose === "openingWindows";
+      
       if (practitionerId) {
-        const allowed = extractAllowedPractitionerIds(settings);
-        const ok = allowed.includes(practitionerId);
+        if (isOpeningWindows) {
+          // ✅ For internal calendar, verify practitioner exists in clinic (but don't check public allowlist)
+          const memberRef = db.doc(`clinics/${clinicId}/members/${practitionerId}`);
+          const legacyRef = db.doc(`clinics/${clinicId}/memberships/${practitionerId}`);
+          
+          const [memberSnap, legacySnap] = await Promise.all([
+            memberRef.get(),
+            legacyRef.get(),
+          ]);
+          
+          if (!memberSnap.exists && !legacySnap.exists) {
+            throw new HttpsError(
+              "failed-precondition",
+              `Practitioner ${practitionerId} is not a member of this clinic.`
+            );
+          }
+        } else {
+          // ✅ For public booking, check against allowlist
+          const allowed = extractAllowedPractitionerIds(settings);
+          const ok = allowed.includes(practitionerId);
 
-        if (!ok) {
-          throw new HttpsError(
-            "failed-precondition",
-            "Selected practitioner is not available for public booking."
-          );
+          if (!ok) {
+            throw new HttpsError(
+              "failed-precondition",
+              "Selected practitioner is not available for public booking."
+            );
+          }
         }
       }
 
@@ -978,6 +1074,184 @@ export const listPublicSlotsFn = onCall(
 
       if (err instanceof HttpsError) throw err;
       throw new HttpsError("internal", "listPublicSlots crashed.");
+    }
+  }
+);
+
+// ─── Month availability (dots on calendar) ───────────────────────────────
+
+type MonthAvailabilityInput = {
+  clinicId: string;
+  practitionerId: string;
+  serviceId?: string;
+  monthStartMs: number;
+  monthEndMs: number;
+  tz?: string;
+  corpCode?: string;
+};
+
+type DayAvailabilityOut = { count: number; corporateOnly: boolean };
+
+export const getPublicMonthAvailabilityFn = onCall(
+  { region: "europe-west3", cors: true },
+  async (request) => {
+    try {
+      if (!request.auth) {
+        throw new HttpsError("unauthenticated", "Must be signed in.");
+      }
+
+      const data = (request.data ?? {}) as Partial<MonthAvailabilityInput>;
+      const clinicId = safeStr(data.clinicId);
+      const practitionerId = safeStr(data.practitionerId);
+      const serviceId = safeStr(data.serviceId) || "default";
+
+      if (!clinicId || !practitionerId) {
+        throw new HttpsError(
+          "invalid-argument",
+          "clinicId and practitionerId are required."
+        );
+      }
+
+      const monthStartMs = typeof data.monthStartMs === "number" ? data.monthStartMs : 0;
+      const monthEndMs = typeof data.monthEndMs === "number" ? data.monthEndMs : 0;
+      if (!Number.isFinite(monthStartMs) || !Number.isFinite(monthEndMs) || monthEndMs <= monthStartMs) {
+        throw new HttpsError("invalid-argument", "Invalid monthStartMs / monthEndMs.");
+      }
+
+      const monthStartDt = new Date(monthStartMs);
+      const monthEndDt = new Date(monthEndMs);
+      const rangeStartTs = admin.firestore.Timestamp.fromDate(monthStartDt);
+      const rangeEndTs = admin.firestore.Timestamp.fromDate(monthEndDt);
+
+      const settings = await loadPublicSettingsOrRebuildMirror(clinicId);
+      const allowed = extractAllowedPractitionerIds(settings);
+      if (!allowed.includes(practitionerId)) {
+        throw new HttpsError(
+          "failed-precondition",
+          "Selected practitioner is not available for public booking."
+        );
+      }
+
+      const tz = safeStr(data.tz) || getTz(settings, "") || "Europe/Prague";
+      const minNotice =
+        typeof settings.minNoticeMinutes === "number" ? settings.minNoticeMinutes : 60;
+      const maxAdvanceDays =
+        typeof settings.maxAdvanceDays === "number" ? settings.maxAdvanceDays : 365;
+      const nowMs = Date.now();
+      const maxMs = nowMs + maxAdvanceDays * 86400000;
+
+      const corpCode = safeStr(data.corpCode) || undefined;
+      const programs = Array.isArray(settings.corporatePrograms) ? settings.corporatePrograms : [];
+      const corpDaySet: Set<string> = new Set();
+      for (const p of programs) {
+        const mode = (p as any).mode === "CODE_UNLOCK" ? "CODE_UNLOCK" : "LINK_ONLY";
+        if (mode === "LINK_ONLY") {
+          (Array.isArray((p as any).days) ? (p as any).days : []).forEach((d: string) =>
+            corpDaySet.add(String(d))
+          );
+        }
+      }
+
+      const dayFlags: Record<string, DayFlag> = {};
+      for (let t = monthStartDt.getTime(); t < monthEndDt.getTime(); t += 86400000) {
+        const dt = new Date(t);
+        const ymd = ymdFromDateInTz(dt, tz);
+        dayFlags[ymd] = corpDaySet.has(ymd)
+          ? { corporateOnly: true, mode: "LINK_ONLY" }
+          : { corporateOnly: false, mode: null };
+      }
+
+      const [closures, busy, apptBlocks, staffAvail] = await Promise.all([
+        loadClosures(clinicId, rangeStartTs, rangeEndTs),
+        loadBusyBlocks(clinicId, practitionerId, rangeStartTs, rangeEndTs),
+        loadAppointmentsAsBlocks(clinicId, practitionerId, rangeStartTs, rangeEndTs),
+        loadStaffWeeklyAvailability({ clinicId, practitionerId }),
+      ]);
+
+      const blocked = [
+        ...closures.map((c) => ({ startMs: c.fromMs, endMs: c.toMs })),
+        ...busy.map((b) => ({ startMs: b.startMs, endMs: b.endMs })),
+        ...apptBlocks.map((a) => ({ startMs: a.startMs, endMs: a.endMs })),
+      ];
+
+      const clinicWeekly = normalizeWeeklyHours(settings);
+      const weekly =
+        staffAvail?.weekly
+          ? intersectWeeklyHours(clinicWeekly, staffAvail.weekly)
+          : clinicWeekly;
+
+      const days: Record<string, DayAvailabilityOut> = {};
+      const hourMs = 60 * 60 * 1000;
+
+      for (let t = monthStartDt.getTime(); t + hourMs <= monthEndDt.getTime(); t += hourMs) {
+        const startMs = t;
+        const endMs = t + hourMs;
+        if (startMs < nowMs + minNotice * 60000) continue;
+        if (startMs > maxMs) continue;
+
+        const startDt = new Date(startMs);
+        const ymd = ymdFromDateInTz(startDt, tz);
+        const minuteInTz = Number(
+          new Intl.DateTimeFormat("en-GB", {
+            timeZone: tz,
+            minute: "2-digit",
+            hour12: false,
+          }).format(startDt)
+        );
+        if (!Number.isFinite(minuteInTz) || minuteInTz !== 0) continue;
+
+        const isCorpDay = corpDaySet.has(ymd);
+        if (isCorpDay && !corpCode) continue;
+
+        const dk = dayKeyFromDateInTz(startDt, tz);
+        const intervals = Array.isArray((weekly as any)[dk]) ? (weekly as any)[dk] : [];
+        if (!intervals.length) continue;
+
+        const startHm = new Intl.DateTimeFormat("en-GB", {
+          timeZone: tz,
+          hour: "2-digit",
+          minute: "2-digit",
+          hour12: false,
+        }).format(startDt);
+        const endHm = new Intl.DateTimeFormat("en-GB", {
+          timeZone: tz,
+          hour: "2-digit",
+          minute: "2-digit",
+          hour12: false,
+        }).format(new Date(endMs));
+
+        const sMin = hmToMinutes(startHm);
+        const eMin = hmToMinutes(endHm);
+        if (!Number.isFinite(sMin) || !Number.isFinite(eMin)) continue;
+
+        const within = intervals.some((it: any) => {
+          const a = hmToMinutes(safeStr(it.start));
+          const b = hmToMinutes(safeStr(it.end));
+          if (!Number.isFinite(a) || !Number.isFinite(b) || b <= a) return false;
+          return sMin >= a && eMin <= b;
+        });
+        if (!within) continue;
+
+        if (overlapsAny(startMs, endMs, blocked)) continue;
+
+        const cur = days[ymd];
+        const flag = dayFlags[ymd];
+        days[ymd] = {
+          count: (cur?.count ?? 0) + 1,
+          corporateOnly: flag?.corporateOnly ?? false,
+        };
+      }
+
+      return { days };
+    } catch (err: any) {
+      logger.error("getPublicMonthAvailability failed", {
+        err: err?.message ?? String(err),
+        stack: err?.stack,
+        code: err?.code,
+      });
+      if (err instanceof HttpsError) throw err;
+      // Return empty days so client can still show calendar without dots
+      return { days: {} };
     }
   }
 );
