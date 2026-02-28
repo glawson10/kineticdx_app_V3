@@ -456,6 +456,10 @@ export const exportClosureOverrideAuditReportFn = onCall(
 // ─────────────────────────────
 export { onBookingRequestCreateV2 } from "./clinic/booking/onBookingRequestCreate";
 export { onPublicBookingSettingsWrite } from "./public/onPublicBookingSettingsWrite";
+export {
+  onPublicBookingSettingsWriteProjection,
+  projectionsRebuildPublicBookingConfig,
+} from "./clinic/projections/publicBookingProjection";
 export { onAppointmentWrite_toBusyBlock } from "./availability/onAppointmentWrite_toBusyBlock";
 export { mirrorPractitionerToPublic } from "./projections/practitionerPublicMirror";
 export { onClinicalNoteWrite } from "./clinic/notes/onClinicalNoteWrite";
