@@ -173,13 +173,15 @@ export type SettingsAuditEventType =
   | "settings.location.created"
   | "settings.location.updated"
   | "settings.location.deactivated"
+  | "settings.location.activated"
   | "settings.location.upserted"
   | "settings.location.active_set"
   | "settings.appointmentType.created"
   | "settings.appointmentType.updated"
   | "settings.apptType.upserted"
   | "settings.calendarDisplay.updated"
-  | "settings.publicBooking.updated";
+  | "settings.publicBooking.updated"
+  | "settings.communication.updated";
 
 export type SettingsAuditPayload = {
   clinicId: string;
