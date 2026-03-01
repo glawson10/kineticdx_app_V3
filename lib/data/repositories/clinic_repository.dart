@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 
@@ -16,9 +18,47 @@ class ClinicRepository {
   // Clinic profile (1A)
   // ---------------------------------------------------------------------------
 
+  Stream<DocumentSnapshot<Map<String, dynamic>>>? _cachedClinicStream;
+  String? _cachedClinicStreamId;
+  DocumentSnapshot<Map<String, dynamic>>? _lastClinicSnapshot;
+  StreamController<DocumentSnapshot<Map<String, dynamic>>>? _clinicController;
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _clinicSourceSub;
+
   /// Read the clinic root doc. Rules should enforce settings.read.
+  /// Cached per [clinicId]; replays last snapshot to new listeners so
+  /// Settings → General does not stay on loading after leaving Calendar.
   Stream<DocumentSnapshot<Map<String, dynamic>>> watchClinic(String clinicId) {
-    return _firestore.collection('clinics').doc(clinicId).snapshots();
+    if (_cachedClinicStreamId == clinicId && _cachedClinicStream != null) {
+      return _cachedClinicStream!;
+    }
+    _clinicSourceSub?.cancel();
+    _clinicController?.close();
+    _cachedClinicStreamId = clinicId;
+    _lastClinicSnapshot = null;
+    _clinicController = StreamController<DocumentSnapshot<Map<String, dynamic>>>.broadcast();
+    _clinicSourceSub = _firestore
+        .collection('clinics')
+        .doc(clinicId)
+        .snapshots()
+        .listen(
+          (s) {
+            _lastClinicSnapshot = s;
+            _clinicController!.add(s);
+          },
+          onError: _clinicController!.addError,
+          onDone: _clinicController!.close,
+          cancelOnError: false,
+        );
+    _cachedClinicStream = Stream.multi((sink) {
+      if (_lastClinicSnapshot != null) sink.add(_lastClinicSnapshot!);
+      final sub = _clinicController!.stream.listen(
+        sink.add,
+        onError: sink.addError,
+        onDone: sink.close,
+      );
+      sink.onCancel = () => sub.cancel();
+    });
+    return _cachedClinicStream!;
   }
 
   /// Update clinic profile via Cloud Function (recommended).
@@ -114,11 +154,18 @@ class ClinicRepository {
   // Opening hours / weekly hours (1C)
   // ---------------------------------------------------------------------------
 
-  /// Watch the public booking settings doc (contains weeklyHours, weeklyHoursMeta, etc).
+  /// Watch the canonical public booking settings doc (weeklyHours, etc).
+  /// Reads from settings/publicBooking so opening hours and projection share one source of truth.
+  /// (Commit 17: projection mirrors this to public/config; listPublicSlots reads the mirror.)
   Stream<DocumentSnapshot<Map<String, dynamic>>> watchPublicBookingSettings(
       String clinicId) {
+    final c = clinicId.trim();
+    if (c.isEmpty) return const Stream.empty();
     return _firestore
-        .doc('clinics/$clinicId/public/config/publicBooking/publicBooking')
+        .collection('clinics')
+        .doc(c)
+        .collection('settings')
+        .doc('publicBooking')
         .snapshots();
   }
 
@@ -156,6 +203,23 @@ class ClinicRepository {
     } on FirebaseFunctionsException catch (e) {
       final msg = (e.message ?? e.code).trim();
       throw StateError('updateClinicWeeklyHoursFn failed: $msg');
+    }
+  }
+
+  /// Rebuilds the public booking config mirror from current settings.
+  /// Use after saving opening hours so clinician calendar and public booking
+  /// see the same weeklyHours (they read from public/config/publicBooking/config).
+  /// Requires settings.write.
+  Future<void> rebuildPublicBookingConfig(String clinicId) async {
+    final callable = _functions.httpsCallable('projectionsRebuildPublicBookingConfig');
+    try {
+      final res = await callable.call({'clinicId': clinicId});
+      final data = res.data;
+      if (data is Map && data['ok'] == true) return;
+      throw StateError('projectionsRebuildPublicBookingConfig returned unexpected payload: $data');
+    } on FirebaseFunctionsException catch (e) {
+      final msg = (e.message ?? e.code).trim();
+      throw StateError('Rebuild public booking config failed: $msg');
     }
   }
 }

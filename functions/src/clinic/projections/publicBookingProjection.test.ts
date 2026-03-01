@@ -121,6 +121,42 @@ describe("publicBookingProjection", () => {
       expect(out.bookingRules.slotStepMinutes).toBe(20);
     });
 
+    it("payload contains only whitelisted fields (no PII, Commit 19)", () => {
+      const allowedTopLevel = new Set([
+        "bookingRules", "clinicId", "hash", "jurisdiction",
+        "schemaVersion", "source", "updatedAt", "weeklyHours",
+      ]);
+      const out = buildPublicBookingConfigV1({
+        clinicId: "c1",
+        settingsDoc: { slotStepMinutes: 15 },
+        settingsUpdatedAt: null,
+        clinicDoc: null,
+        clinicUpdatedAt: null,
+      });
+      for (const key of Object.keys(out)) {
+        expect(allowedTopLevel.has(key)).toBe(true);
+      }
+      expect(Object.keys(out.bookingRules).every((k) =>
+        ["slotStepMinutes", "minNoticeMinutes", "maxAdvanceDays", "allowNewPatients",
+         "requireEmail", "requirePhone", "cancellationPolicyHours"].includes(k))).toBe(true);
+    });
+
+    it("weeklyHours round-trips (Commit 19)", () => {
+      const hours = {
+        mon: [{ start: "08:00", end: "12:00" }, { start: "14:00", end: "18:00" }],
+        sun: [],
+      };
+      const out = buildPublicBookingConfigV1({
+        clinicId: "c1",
+        settingsDoc: { weeklyHours: hours },
+        settingsUpdatedAt: null,
+        clinicDoc: null,
+        clinicUpdatedAt: null,
+      });
+      expect(out.weeklyHours.mon).toEqual(hours.mon);
+      expect(out.weeklyHours.sun).toEqual([]);
+    });
+
     it("jurisdiction from clinic doc (timezone, currencyCode)", () => {
       const out = buildPublicBookingConfigV1({
         clinicId: "c1",

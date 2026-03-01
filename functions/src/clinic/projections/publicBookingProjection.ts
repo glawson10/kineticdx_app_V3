@@ -185,6 +185,12 @@ export async function writePublicBookingConfigProjection(
  * Trigger: on write to clinics/{clinicId}/settings/publicBooking.
  * Writes minimal public config to .../public/config/publicBooking/config.
  * On delete: write defaults with source.publicBookingUpdatedAt = null.
+ *
+ * Data flow (opening hours correlation):
+ * - Opening hours UI saves via updateClinicWeeklyHoursFn → settings/publicBooking.
+ * - This trigger runs and writes weeklyHours (and booking rules) to public/config/publicBooking/config.
+ * - listPublicSlotsFn and clinician calendar read only from that config; public booking slots use it too.
+ * - Flutter may also call projectionsRebuildPublicBookingConfig after save for immediate sync.
  */
 export const onPublicBookingSettingsWriteProjection = onDocumentWritten(
   {

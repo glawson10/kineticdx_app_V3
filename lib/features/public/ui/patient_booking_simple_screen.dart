@@ -6,7 +6,6 @@ import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
 
 import '../../../app/app_routes.dart';
 import '../../booking/ui/public_booking_mirror_health_banner.dart';
@@ -288,30 +287,10 @@ class _PatientBookingSimpleScreenState
     await _loadSlots();
   }
 
-  DocumentReference<Map<String, dynamic>> get _publicBookingDoc =>
-      FirebaseFirestore.instance
-          .collection('clinics')
-          .doc(widget.clinicId.trim())
-          .collection('public')
-          .doc('config')
-          .collection('publicBooking')
-          .doc('publicBooking');
-
-  CollectionReference<Map<String, dynamic>> get _publicDirectoryPractitioners =>
-      FirebaseFirestore.instance
-          .collection('clinics')
-          .doc(widget.clinicId.trim())
-          .collection('public')
-          .doc('directory')
-          .collection('practitioners');
-
-  /// Loads practitioners for dropdown.
+  /// Loads practitioners for dropdown via callable (avoids Firestore client "Unexpected state" on web).
   ///
-  /// Supported sources (in order):
-  /// 1) clinics/{clinicId}/public/config/publicBooking/publicBooking.practitioners
-  ///    - supports both top-level `practitioners` and nested `publicBooking.practitioners`
-  ///    - supports each item as Map {id, displayName} or String (id)
-  /// 2) fallback: clinics/{clinicId}/public/directory/practitioners (active == true)
+  /// Uses getPublicBookingPractitionersFn; practitioners come from the full mirror
+  /// (public/config/publicBooking/publicBooking) written by the projection.
   ///
   /// Selection rules:
   /// - If deep-linked clinicianId exists, keep it selected (even if missing; a placeholder option will be added).
@@ -334,83 +313,25 @@ class _PatientBookingSimpleScreenState
 
       final deepLinked = (widget.clinicianId ?? '').trim();
 
-      // 1) Try config doc first
-      final doc = await _publicBookingDoc.get();
-      final data = doc.data() ?? <String, dynamic>{};
-
-      dynamic rawList = data['practitioners'];
-      if (rawList == null && data['publicBooking'] is Map) {
-        final pb = Map<String, dynamic>.from(data['publicBooking'] as Map);
-        rawList = pb['practitioners'];
-      }
+      final fn = FirebaseFunctions.instanceFor(region: 'europe-west3');
+      final result = await fn.httpsCallable('getPublicBookingPractitionersFn').call({'clinicId': cid});
+      final data = result.data as Map<String, dynamic>?;
+      final rawList = data?['practitioners'] as List<dynamic>? ?? [];
 
       final options = <_PractitionerOption>[];
-
-      if (rawList is List) {
-        for (final item in rawList) {
-          if (item is Map) {
-            final m = Map<String, dynamic>.from(item);
-            final id = (m['id'] ?? '').toString().trim();
-            final name = (m['displayName'] ?? '').toString().trim();
-            if (id.isNotEmpty) {
-              options.add(
-                _PractitionerOption(
-                  id: id,
-                  displayName: name.isNotEmpty ? name : _shortId(id),
-                ),
-              );
-            }
-            continue;
+      for (final item in rawList) {
+        if (item is Map) {
+          final m = Map<String, dynamic>.from(item);
+          final id = (m['id'] ?? '').toString().trim();
+          final name = (m['displayName'] ?? '').toString().trim();
+          if (id.isNotEmpty) {
+            options.add(
+              _PractitionerOption(
+                id: id,
+                displayName: name.isNotEmpty ? name : _shortId(id),
+              ),
+            );
           }
-
-          if (item is String) {
-            final s = item.trim();
-            if (s.isEmpty) continue;
-
-            // Try extract: id: "XXXXX"
-            final match = RegExp(r'id:\s*"([^"]+)"').firstMatch(s);
-            if (match != null) {
-              final id = (match.group(1) ?? '').trim();
-              if (id.isNotEmpty) {
-                options.add(
-                  _PractitionerOption(
-                    id: id,
-                    displayName: _shortId(id),
-                  ),
-                );
-              }
-              continue;
-            }
-
-            // Or if string is just an id
-            if (!s.contains(' ') && s.length > 10) {
-              options.add(
-                _PractitionerOption(id: s, displayName: _shortId(s)),
-              );
-            }
-          }
-        }
-      }
-
-      // 2) Fallback: public directory if config empty
-      if (options.isEmpty) {
-        final q = await _publicDirectoryPractitioners
-            .where('active', isEqualTo: true)
-            .get();
-
-        for (final d in q.docs) {
-          final m = d.data();
-          final pid = (m['practitionerId'] ?? '').toString().trim();
-          final id = pid.isNotEmpty ? pid : d.id;
-          if (id.isEmpty) continue;
-
-          final name = (m['displayName'] ?? m['name'] ?? '').toString().trim();
-          options.add(
-            _PractitionerOption(
-              id: id,
-              displayName: name.isNotEmpty ? name : _shortId(id),
-            ),
-          );
         }
       }
 
@@ -441,14 +362,12 @@ class _PatientBookingSimpleScreenState
       // Choose selection
       String? nextSelected = _selectedPractitionerId?.trim();
 
-      // Deep-link always wins if present
       if (deepLinked.isNotEmpty) {
         nextSelected = deepLinked;
       } else {
         if ((nextSelected ?? '').isEmpty) {
           nextSelected = finalList.isNotEmpty ? finalList.first.id : null;
         } else {
-          // keep existing selection if still valid; else pick first
           if (finalList.isNotEmpty &&
               !finalList.any((p) => p.id == nextSelected)) {
             nextSelected = finalList.first.id;
@@ -458,8 +377,7 @@ class _PatientBookingSimpleScreenState
 
       if (finalList.isEmpty || (nextSelected ?? '').isEmpty) {
         throw StateError(
-          'No practitioners found. Configure practitioners in public booking config '
-          'or add an active practitioner under /public/directory/practitioners.',
+          'No practitioners found. Publish public booking config in Settings → Public booking and save once (or run Rebuild).',
         );
       }
 
@@ -472,7 +390,6 @@ class _PatientBookingSimpleScreenState
       if (!mounted) return;
       setState(() {
         _practitionersError = 'Could not load practitioners: $e';
-        // keep existing values if any
       });
     } finally {
       if (mounted) setState(() => _loadingPractitioners = false);

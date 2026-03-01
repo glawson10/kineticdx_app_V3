@@ -1096,10 +1096,7 @@ export const getPublicMonthAvailabilityFn = onCall(
   { region: "europe-west3", cors: true },
   async (request) => {
     try {
-      if (!request.auth) {
-        throw new HttpsError("unauthenticated", "Must be signed in.");
-      }
-
+      // Auth optional: public booking page may call without sign-in; still return availability.
       const data = (request.data ?? {}) as Partial<MonthAvailabilityInput>;
       const clinicId = safeStr(data.clinicId);
       const practitionerId = safeStr(data.practitionerId);
@@ -1123,7 +1120,7 @@ export const getPublicMonthAvailabilityFn = onCall(
       const rangeStartTs = admin.firestore.Timestamp.fromDate(monthStartDt);
       const rangeEndTs = admin.firestore.Timestamp.fromDate(monthEndDt);
 
-      const settings = await loadPublicSettingsOrRebuildMirror(clinicId);
+      const settings = await loadPublicSettingsFromMirror(clinicId);
       const allowed = extractAllowedPractitionerIds(settings);
       if (!allowed.includes(practitionerId)) {
         throw new HttpsError(
@@ -1252,6 +1249,40 @@ export const getPublicMonthAvailabilityFn = onCall(
       if (err instanceof HttpsError) throw err;
       // Return empty days so client can still show calendar without dots
       return { days: {} };
+    }
+  }
+);
+
+/**
+ * Returns the public booking practitioner list from the full mirror (server-side read).
+ * Use this from the public booking UI instead of reading Firestore directly to avoid
+ * client-side "Unexpected state" / assertion errors in the Firestore web SDK.
+ */
+export const getPublicBookingPractitionersFn = onCall(
+  { region: "europe-west3", cors: true },
+  async (request) => {
+    try {
+      const clinicId = safeStr((request.data as any)?.clinicId);
+      if (!clinicId) {
+        throw new HttpsError("invalid-argument", "clinicId is required.");
+      }
+      const { practitioners } = await loadFullMirrorExtras(clinicId);
+      return {
+        practitioners: practitioners.map((p) => ({
+          id: p.id,
+          displayName: p.displayName ?? "",
+        })),
+      };
+    } catch (err: any) {
+      if (err instanceof HttpsError) throw err;
+      const msg = err?.message ?? String(err);
+      logger.error("getPublicBookingPractitionersFn failed", {
+        clinicId: (request.data as any)?.clinicId,
+        error: msg,
+        code: err?.code,
+      });
+      // Return empty list so UI shows "No practitioners" + hint instead of "[internal] internal"
+      return { practitioners: [] };
     }
   }
 );

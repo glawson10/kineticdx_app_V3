@@ -25,6 +25,7 @@ import 'booking_rail_date_navigator.dart';
 import 'booking_rail_practitioners_section.dart';
 import 'booking_rail_waitlist_section.dart';
 
+import '../../../debug_session_log.dart';
 import '../../../shared/ui/overlay_left_drawer.dart';
 import '../../../shared/ui/sticky_tab_button.dart';
 import '../../shell/shell_overlay_scope.dart';
@@ -88,6 +89,9 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
 
   /// View mode: 1 = 1 Day, 3 = 3 Days, 5 = Work Week, 7 = 7 Days
   int _viewModeDays = 7;
+
+  /// When false, initial view and week start follow calendar display settings.
+  bool _hasUserChosenViewModeThisSession = false;
 
   // ✅ Practitioner filter
   String? _selectedPractitionerId; // null = all
@@ -542,6 +546,16 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
       );
     }
 
+    // #region agent log
+    if (!hasSession) {
+      debugSessionLog(
+        'booking_calendar_screen.dart:_buildBody',
+        'Calendar no session',
+        {'hasClinic': clinicCtx.hasClinic},
+        'H4',
+      );
+    }
+    // #endregion
     if (!hasSession) {
       return const Center(child: CircularProgressIndicator());
     }
@@ -786,6 +800,7 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
                                 onToggleHideCancelled: () => setState(() => _hideCancelled = !_hideCancelled),
                                 viewModeDays: _viewModeDays,
                                 onViewModeChanged: (v) => setState(() {
+                                  _hasUserChosenViewModeThisSession = true;
                                   _viewModeDays = v;
                                   if (v == 30) _weekStart = DateTime(_weekStart.year, _weekStart.month, 1);
                                 }),
@@ -807,6 +822,7 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
                                   );
                                   if (saved != null && mounted) setState(() {});
                                 },
+                                condensedHeader: displaySettings.condensedHeader,
                               ),
                               const _DevPermissionHintBanner(),
                               Expanded(
@@ -891,10 +907,29 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
                       initialData: CalendarDisplaySettings.defaults,
                       builder: (context, displaySnap) {
                         final displaySettings = displaySnap.data ?? CalendarDisplaySettings.defaults;
+                        if (!_hasUserChosenViewModeThisSession && displaySnap.hasData) {
+                          final s = displaySnap.data!;
+                          WidgetsBinding.instance.addPostFrameCallback((_) {
+                            if (!mounted || _hasUserChosenViewModeThisSession) return;
+                            setState(() {
+                              _viewModeDays = _defaultViewToDays(s.defaultView);
+                              _weekStart = _startOfWeekWith(DateTime.now(), s.weekStartsOn);
+                              if (_viewModeDays == 30) {
+                                _weekStart = DateTime(_weekStart.year, _weekStart.month, 1);
+                              }
+                            });
+                          });
+                        }
                         final gridStartHour = displaySettings.displayStartHour;
                         final gridEndHour = displaySettings.displayEndHour;
                         final adminGridMinutes = displaySettings.minutesPerBlock;
                         final baseSlotHeight = displaySettings.slotHeightPx;
+                        final effectiveHeaderHeight = displaySettings.condensedHeader ? 40.0 : _headerHeight;
+                        final effectiveDaysCount = (_viewModeDays == 7 && !displaySettings.showWeekends) ? 5 : _viewModeDays;
+                        final effectiveStart = (_viewModeDays == 7 && !displaySettings.showWeekends && displaySettings.weekStartsOn == 'sunday')
+                            ? _weekStart.add(const Duration(days: 1))
+                            : _weekStart;
+                        final effectiveDays = List.generate(effectiveDaysCount, (i) => effectiveStart.add(Duration(days: i)));
 
                     return LayoutBuilder(
                       builder: (context, c) {
@@ -905,7 +940,7 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
                         final baseDayWidth = isWide ? 220.0 : 160.0;
 
                         final fitDayWidth =
-                            ((availableWidth - _timeGutterWidth) / daysCount)
+                            ((availableWidth - _timeGutterWidth) / effectiveDaysCount)
                                 .clamp(90.0, 420.0);
 
                         final dayWidth = _fitWeek ? fitDayWidth : baseDayWidth;
@@ -921,7 +956,7 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
                                 .clamp(200.0, double.infinity);
 
                         final fitSlotHeight =
-                            ((fitViewportHeight - _headerHeight) / rows)
+                            ((fitViewportHeight - effectiveHeaderHeight) / rows)
                                 .clamp(28.0, 96.0);
 
                         final effectiveSlotHeight =
@@ -931,10 +966,10 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
                             effectiveSlotHeight / adminGridMinutes;
 
                         final gridHeight =
-                            _headerHeight + rows * effectiveSlotHeight;
+                            effectiveHeaderHeight + rows * effectiveSlotHeight;
 
                         _maybeAutoJumpAndPrimeHighlight(
-                          days: days,
+                          days: effectiveDays,
                           dayWidth: dayWidth,
                           adminGridMinutes: adminGridMinutes,
                           slotHeight: effectiveSlotHeight,
@@ -968,10 +1003,12 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
                               onToggleHideCancelled: () => setState(() => _hideCancelled = !_hideCancelled),
                               viewModeDays: _viewModeDays,
                               onViewModeChanged: (v) => setState(() {
+                                    _hasUserChosenViewModeThisSession = true;
                                     _viewModeDays = v;
                                     if (v == 30) _weekStart = DateTime(_weekStart.year, _weekStart.month, 1);
                                   }),
                               hidePatientNames: displaySettings.hidePatientNames,
+                              condensedHeader: displaySettings.condensedHeader,
                               onToggleHidePatientNames: () async {
                                 final repo = context.read<CalendarDisplaySettingsRepository>();
                                 await repo.updateSettings(clinicId, {'hidePatientNames': !displaySettings.hidePatientNames});
@@ -1006,7 +1043,7 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
                                       startHour: gridStartHour,
                                       endHour: gridEndHour,
                                       slotMinutes: adminGridMinutes,
-                                      headerHeight: _headerHeight,
+                                      headerHeight: effectiveHeaderHeight,
                                       slotHeight: effectiveSlotHeight,
                                     ),
                                     Expanded(
@@ -1017,19 +1054,20 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
                                             : null,
                                         scrollDirection: Axis.horizontal,
                                         child: SizedBox(
-                                          width: dayWidth * daysCount,
+                                          width: dayWidth * effectiveDaysCount,
                                           height: gridHeight,
                                           child: Stack(
                                             children: [
                                               _WeekGrid(
-                                                days: days,
+                                                days: effectiveDays,
                                                 dayWidth: dayWidth,
-                                                headerHeight: _headerHeight,
+                                                headerHeight: effectiveHeaderHeight,
                                                 startHour: gridStartHour,
                                                 endHour: gridEndHour,
                                                 slotMinutes: adminGridMinutes,
                                                 slotHeight: effectiveSlotHeight,
                                                 weeklyHours: weeklyHours,
+                                                showClosedDayLabel: displaySettings.showClosedDayLabel,
                                                 onTapSlot: (slotStart) {
                                                   if (!canWriteSchedule) {
                                                     _showClosedSnack(
@@ -1069,9 +1107,9 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
                                               ),
                                               _ClosureOverlayLayer(
                                                 closures: closures,
-                                                days: days,
+                                                days: effectiveDays,
                                                 dayWidth: dayWidth,
-                                                headerHeight: _headerHeight,
+                                                headerHeight: effectiveHeaderHeight,
                                                 startHour: gridStartHour,
                                                 endHour: gridEndHour,
                                                 pxPerMinute: pxPerMinute,
@@ -1079,7 +1117,7 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
                                               _AuditHighlightOverlay(
                                                 pulse: _pulseCtrl,
                                                 dayWidth: dayWidth,
-                                                headerHeight: _headerHeight,
+                                                headerHeight: effectiveHeaderHeight,
                                                 startHour: gridStartHour,
                                                 pxPerMinute: pxPerMinute,
                                                 dayIndex: _highlightDayIndex,
@@ -1088,9 +1126,9 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
                                               ),
                                               if (displaySettings.showCurrentTimeIndicator)
                                                 _CurrentTimeIndicator(
-                                                  days: days,
+                                                  days: effectiveDays,
                                                   dayWidth: dayWidth,
-                                                  headerHeight: _headerHeight,
+                                                  headerHeight: effectiveHeaderHeight,
                                                   displayStartHour: gridStartHour,
                                                   displayEndHour: gridEndHour,
                                                   pxPerMinute: pxPerMinute,
@@ -1104,9 +1142,9 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
                                                   hidePatientNames: displaySettings.hidePatientNames,
                                                   confirmAppointmentMoves: displaySettings.confirmAppointmentMoves,
                                                   weekStart: _weekStart,
-                                                  daysCount: daysCount,
+                                                  daysCount: effectiveDaysCount,
                                                   dayWidth: dayWidth,
-                                                  headerHeight: _headerHeight,
+                                                  headerHeight: effectiveHeaderHeight,
                                                   startHour: gridStartHour,
                                                   endHour: gridEndHour,
                                                   pxPerMinute: pxPerMinute,
@@ -2195,6 +2233,27 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
     return date.subtract(Duration(days: diff));
   }
 
+  /// Week start for display settings: 'monday' => Mon, 'sunday' => Sun.
+  static DateTime _startOfWeekWith(DateTime d, String weekStartsOn) {
+    final date = DateTime(d.year, d.month, d.day);
+    if (weekStartsOn == 'sunday') {
+      final diff = date.weekday % 7; // Sun=0, Mon=1, ..., Sat=6
+      return date.subtract(Duration(days: diff));
+    }
+    final diff = date.weekday - DateTime.monday;
+    return date.subtract(Duration(days: diff));
+  }
+
+  static int _defaultViewToDays(String defaultView) {
+    switch (defaultView) {
+      case 'day': return 1;
+      case '3days': return 3;
+      case 'week': return 7;
+      case 'month': return 30;
+      default: return 7;
+    }
+  }
+
   static String _fmtShort(DateTime d) => '${d.day}/${d.month}/${d.year}';
 
   /// Format week-start for toolbar: "Mon 23 Feb 2026"
@@ -2256,6 +2315,7 @@ class _CalendarHeader extends StatelessWidget {
   final VoidCallback onOpenSettings;
   final List<String> visiblePractitionerIds;
   final List<String> orderPractitionerIds;
+  final bool condensedHeader;
 
   const _CalendarHeader({
     required this.clinicId,
@@ -2277,9 +2337,11 @@ class _CalendarHeader extends StatelessWidget {
     required this.onOpenSettings,
     this.visiblePractitionerIds = const [],
     this.orderPractitionerIds = const [],
+    this.condensedHeader = false,
   });
 
   static const double _headerHeight = 56;
+  static const double _headerHeightCondensed = 40;
   static const double _zonePadding = 24;
   static const double _dividerOpacity = 0.25;
 
@@ -2291,9 +2353,10 @@ class _CalendarHeader extends StatelessWidget {
     final isTablet = MediaQuery.sizeOf(context).width < 900;
 
     final dividerColor = scheme.outline.withValues(alpha: _dividerOpacity);
+    final height = condensedHeader ? _headerHeightCondensed : _headerHeight;
 
     return Container(
-      height: _headerHeight,
+      height: height,
       decoration: BoxDecoration(
         color: Colors.white,
         border: Border(
@@ -3946,6 +4009,7 @@ class _WeekGrid extends StatelessWidget {
   final int slotMinutes;
   final double slotHeight;
   final _WeeklyHours weeklyHours;
+  final bool showClosedDayLabel;
   final void Function(DateTime slotStart) onTapSlot;
 
   const _WeekGrid({
@@ -3957,6 +4021,7 @@ class _WeekGrid extends StatelessWidget {
     required this.slotMinutes,
     required this.slotHeight,
     required this.weeklyHours,
+    this.showClosedDayLabel = true,
     required this.onTapSlot,
   });
 
@@ -3998,7 +4063,7 @@ class _WeekGrid extends StatelessWidget {
                                   ),
                         ),
                       ),
-                      if (!weeklyHours.isOpen(_WeeklyHours.dayKeyFromDate(d)))
+                      if (showClosedDayLabel && !weeklyHours.isOpen(_WeeklyHours.dayKeyFromDate(d)))
                         Text(
                           'Closed',
                           style:

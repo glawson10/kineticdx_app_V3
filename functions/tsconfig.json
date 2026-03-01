@@ -5,18 +5,16 @@
     "lib": ["ES2019"],
     "rootDir": "src",
     "outDir": "lib",
-
     "strict": true,
     "noImplicitReturns": true,
     "noUnusedLocals": false,
-
     "esModuleInterop": true,
     "resolveJsonModule": true,
     "sourceMap": true,
     "skipLibCheck": true,
-
     "moduleResolution": "node",
     "types": ["node"]
   },
-  "include": ["src/**/*.ts"]
+  "include": ["src/**/*.ts"],
+  "exclude": ["src/**/*.test.ts", "src/**/*TestHelpers.ts"]
 }

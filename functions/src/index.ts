@@ -36,6 +36,7 @@ import { setLocationActive } from "./clinic/settings/setLocationActive";
 import { upsertAppointmentType } from "./clinic/settings/upsertAppointmentType";
 import { updateCalendarDisplayConfig } from "./clinic/settings/updateCalendarDisplayConfig";
 import { updatePublicBookingConfig } from "./clinic/settings/updatePublicBookingConfig";
+import { updateCommunicationSettings } from "./clinic/settings/updateCommunicationSettings";
 import { setMembershipStatus } from "./clinic/setMembershipStatus";
 import { updateMember } from "./clinic/updateMember";
 import { syncMyDisplayName } from "./clinic/syncMyDisplayName";
@@ -126,7 +127,7 @@ import { exportClosureOverrideAuditReport } from "./clinic/audit/exportClosureOv
 // Public booking
 // ─────────────────────────────
 import { bootstrapPublicBookingSettings } from "./clinic/bootstrapPublicBookingSettings";
-import { listPublicSlotsFn, getPublicMonthAvailabilityFn } from "./public/listPublicSlots";
+import { listPublicSlotsFn, getPublicMonthAvailabilityFn, getPublicBookingPractitionersFn } from "./public/listPublicSlots";
 import {
   getManageContext,
   cancelBookingWithToken,
@@ -194,6 +195,10 @@ export const settingsUpdateCalendarDisplayConfig = onCall(
 export const settingsUpdatePublicBookingConfig = onCall(
   { region: REGION, cors: true },
   updatePublicBookingConfig
+);
+export const settingsUpdateCommunicationSettings = onCall(
+  { region: REGION, cors: true },
+  updateCommunicationSettings
 );
 
 export const setMembershipStatusFn = onCall(
@@ -468,7 +473,7 @@ export { onSoapNoteWrite } from "./clinic/notes/onSoapNoteWrite";
 // ─────────────────────────────
 // Public booking (NO AUTH)
 // ─────────────────────────────
-export { listPublicSlotsFn, getPublicMonthAvailabilityFn };
+export { listPublicSlotsFn, getPublicMonthAvailabilityFn, getPublicBookingPractitionersFn };
 export const getManageContextFn = getManageContext;
 export const cancelBookingWithTokenFn = cancelBookingWithToken;
 export const rescheduleBookingWithTokenFn = rescheduleBookingWithToken;

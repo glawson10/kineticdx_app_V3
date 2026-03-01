@@ -223,6 +223,22 @@ class _ClinicOpeningHoursScreenState extends State<ClinicOpeningHoursScreen> {
       if (!mounted) return;
       setState(() => _dirty = false);
 
+      // Sync to public config so clinician calendar and public booking see same hours.
+      try {
+        await repo.rebuildPublicBookingConfig(widget.clinicId);
+      } catch (_) {
+        // Trigger may still update; don't fail the save.
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Opening hours saved; public booking sync may lag.'),
+            ),
+          );
+          return;
+        }
+      }
+
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Opening hours saved')),
       );

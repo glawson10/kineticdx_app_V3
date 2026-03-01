@@ -83,13 +83,15 @@ service cloud.firestore {
       // ─────────────────────────────
       // Clinic Settings
       // clinics/{clinicId}/settings/{docId}
-      // calendarDisplay and publicBooking are callable-only (Commit 13, Commit 15).
+      // calendarDisplay, publicBooking, communication are callable-only; client writes
+      // forbidden to preserve server validation + audit (Commit 13, 15, 18, 19).
       // ─────────────────────────────
       match /settings/{docId} {
         allow read: if hasPerm(clinicId, "settings.read");
         allow create, update, delete: if hasPerm(clinicId, "settings.write")
             && docId != "calendarDisplay"
-            && docId != "publicBooking";
+            && docId != "publicBooking"
+            && docId != "communication";
       }
 
       // Notes settings (Phase 5)
@@ -326,8 +328,9 @@ match /closures/{closureId} {
 
       // ─────────────────────────────
       // PUBLIC (read-only, pre-auth)
+      // calendarDisplay/publicBooking/communication are callable-only; client writes
+      // forbidden to preserve server validation + audit. /public/** is projection-only.
       // clinics/{clinicId}/public/profile = displayName, logoUrl, supportEmail for clinic login portals.
-      // No client writes; projection-only.
       // ─────────────────────────────
       match /public/{docId} {
         allow read: if true;

@@ -19,6 +19,11 @@ class PublicBookingMirrorRepository {
 
   final FirebaseFirestore _firestore;
 
+  /// Cached stream per clinicId so StreamBuilder rebuilds don't cancel/resubscribe
+  /// and trigger Firestore web SDK "Unexpected state" assertion.
+  Stream<PublicBookingConfigV1?>? _cachedConfigStream;
+  String? _cachedConfigStreamClinicId;
+
   DocumentReference<Map<String, dynamic>> _doc(String clinicId) {
     final path = publicBookingConfigPath(clinicId);
     if (path.isEmpty) throw ArgumentError('clinicId required');
@@ -35,12 +40,18 @@ class PublicBookingMirrorRepository {
   }
 
   /// Stream. Emits null if doc missing or invalid.
+  /// Cached per clinicId to avoid cancel/resubscribe and Firestore "Unexpected state" on web.
   Stream<PublicBookingConfigV1?> streamConfig(String clinicId) {
     final c = clinicId.trim();
     if (c.isEmpty) return Stream.value(null);
-    return _doc(c).snapshots().map((snap) {
+    if (_cachedConfigStreamClinicId == c && _cachedConfigStream != null) {
+      return _cachedConfigStream!;
+    }
+    _cachedConfigStreamClinicId = c;
+    _cachedConfigStream = _doc(c).snapshots().map((snap) {
       if (!snap.exists || snap.data() == null) return null;
       return PublicBookingConfigV1.fromDoc(snap.data());
-    });
+    }).asBroadcastStream();
+    return _cachedConfigStream!;
   }
 }

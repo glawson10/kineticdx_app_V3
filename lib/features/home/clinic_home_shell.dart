@@ -7,8 +7,10 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../app/clinic_context.dart';
+import '../../debug_session_log.dart';
 import '../../data/repositories/clinic_repository.dart';
 import '../../data/repositories/memberships_repository.dart';
+import '../../models/membership.dart';
 import '../billing/ui/invoices_list_screen.dart';
 import '../booking/ui/booking_calendar_screen.dart';
 import '../patients/patient_finder_screen.dart';
@@ -43,6 +45,12 @@ class ClinicHomeShell extends StatefulWidget {
 class _ClinicHomeShellState extends State<ClinicHomeShell> {
   late ClinicianTab _selectedTab;
 
+  /// When membership load is stuck, show timed-out UI after this duration.
+  static const Duration _loadingTimeoutDuration = Duration(seconds: 15);
+
+  Timer? _loadingTimeoutTimer;
+  bool _loadingTimedOut = false;
+
   @override
   void initState() {
     super.initState();
@@ -50,6 +58,12 @@ class _ClinicHomeShellState extends State<ClinicHomeShell> {
         (widget.initialSettingsSection != null
             ? ClinicianTab.settings
             : ClinicianTab.calendar);
+  }
+
+  @override
+  void dispose() {
+    _loadingTimeoutTimer?.cancel();
+    super.dispose();
   }
 
   @override
@@ -62,6 +76,26 @@ class _ClinicHomeShellState extends State<ClinicHomeShell> {
               ? ClinicianTab.settings
               : ClinicianTab.calendar);
     }
+  }
+
+  void _cancelLoadingTimeout() {
+    _loadingTimeoutTimer?.cancel();
+    _loadingTimeoutTimer = null;
+  }
+
+  void _startLoadingTimeout() {
+    if (_loadingTimeoutTimer != null) return;
+    _loadingTimeoutTimer = Timer(_loadingTimeoutDuration, () {
+      if (mounted) setState(() => _loadingTimedOut = true);
+      _loadingTimeoutTimer = null;
+    });
+  }
+
+  void _retryMembershipLoad() {
+    _cancelLoadingTimeout();
+    setState(() => _loadingTimedOut = false);
+    context.read<MembershipsRepository>().clearMembershipStreamCache();
+    context.read<ClinicContext>().notifySessionListeners();
   }
 
   @override
@@ -77,68 +111,117 @@ class _ClinicHomeShellState extends State<ClinicHomeShell> {
     }
 
     final clinicId = clinicCtx.clinicId;
-    final repo = context.read<MembershipsRepository>();
+    final snap = context.watch<AsyncSnapshot<Membership?>>();
 
-    return StreamBuilder(
-      stream: repo.watchClinicMembership(clinicId: clinicId, uid: user.uid),
-      builder: (context, snap) {
-        if (snap.hasError) {
-          if (FirebaseAuth.instance.currentUser == null) {
-            return const Scaffold(body: Center(child: Text('Not signed in')));
-          }
-          return Scaffold(
-            body: Center(child: Text('Failed to load membership: ${snap.error}')),
-          );
-        }
-        if (snap.connectionState == ConnectionState.waiting && !snap.hasData) {
+    // #region agent log
+    if (snap.connectionState == ConnectionState.waiting && !snap.hasData) {
+      debugSessionLog(
+        'clinic_home_shell.dart:build',
+        'Shell membership waiting',
+        {'connectionState': snap.connectionState.toString(), 'selectedTab': _selectedTab.name},
+        'H1',
+      );
+    }
+    if (snap.hasData) {
+      debugSessionLog(
+        'clinic_home_shell.dart:build',
+        'Shell membership hasData',
+        {'selectedTab': _selectedTab.name},
+        'H1',
+      );
+    }
+    // #endregion
+    if (snap.hasError) {
+      if (FirebaseAuth.instance.currentUser == null) {
+        return const Scaffold(body: Center(child: Text('Not signed in')));
+      }
+      return Scaffold(
+        body: Center(child: Text('Failed to load membership: ${snap.error}')),
+      );
+    }
+
+    // When stream is still waiting: if we already have a session for this clinic,
+    // build the shell immediately so tab switches never show loading.
+    final Membership? membership;
+    if (snap.connectionState == ConnectionState.waiting && !snap.hasData) {
+      final ctx = context.read<ClinicContext>();
+      if (ctx.hasSession && ctx.sessionOrNull?.clinicId == clinicId) {
+        _cancelLoadingTimeout();
+        membership = ctx.sessionOrNull!.membership;
+      } else {
+        if (!_loadingTimedOut) {
+          _startLoadingTimeout();
           return const Scaffold(body: Center(child: CircularProgressIndicator()));
         }
-
-        final membership = snap.data;
-        if (membership == null) {
-          return const Scaffold(
-            body: Center(child: Text('No membership found for this clinic.')),
-          );
-        }
-
-        final ctx = context.read<ClinicContext>();
-        final needsInit = !ctx.hasSession;
-        final clinicChanged = ctx.sessionOrNull?.clinicId != clinicId;
-        final activeChanged =
-            ctx.sessionOrNull?.membership.active != membership.active;
-        final uidMissingOrChanged = !ctx.hasUid || (ctx.uidOrNull != user.uid);
-
-        if (needsInit || clinicChanged || activeChanged || uidMissingOrChanged) {
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (!context.mounted) return;
-            context.read<ClinicContext>().setSession(
-              clinicId: clinicId,
-              membership: membership,
-              uid: user.uid,
-            );
-          });
-        }
-
-        final settingsSection = (_selectedTab == ClinicianTab.settings &&
-                widget.initialSettingsSection != null)
-            ? (widget.initialSettingsSection!.trim().isEmpty
-                ? null
-                : widget.initialSettingsSection!.trim())
-            : null;
-
-        final title = _titleForTab(_selectedTab);
-        final child = _childForTab(_selectedTab, clinicId, settingsSection);
-
-        return _SessionTimeoutWrapper(
-          clinicId: clinicId,
-          child: ClinicianShell(
-            selected: _selectedTab,
-            title: title,
-            child: child,
-            onTabChanged: (t) => setState(() => _selectedTab = t),
+        return Scaffold(
+          body: Center(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    Icons.cloud_off_outlined,
+                    size: 48,
+                    color: Theme.of(context).colorScheme.outline,
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    'Loading is taking longer than expected',
+                    style: Theme.of(context).textTheme.titleMedium,
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Check your connection and try again. If it keeps happening, sign out and back in.',
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        ),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 24),
+                  FilledButton.icon(
+                    onPressed: _retryMembershipLoad,
+                    icon: const Icon(Icons.refresh),
+                    label: const Text('Retry'),
+                  ),
+                ],
+              ),
+            ),
           ),
         );
-      },
+      }
+    } else {
+      _cancelLoadingTimeout();
+      membership = snap.data;
+    }
+
+    if (membership == null) {
+      return const Scaffold(
+        body: Center(child: Text('No membership found for this clinic.')),
+      );
+    }
+
+    // Session is set by ClinicSessionScope when membership data is available.
+
+    final settingsSection = (_selectedTab == ClinicianTab.settings &&
+            widget.initialSettingsSection != null)
+        ? (widget.initialSettingsSection!.trim().isEmpty
+            ? null
+            : widget.initialSettingsSection!.trim())
+        : null;
+
+    final title = _titleForTab(_selectedTab);
+    final child = _childForTab(_selectedTab, clinicId, settingsSection);
+
+    return _SessionTimeoutWrapper(
+      clinicId: clinicId,
+      child: ClinicianShell(
+        selected: _selectedTab,
+        title: title,
+        child: child,
+        onTabChanged: (t) => setState(() => _selectedTab = t),
+      ),
     );
   }
 }
