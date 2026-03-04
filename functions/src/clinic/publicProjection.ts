@@ -408,22 +408,53 @@ function isPractitionerActive(pract: AnyMap): boolean {
   return v === true;
 }
 
+function isShowInOnlineBooking(pract: AnyMap): boolean {
+  const v = boolish(pract.showInOnlineBooking);
+  if (v === null) return false; // must be explicitly true
+  return v === true;
+}
+
+export type PractitionerExclusionReason = {
+  id: string;
+  displayName: string;
+  show: boolean;
+  active: boolean;
+  activeForBooking: boolean;
+  memStatus: string | null;
+  memActive: boolean | null;
+  included: boolean;
+};
+
 /**
  * Membership is OPTIONAL:
  * - If membership exists and is NOT active -> exclude
  * - If membership does not exist -> still include (so public booking works)
+ *
+ * Practitioner must have showInOnlineBooking === true.
  */
 function buildPublicPractitioners(args: {
   practitioners: Array<{ id: string; data: AnyMap }>;
   memberships: Array<{ id: string; data: AnyMap }>;
 }): PublicBookingPractitionerProjection[] {
+  const { included } = buildPublicPractitionersWithDiag(args);
+  return included;
+}
+
+export function buildPublicPractitionersWithDiag(args: {
+  practitioners: Array<{ id: string; data: AnyMap }>;
+  memberships: Array<{ id: string; data: AnyMap }>;
+}): {
+  included: PublicBookingPractitionerProjection[];
+  whyExcluded: PractitionerExclusionReason[];
+} {
   const memberById = new Map<string, AnyMap>();
   for (const m of args.memberships ?? []) {
     if (!m || !safeStr(m.id)) continue;
     memberById.set(safeStr(m.id), isObj(m.data) ? m.data : {});
   }
 
-  const out: PublicBookingPractitionerProjection[] = [];
+  const included: PublicBookingPractitionerProjection[] = [];
+  const whyExcluded: PractitionerExclusionReason[] = [];
 
   for (const p of args.practitioners ?? []) {
     const uid = safeStr(p?.id);
@@ -432,10 +463,29 @@ function buildPublicPractitioners(args: {
     const pData = isObj(p.data) ? p.data : {};
     const mem = memberById.get(uid); // may be undefined
 
-    if (mem && !isActiveMembership(mem)) continue;
+    const show = isShowInOnlineBooking(pData);
+    const active = isPractitionerActive(pData);
+    const activeForBooking = isPractitionerActiveForBooking(pData);
+    const memStatus = mem ? normalizeMembershipStatus(mem) : null;
+    const memActive = mem ? isActiveMembership(mem) : null;
 
-    if (!isPractitionerActive(pData)) continue;
-    if (!isPractitionerActiveForBooking(pData)) continue;
+    const reason: PractitionerExclusionReason = {
+      id: uid,
+      displayName: normalizePractitionerDisplayName(pData, mem),
+      show,
+      active,
+      activeForBooking,
+      memStatus,
+      memActive,
+      included: false,
+    };
+
+    if (!show) { whyExcluded.push(reason); continue; }
+    if (mem && !isActiveMembership(mem)) { whyExcluded.push(reason); continue; }
+    if (!active) { whyExcluded.push(reason); continue; }
+    if (!activeForBooking) { whyExcluded.push(reason); continue; }
+
+    reason.included = true;
 
     const proj: PublicBookingPractitionerProjection = {
       id: uid,
@@ -452,17 +502,17 @@ function buildPublicPractitioners(args: {
       proj.sortOrder = sortOrder;
     }
 
-    out.push(proj);
+    included.push(proj);
   }
 
-  out.sort((a, b) => {
+  included.sort((a, b) => {
     const ao = a.sortOrder ?? 999999;
     const bo = b.sortOrder ?? 999999;
     if (ao !== bo) return ao - bo;
     return (a.displayName ?? "").localeCompare(b.displayName ?? "");
   });
 
-  return out;
+  return { included, whyExcluded };
 }
 
 function readClinicProfileLike(clinicDoc: AnyMap): AnyMap {
@@ -572,4 +622,27 @@ export function buildPublicBookingProjection(args: {
 
     updatedAt: now,
   };
+}
+
+/**
+ * Merge canonical `members` and legacy `memberships` collections.
+ * `members` wins when the same id appears in both.
+ */
+export function mergeMemberships(
+  members: Array<{ id: string; data: AnyMap }>,
+  memberships: Array<{ id: string; data: AnyMap }>
+): Array<{ id: string; data: AnyMap }> {
+  const byId = new Map<string, { id: string; data: AnyMap }>();
+
+  for (const m of memberships ?? []) {
+    const id = safeStr(m?.id);
+    if (id) byId.set(id, m);
+  }
+
+  for (const m of members ?? []) {
+    const id = safeStr(m?.id);
+    if (id) byId.set(id, m); // canonical wins
+  }
+
+  return Array.from(byId.values());
 }

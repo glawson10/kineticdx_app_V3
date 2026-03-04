@@ -33,7 +33,9 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.buildPublicPractitionersWithDiag = buildPublicPractitionersWithDiag;
 exports.buildPublicBookingProjection = buildPublicBookingProjection;
+exports.mergeMemberships = mergeMemberships;
 // functions/src/clinic/publicProjection.ts
 const admin = __importStar(require("firebase-admin"));
 function safeStr(v) {
@@ -340,12 +342,24 @@ function isPractitionerActive(pract) {
         return true;
     return v === true;
 }
+function isShowInOnlineBooking(pract) {
+    const v = boolish(pract.showInOnlineBooking);
+    if (v === null)
+        return false; // must be explicitly true
+    return v === true;
+}
 /**
  * Membership is OPTIONAL:
  * - If membership exists and is NOT active -> exclude
  * - If membership does not exist -> still include (so public booking works)
+ *
+ * Practitioner must have showInOnlineBooking === true.
  */
 function buildPublicPractitioners(args) {
+    const { included } = buildPublicPractitionersWithDiag(args);
+    return included;
+}
+function buildPublicPractitionersWithDiag(args) {
     var _a, _b;
     const memberById = new Map();
     for (const m of (_a = args.memberships) !== null && _a !== void 0 ? _a : []) {
@@ -353,19 +367,46 @@ function buildPublicPractitioners(args) {
             continue;
         memberById.set(safeStr(m.id), isObj(m.data) ? m.data : {});
     }
-    const out = [];
+    const included = [];
+    const whyExcluded = [];
     for (const p of (_b = args.practitioners) !== null && _b !== void 0 ? _b : []) {
         const uid = safeStr(p === null || p === void 0 ? void 0 : p.id);
         if (!uid)
             continue;
         const pData = isObj(p.data) ? p.data : {};
         const mem = memberById.get(uid); // may be undefined
-        if (mem && !isActiveMembership(mem))
+        const show = isShowInOnlineBooking(pData);
+        const active = isPractitionerActive(pData);
+        const activeForBooking = isPractitionerActiveForBooking(pData);
+        const memStatus = mem ? normalizeMembershipStatus(mem) : null;
+        const memActive = mem ? isActiveMembership(mem) : null;
+        const reason = {
+            id: uid,
+            displayName: normalizePractitionerDisplayName(pData, mem),
+            show,
+            active,
+            activeForBooking,
+            memStatus,
+            memActive,
+            included: false,
+        };
+        if (!show) {
+            whyExcluded.push(reason);
             continue;
-        if (!isPractitionerActive(pData))
+        }
+        if (mem && !isActiveMembership(mem)) {
+            whyExcluded.push(reason);
             continue;
-        if (!isPractitionerActiveForBooking(pData))
+        }
+        if (!active) {
+            whyExcluded.push(reason);
             continue;
+        }
+        if (!activeForBooking) {
+            whyExcluded.push(reason);
+            continue;
+        }
+        reason.included = true;
         const proj = {
             id: uid,
             displayName: normalizePractitionerDisplayName(pData, mem),
@@ -378,9 +419,9 @@ function buildPublicPractitioners(args) {
         if (typeof sortOrder === "number" && Number.isFinite(sortOrder)) {
             proj.sortOrder = sortOrder;
         }
-        out.push(proj);
+        included.push(proj);
     }
-    out.sort((a, b) => {
+    included.sort((a, b) => {
         var _a, _b, _c, _d;
         const ao = (_a = a.sortOrder) !== null && _a !== void 0 ? _a : 999999;
         const bo = (_b = b.sortOrder) !== null && _b !== void 0 ? _b : 999999;
@@ -388,7 +429,7 @@ function buildPublicPractitioners(args) {
             return ao - bo;
         return ((_c = a.displayName) !== null && _c !== void 0 ? _c : "").localeCompare((_d = b.displayName) !== null && _d !== void 0 ? _d : "");
     });
-    return out;
+    return { included, whyExcluded };
 }
 function readClinicProfileLike(clinicDoc) {
     const profile = isObj(clinicDoc.profile) ? clinicDoc.profile : {};
@@ -467,5 +508,23 @@ function buildPublicBookingProjection(args) {
         practitioners,
         updatedAt: now,
     };
+}
+/**
+ * Merge canonical `members` and legacy `memberships` collections.
+ * `members` wins when the same id appears in both.
+ */
+function mergeMemberships(members, memberships) {
+    const byId = new Map();
+    for (const m of memberships !== null && memberships !== void 0 ? memberships : []) {
+        const id = safeStr(m === null || m === void 0 ? void 0 : m.id);
+        if (id)
+            byId.set(id, m);
+    }
+    for (const m of members !== null && members !== void 0 ? members : []) {
+        const id = safeStr(m === null || m === void 0 ? void 0 : m.id);
+        if (id)
+            byId.set(id, m); // canonical wins
+    }
+    return Array.from(byId.values());
 }
 //# sourceMappingURL=publicProjection.js.map
