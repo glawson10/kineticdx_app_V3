@@ -102,7 +102,11 @@ import { exportClosureOverrideAuditReport } from "./clinic/audit/exportClosureOv
 // Public booking
 // ─────────────────────────────
 import { bootstrapPublicBookingSettings } from "./clinic/bootstrapPublicBookingSettings";
-import { listPublicSlotsFn } from "./public/listPublicSlots";
+import {
+  listPublicSlotsFn,
+  getPublicBookingDiagnosticsFn,
+  rebuildPublicBookingMirrorFn,
+} from "./public/listPublicSlots";
 import {
   getManageContext,
   cancelBookingWithToken,
@@ -317,6 +321,8 @@ export { onClinicalNoteWrite } from "./clinic/notes/onClinicalNoteWrite";
 // Public booking (NO AUTH)
 // ─────────────────────────────
 export { listPublicSlotsFn };
+export { getPublicBookingDiagnosticsFn };
+export { rebuildPublicBookingMirrorFn };
 export const getManageContextFn = getManageContext;
 export const cancelBookingWithTokenFn = cancelBookingWithToken;
 export const rescheduleBookingWithTokenFn = rescheduleBookingWithToken;

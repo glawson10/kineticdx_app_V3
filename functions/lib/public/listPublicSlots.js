@@ -33,15 +33,14 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.listPublicSlotsFn = void 0;
+exports.rebuildPublicBookingMirrorFn = exports.getPublicBookingDiagnosticsFn = exports.listPublicSlotsFn = void 0;
 // functions/src/public/listPublicSlots.ts
 const https_1 = require("firebase-functions/v2/https");
 const admin = __importStar(require("firebase-admin"));
 const logger_1 = require("firebase-functions/logger");
 const rateLimit_1 = require("./rateLimit");
-// ✅ Adjust this import path to match your project
-// e.g. "../clinic/writePublicBookingMirror" or "../clinic/publicProjectionWriter"
 const writePublicBookingMirror_1 = require("../clinic/writePublicBookingMirror");
+const publicProjection_1 = require("../clinic/publicProjection");
 if (!admin.apps.length)
     admin.initializeApp();
 const db = admin.firestore();
@@ -766,5 +765,117 @@ exports.listPublicSlotsFn = (0, https_1.onCall)({ region: "europe-west3", cors: 
             throw err;
         throw new https_1.HttpsError("internal", "listPublicSlots crashed.");
     }
+});
+// ─────────────────────────────
+// Diagnostics callable
+// ─────────────────────────────
+exports.getPublicBookingDiagnosticsFn = (0, https_1.onCall)({ region: "europe-west3", cors: true }, async (request) => {
+    var _a, _b, _c;
+    const uid = (_a = request.auth) === null || _a === void 0 ? void 0 : _a.uid;
+    if (!uid)
+        throw new https_1.HttpsError("unauthenticated", "Sign in required.");
+    const clinicId = safeStr(((_b = request.data) !== null && _b !== void 0 ? _b : {}).clinicId);
+    if (!clinicId)
+        throw new https_1.HttpsError("invalid-argument", "clinicId required.");
+    const mirrorRef = db.doc(`clinics/${clinicId}/public/config/publicBooking/publicBooking`);
+    const mirrorSnap = await mirrorRef.get();
+    const mirrorData = mirrorSnap.exists ? mirrorSnap.data() : null;
+    const [practitionersSnap, membersSnap, membershipsSnap] = await Promise.all([
+        db.collection(`clinics/${clinicId}/practitioners`).get(),
+        db.collection(`clinics/${clinicId}/members`).get(),
+        db.collection(`clinics/${clinicId}/memberships`).get(),
+    ]);
+    const practitioners = practitionersSnap.docs.map((d) => {
+        var _a;
+        return ({
+            id: d.id,
+            data: ((_a = d.data()) !== null && _a !== void 0 ? _a : {}),
+        });
+    });
+    const membersRaw = membersSnap.docs.map((d) => {
+        var _a;
+        return ({
+            id: d.id,
+            data: ((_a = d.data()) !== null && _a !== void 0 ? _a : {}),
+        });
+    });
+    const membershipsRaw = membershipsSnap.docs.map((d) => {
+        var _a;
+        return ({
+            id: d.id,
+            data: ((_a = d.data()) !== null && _a !== void 0 ? _a : {}),
+        });
+    });
+    const merged = (0, publicProjection_1.mergeMemberships)(membersRaw, membershipsRaw);
+    const { included, whyExcluded } = (0, publicProjection_1.buildPublicPractitionersWithDiag)({
+        practitioners,
+        memberships: merged,
+    });
+    const practitionersWithShowInOnlineBooking = practitioners.filter((p) => p.data.showInOnlineBooking === true).length;
+    const practitionerCountInMirror = Array.isArray(mirrorData === null || mirrorData === void 0 ? void 0 : mirrorData.practitioners)
+        ? mirrorData.practitioners.length
+        : 0;
+    let hint = "";
+    if (practitionerCountInMirror === 0 && practitionersWithShowInOnlineBooking > 0) {
+        hint =
+            "Mirror has 0 practitioners but some have showInOnlineBooking. " +
+                "Check whyExcluded for membership status issues, or re-save settings to rebuild the mirror.";
+    }
+    else if (practitionerCountInMirror === 0 && practitionersWithShowInOnlineBooking === 0) {
+        hint =
+            "No practitioners have showInOnlineBooking === true. " +
+                "Go to Settings → Online booking and enable at least one practitioner.";
+    }
+    logger_1.logger.info("getPublicBookingDiagnostics", {
+        clinicId,
+        practitionerCountInMirror,
+        practitionersWithShowInOnlineBooking,
+        includedCount: included.length,
+        excludedCount: whyExcluded.length,
+    });
+    return {
+        ok: true,
+        clinicId,
+        mirrorExists: mirrorSnap.exists,
+        mirrorUpdatedBy: (_c = mirrorData === null || mirrorData === void 0 ? void 0 : mirrorData.updatedBy) !== null && _c !== void 0 ? _c : null,
+        practitionerCountInMirror,
+        totalPractitionerDocs: practitioners.length,
+        practitionersWithShowInOnlineBooking,
+        membersCount: membersSnap.size,
+        membershipsCount: membershipsSnap.size,
+        mergedMembershipsCount: merged.length,
+        included: included.map((p) => ({ id: p.id, displayName: p.displayName })),
+        whyExcluded,
+        hint,
+    };
+});
+// ─────────────────────────────
+// Rebuild callable
+// ─────────────────────────────
+exports.rebuildPublicBookingMirrorFn = (0, https_1.onCall)({ region: "europe-west3", cors: true }, async (request) => {
+    var _a, _b, _c;
+    const uid = (_a = request.auth) === null || _a === void 0 ? void 0 : _a.uid;
+    if (!uid)
+        throw new https_1.HttpsError("unauthenticated", "Sign in required.");
+    const clinicId = safeStr(((_b = request.data) !== null && _b !== void 0 ? _b : {}).clinicId);
+    if (!clinicId)
+        throw new https_1.HttpsError("invalid-argument", "clinicId required.");
+    const settingsRef = db.doc(`clinics/${clinicId}/settings/publicBooking`);
+    const settingsSnap = await settingsRef.get();
+    if (!settingsSnap.exists) {
+        throw new https_1.HttpsError("failed-precondition", "No settings/publicBooking found for this clinic.");
+    }
+    const settings = ((_c = settingsSnap.data()) !== null && _c !== void 0 ? _c : {});
+    const projection = await (0, writePublicBookingMirror_1.writePublicBookingMirror)(clinicId, settings);
+    const count = Array.isArray(projection === null || projection === void 0 ? void 0 : projection.practitioners)
+        ? projection.practitioners.length
+        : 0;
+    logger_1.logger.info("rebuildPublicBookingMirror: done", { clinicId, practitionerCount: count });
+    return {
+        ok: true,
+        clinicId,
+        practitionerCount: count,
+        updatedBy: "rebuildPublicBookingMirrorFn",
+    };
 });
 //# sourceMappingURL=listPublicSlots.js.map
