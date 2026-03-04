@@ -1,6 +1,6 @@
 // functions/src/index.ts
 import * as admin from "firebase-admin";
-import { onCall, onRequest } from "firebase-functions/v2/https";
+import { onCall, onRequest, HttpsError } from "firebase-functions/v2/https";
 import type { CallableRequest } from "firebase-functions/v2/https";
 import { defineSecret } from "firebase-functions/params";
 
@@ -34,9 +34,23 @@ import { updateClinicProfile } from "./clinic/updateClinicProfile";
 import { upsertLocation } from "./clinic/settings/upsertLocation";
 import { setLocationActive } from "./clinic/settings/setLocationActive";
 import { upsertAppointmentType } from "./clinic/settings/upsertAppointmentType";
+import { setAppointmentTypeActive } from "./clinic/settings/setAppointmentTypeActive";
 import { updateCalendarDisplayConfig } from "./clinic/settings/updateCalendarDisplayConfig";
+import { getCalendarDisplayConfig } from "./clinic/settings/getCalendarDisplayConfig";
+import { getClinicProfile } from "./clinic/settings/getClinicProfile";
+import { getClosures } from "./clinic/settings/getClosures";
+import { getMembership } from "./clinic/settings/getMembership";
+import { listMembers } from "./clinic/settings/listMembers";
+import { listLocations } from "./clinic/settings/listLocations";
+import { listAppointmentTypes } from "./clinic/settings/listAppointmentTypes";
+import { getPublicBookingConfig } from "./clinic/settings/getPublicBookingConfig";
+import { getCommunicationSettings } from "./clinic/settings/getCommunicationSettings";
 import { updatePublicBookingConfig } from "./clinic/settings/updatePublicBookingConfig";
+import { updateOnlineBookingEnablement } from "./clinic/settings/updateOnlineBookingEnablement";
 import { updateCommunicationSettings } from "./clinic/settings/updateCommunicationSettings";
+import { upsertPractitionerAvailability } from "./clinic/settings/upsertPractitionerAvailability";
+import { upsertPractitionerOverride } from "./clinic/settings/upsertPractitionerOverride";
+import { deletePractitionerOverride } from "./clinic/settings/deletePractitionerOverride";
 import { setMembershipStatus } from "./clinic/setMembershipStatus";
 import { updateMember } from "./clinic/updateMember";
 import { syncMyDisplayName } from "./clinic/syncMyDisplayName";
@@ -67,6 +81,7 @@ import { createPatient } from "./clinic/patients/createPatient";
 import { updatePatient } from "./clinic/patients/updatePatient";
 import { mergePatients } from "./clinic/patients/mergePatients";
 import { deletePatient } from "./clinic/patients/deletePatient";
+import { listPatientsForBookingFn } from "./clinic/patients/listPatientsForBooking";
 
 import { createEpisode } from "./clinic/episode/createEpisode";
 import { updateEpisode } from "./clinic/episode/updateEpisode";
@@ -127,12 +142,19 @@ import { exportClosureOverrideAuditReport } from "./clinic/audit/exportClosureOv
 // Public booking
 // ─────────────────────────────
 import { bootstrapPublicBookingSettings } from "./clinic/bootstrapPublicBookingSettings";
-import { listPublicSlotsFn, getPublicMonthAvailabilityFn, getPublicBookingPractitionersFn } from "./public/listPublicSlots";
+import {
+  listPublicSlotsFn,
+  getPublicMonthAvailabilityFn,
+  getPublicBookingPractitionersFn,
+  getPublicBookingLocationsFn,
+  getPublicBookingDiagnosticsFn,
+} from "./public/listPublicSlots";
 import {
   getManageContext,
   cancelBookingWithToken,
   rescheduleBookingWithToken,
 } from "./public/bookingActions";
+import { runPublicBookingMirrorForClinic, onPractitionerWritten } from "./public/mirrorPublicBooking";
 
 // ─────────────────────────────
 // Callable exports
@@ -188,17 +210,90 @@ export const settingsUpsertAppointmentType = onCall(
   { region: REGION, cors: true },
   upsertAppointmentType
 );
+export const settingsSetAppointmentTypeActive = onCall(
+  { region: REGION, cors: true },
+  setAppointmentTypeActive
+);
 export const settingsUpdateCalendarDisplayConfig = onCall(
   { region: REGION, cors: true },
   updateCalendarDisplayConfig
+);
+export const settingsGetCalendarDisplayConfig = onCall(
+  { region: REGION, cors: true },
+  getCalendarDisplayConfig
+);
+export const settingsGetClinicProfile = onCall(
+  { region: REGION, cors: true },
+  getClinicProfile
+);
+export const settingsGetMembership = onCall(
+  { region: REGION, cors: true },
+  getMembership
+);
+export const settingsGetClosures = onCall(
+  { region: REGION, cors: true },
+  getClosures
+);
+export const settingsListMembers = onCall(
+  { region: REGION, cors: true },
+  listMembers
+);
+export const settingsListLocations = onCall(
+  { region: REGION, cors: true },
+  listLocations
+);
+export const settingsListAppointmentTypes = onCall(
+  { region: REGION, cors: true },
+  listAppointmentTypes
+);
+export const settingsGetPublicBookingConfig = onCall(
+  { region: REGION, cors: true },
+  getPublicBookingConfig
+);
+export const settingsGetCommunicationSettings = onCall(
+  { region: REGION, cors: true },
+  getCommunicationSettings
 );
 export const settingsUpdatePublicBookingConfig = onCall(
   { region: REGION, cors: true },
   updatePublicBookingConfig
 );
+export const settingsUpdateOnlineBookingEnablement = onCall(
+  { region: REGION, cors: true },
+  updateOnlineBookingEnablement
+);
+/** Rebuild public booking mirror (practitioners, locations, appointment types). Requires settings.write. */
+export const rebuildPublicBookingMirrorFn = onCall(
+  { region: REGION, cors: true },
+  async (request) => {
+    if (!request.auth?.uid) {
+      throw new HttpsError("unauthenticated", "Sign in required.");
+    }
+    const clinicId = String((request.data as any)?.clinicId ?? "").trim();
+    if (!clinicId) {
+      throw new HttpsError("invalid-argument", "clinicId is required.");
+    }
+    const { requireClinicPermission } = await import("./clinic/permissions");
+    await requireClinicPermission(admin.firestore(), clinicId, request.auth.uid, "settings.write");
+    await runPublicBookingMirrorForClinic(clinicId);
+    return { ok: true, clinicId };
+  }
+);
 export const settingsUpdateCommunicationSettings = onCall(
   { region: REGION, cors: true },
   updateCommunicationSettings
+);
+export const settingsUpsertPractitionerAvailability = onCall(
+  { region: REGION, cors: true },
+  upsertPractitionerAvailability
+);
+export const settingsUpsertPractitionerOverride = onCall(
+  { region: REGION, cors: true },
+  upsertPractitionerOverride
+);
+export const settingsDeletePractitionerOverride = onCall(
+  { region: REGION, cors: true },
+  deletePractitionerOverride
 );
 
 export const setMembershipStatusFn = onCall(
@@ -307,6 +402,8 @@ export const deletePatientFn = onCall(
   { region: REGION, cors: true },
   deletePatient
 );
+
+export { listPatientsForBookingFn };
 
 // Episodes
 export const createEpisodeFn = onCall(
@@ -461,6 +558,8 @@ export const exportClosureOverrideAuditReportFn = onCall(
 // ─────────────────────────────
 export { onBookingRequestCreateV2 } from "./clinic/booking/onBookingRequestCreate";
 export { onPublicBookingSettingsWrite } from "./public/onPublicBookingSettingsWrite";
+export { onPractitionerWritten } from "./public/mirrorPublicBooking";
+export { onPublicBookingConfigMirror } from "./public/onPublicBookingConfigMirror";
 export {
   onPublicBookingSettingsWriteProjection,
   projectionsRebuildPublicBookingConfig,
@@ -473,7 +572,13 @@ export { onSoapNoteWrite } from "./clinic/notes/onSoapNoteWrite";
 // ─────────────────────────────
 // Public booking (NO AUTH)
 // ─────────────────────────────
-export { listPublicSlotsFn, getPublicMonthAvailabilityFn, getPublicBookingPractitionersFn };
+export {
+  listPublicSlotsFn,
+  getPublicMonthAvailabilityFn,
+  getPublicBookingPractitionersFn,
+  getPublicBookingLocationsFn,
+  getPublicBookingDiagnosticsFn,
+};
 export const getManageContextFn = getManageContext;
 export const cancelBookingWithTokenFn = cancelBookingWithToken;
 export const rescheduleBookingWithTokenFn = rescheduleBookingWithToken;

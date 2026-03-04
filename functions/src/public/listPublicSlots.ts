@@ -3,6 +3,7 @@ import { onCall, HttpsError } from "firebase-functions/v2/https";
 import * as admin from "firebase-admin";
 import { logger } from "firebase-functions/logger";
 import { enforceRateLimit } from "./rateLimit";
+import { requireClinicPermission } from "../clinic/permissions";
 
 // Commit 17: Availability reads only from public/config/publicBooking/config (no writePublicBookingMirror / private settings).
 
@@ -13,6 +14,10 @@ type Input = {
   clinicId: string;
   serviceId?: string;
   practitionerId?: string;
+  /** Location-first booking: filter availability by location. Optional. */
+  locationId?: string;
+  /** Appointment type filter. Optional. */
+  appointmentTypeId?: string;
   rangeStartMs?: number;
   rangeEndMs?: number;
 
@@ -32,6 +37,7 @@ type PublicPractitioner = {
   displayName?: string;
   serviceIdsAllowed?: string[];
   sortOrder?: number;
+  allowedLocationIds?: string[];
 };
 
 type PublicSettings = {
@@ -704,7 +710,18 @@ async function loadFullMirrorExtras(clinicId: string): Promise<{
   for (const item of raw) {
     if (item && typeof item === "object") {
       const id = safeStr((item as any).id);
-      if (id) practitioners.push({ id, displayName: safeStr((item as any).displayName), serviceIdsAllowed: (item as any).serviceIdsAllowed, sortOrder: (item as any).sortOrder });
+      if (id) {
+        const allowedLocationIds = Array.isArray((item as any).allowedLocationIds)
+          ? (item as any).allowedLocationIds.filter((x: any) => typeof x === "string" && x.trim())
+          : undefined;
+        practitioners.push({
+          id,
+          displayName: safeStr((item as any).displayName),
+          serviceIdsAllowed: (item as any).serviceIdsAllowed,
+          sortOrder: (item as any).sortOrder,
+          allowedLocationIds,
+        });
+      }
     }
   }
   const corporatePrograms = Array.isArray(d?.corporatePrograms) ? d.corporatePrograms : undefined;
@@ -738,6 +755,8 @@ export const listPublicSlotsFn = onCall(
       const clinicId = safeStr(data.clinicId);
       const serviceId = safeStr(data.serviceId);
       const practitionerId = safeStr(data.practitionerId);
+      const locationId = safeStr(data.locationId) || undefined;
+      const appointmentTypeId = safeStr(data.appointmentTypeId) || undefined;
 
       if (!clinicId) {
         throw new HttpsError("invalid-argument", "clinicId is required.");
@@ -972,6 +991,8 @@ export const listPublicSlotsFn = onCall(
           clinicId,
           serviceId,
           practitionerId,
+          locationId: locationId || null,
+          appointmentTypeId: appointmentTypeId || null,
           tz,
           stepMinutes: step,
           corporate: corpSlug
@@ -1053,6 +1074,8 @@ export const listPublicSlotsFn = onCall(
         clinicId,
         serviceId,
         practitionerId,
+        locationId: locationId || null,
+        appointmentTypeId: appointmentTypeId || null,
         tz,
         stepMinutes: step,
         corporate: corpSlug
@@ -1084,6 +1107,8 @@ type MonthAvailabilityInput = {
   clinicId: string;
   practitionerId: string;
   serviceId?: string;
+  /** Location-first booking. Optional. */
+  locationId?: string;
   monthStartMs: number;
   monthEndMs: number;
   tz?: string;
@@ -1257,6 +1282,8 @@ export const getPublicMonthAvailabilityFn = onCall(
  * Returns the public booking practitioner list from the full mirror (server-side read).
  * Use this from the public booking UI instead of reading Firestore directly to avoid
  * client-side "Unexpected state" / assertion errors in the Firestore web SDK.
+ * When locationId is provided, returns only practitioners eligible at that location
+ * (allowedLocationIds empty/undefined = all locations, else must include locationId).
  */
 export const getPublicBookingPractitionersFn = onCall(
   { region: "europe-west3", cors: true },
@@ -1266,9 +1293,20 @@ export const getPublicBookingPractitionersFn = onCall(
       if (!clinicId) {
         throw new HttpsError("invalid-argument", "clinicId is required.");
       }
+      const locationId = safeStr((request.data as any)?.locationId) || undefined;
       const { practitioners } = await loadFullMirrorExtras(clinicId);
+
+      let list = practitioners;
+      if (locationId) {
+        list = practitioners.filter((p) => {
+          const ids = p.allowedLocationIds;
+          if (!ids || ids.length === 0) return true;
+          return ids.includes(locationId);
+        });
+      }
+
       return {
-        practitioners: practitioners.map((p) => ({
+        practitioners: list.map((p) => ({
           id: p.id,
           displayName: p.displayName ?? "",
         })),
@@ -1284,5 +1322,135 @@ export const getPublicBookingPractitionersFn = onCall(
       // Return empty list so UI shows "No practitioners" + hint instead of "[internal] internal"
       return { practitioners: [] };
     }
+  }
+);
+
+/**
+ * Returns the public booking locations list from the full mirror (server-side read).
+ * Use from the public booking UI for the location-first selector.
+ */
+export const getPublicBookingLocationsFn = onCall(
+  { region: "europe-west3", cors: true },
+  async (request) => {
+    try {
+      const clinicId = safeStr((request.data as any)?.clinicId);
+      if (!clinicId) {
+        throw new HttpsError("invalid-argument", "clinicId is required.");
+      }
+      const fullRef = db.doc(FULL_MIRROR_PATH(clinicId));
+      const snap = await fullRef.get();
+      if (!snap.exists || !snap.data()) {
+        return { locations: [] };
+      }
+      const d = snap.data() as any;
+      const raw = Array.isArray(d?.locations) ? d.locations : [];
+      const locations = raw.map((item: any) => ({
+        id: safeStr(item?.id) || "",
+        name: safeStr(item?.name) || safeStr(item?.id) || "",
+      })).filter((x: { id: string }) => x.id.length > 0);
+      return { locations };
+    } catch (err: any) {
+      if (err instanceof HttpsError) throw err;
+      const msg = err?.message ?? String(err);
+      logger.error("getPublicBookingLocationsFn failed", {
+        clinicId: (request.data as any)?.clinicId,
+        error: msg,
+        code: err?.code,
+      });
+      return { locations: [] };
+    }
+  }
+);
+
+/**
+ * Diagnostic callable (staff only: settings.read). Returns mirror state and practitioner
+ * visibility so you can see why "no clinicians" appears. Call from Flutter or Console.
+ */
+export const getPublicBookingDiagnosticsFn = onCall(
+  { region: "europe-west3", cors: true },
+  async (request) => {
+    if (!request.auth?.uid) {
+      throw new HttpsError("unauthenticated", "Sign in required.");
+    }
+    const clinicId = safeStr((request.data as any)?.clinicId);
+    if (!clinicId) {
+      throw new HttpsError("invalid-argument", "clinicId is required.");
+    }
+    await requireClinicPermission(db, clinicId, request.auth.uid, "settings.read");
+
+    const fullRef = db.doc(FULL_MIRROR_PATH(clinicId));
+    const mirrorSnap = await fullRef.get();
+    const mirrorExists = mirrorSnap.exists && !!mirrorSnap.data();
+    const mirrorData = mirrorSnap.data() as any;
+    const practitionerCountInMirror = Array.isArray(mirrorData?.practitioners)
+      ? mirrorData.practitioners.length
+      : 0;
+    const locationCountInMirror = Array.isArray(mirrorData?.locations)
+      ? mirrorData.locations.length
+      : 0;
+
+    const [practitionersSnap, membersSnap, membershipsSnap] = await Promise.all([
+      db.collection(`clinics/${clinicId}/practitioners`).get(),
+      db.collection(`clinics/${clinicId}/members`).get(),
+      db.collection(`clinics/${clinicId}/memberships`).get(),
+    ]);
+
+    const memberStatusByUid = new Map<string, string>();
+    for (const d of membersSnap.docs) {
+      const data = d.data() as any;
+      const status = (data?.status ?? "").toString().toLowerCase();
+      const active = data?.active;
+      const s = status || (active === true ? "active" : active === false ? "inactive" : "active");
+      memberStatusByUid.set(d.id, s || "active");
+    }
+    for (const d of membershipsSnap.docs) {
+      if (!memberStatusByUid.has(d.id)) {
+        const data = d.data() as any;
+        const status = (data?.status ?? "").toString().toLowerCase();
+        const active = data?.active;
+        const s = status || (active === true ? "active" : active === false ? "inactive" : "active");
+        memberStatusByUid.set(d.id, s || "active");
+      }
+    }
+
+    const practitionersInClinic = practitionersSnap.docs.map((d) => {
+      const data = d.data() as any;
+      const membershipStatus = memberStatusByUid.get(d.id) ?? "none";
+      const membershipActive = membershipStatus === "none" || membershipStatus === "active";
+      return {
+        id: d.id,
+        showInOnlineBooking: data?.showInOnlineBooking === true,
+        active: data?.active !== false,
+        activeForBooking: data?.activeForBooking !== false,
+        membershipStatus,
+        membershipActive,
+      };
+    });
+
+    const withVisibility = practitionersInClinic.filter((p) => p.showInOnlineBooking).length;
+    const withVisibilityButInactiveMembership = practitionersInClinic.filter(
+      (p) => p.showInOnlineBooking && !p.membershipActive
+    ).length;
+
+    let hint: string | undefined;
+    if (practitionerCountInMirror === 0 && withVisibility > 0) {
+      hint =
+        withVisibilityButInactiveMembership > 0
+          ? `${withVisibilityButInactiveMembership} practitioner(s) have showInOnlineBooking but inactive/suspended membership. Set membership to Active in Settings → Team, then re-save Online booking.`
+          : "Mirror has 0 practitioners but some have showInOnlineBooking. Re-save Settings → Public booking or Online booking to rebuild the mirror.";
+    } else if (practitionerCountInMirror === 0 && withVisibility === 0) {
+      hint =
+        "No practitioners have showInOnlineBooking: true. Turn ON in Settings → Online booking and Save.";
+    }
+
+    return {
+      mirrorExists,
+      practitionerCountInMirror,
+      locationCountInMirror,
+      practitionersInClinicCount: practitionersInClinic.length,
+      practitionersWithShowInOnlineBooking: withVisibility,
+      practitioners: practitionersInClinic,
+      hint,
+    };
   }
 );

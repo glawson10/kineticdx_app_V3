@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
@@ -10,6 +12,8 @@ import './patient_details_screen.dart';
 final FirebaseFunctions _functions =
     FirebaseFunctions.instanceFor(region: 'europe-west3');
 
+/// Uses one-time get() + refresh instead of snapshots() to avoid Firestore web
+/// listener teardown bugs (LateInitializationError: onSnapshotUnsubscribe, INTERNAL ASSERTION FAILED).
 class PatientFinderScreen extends StatefulWidget {
   const PatientFinderScreen({super.key});
 
@@ -21,8 +25,13 @@ class _PatientFinderScreenState extends State<PatientFinderScreen> {
   final _searchCtl = TextEditingController();
   DateTime? _dob;
 
-  // ✅ Hide merged/archived by default (so merged “disappears”)
+  // ✅ Hide merged/archived by default (so merged "disappears")
   bool _showArchivedMerged = false;
+
+  bool _loading = false;
+  Object? _error;
+  List<_PatientLite>? _patients;
+  String? _loadedClinicId;
 
   @override
   void dispose() {
@@ -30,18 +39,85 @@ class _PatientFinderScreenState extends State<PatientFinderScreen> {
     super.dispose();
   }
 
+  Future<void> _loadPatients(String clinicId) async {
+    if (_loading && _loadedClinicId == clinicId) return;
+    setState(() {
+      _loading = true;
+      _error = null;
+      _loadedClinicId = clinicId;
+    });
+
+    try {
+      final patientsCol = FirebaseFirestore.instance
+          .collection('clinics')
+          .doc(clinicId)
+          .collection('patients');
+
+      final snapshot = await patientsCol
+          .get()
+          .timeout(const Duration(seconds: 15), onTimeout: () {
+        throw TimeoutException('Patient list took too long to load.');
+      });
+
+      if (!mounted) return;
+      final patients = <_PatientLite>[];
+      for (final d in snapshot.docs) {
+        try {
+          patients.add(_PatientLite.fromDoc(d));
+        } catch (_) {}
+      }
+      if (!mounted) return;
+      // Only apply if we're still loading for this clinic (user may have switched)
+      setState(() {
+        if (_loadedClinicId != clinicId) return;
+        _loading = false;
+        _error = null;
+        _patients = patients;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        if (_loadedClinicId != clinicId) return;
+        _loading = false;
+        _error = e;
+        _patients = null;
+      });
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    final clinicId = context.watch<ClinicContext>().clinicId;
+    final clinicCtx = context.watch<ClinicContext>();
+    if (!clinicCtx.hasClinic) {
+      return Scaffold(
+        appBar: AppBar(title: const SizedBox.shrink()),
+        body: const Center(
+          child: Text('No clinic selected. Select a clinic to view patients.'),
+        ),
+      );
+    }
+    final clinicId = clinicCtx.clinicId;
 
-    final patientsCol = FirebaseFirestore.instance
-        .collection('clinics')
-        .doc(clinicId)
-        .collection('patients');
+    // When clinic changes or we have no data, schedule a load (post-frame to avoid setState during build)
+    final needLoad = _patients == null && _error == null && !_loading;
+    final clinicChanged = _loadedClinicId != null && _loadedClinicId != clinicId;
+    if (clinicChanged && !_loading) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        setState(() {
+          _patients = null;
+          _error = null;
+          _loadedClinicId = null;
+        });
+        _loadPatients(clinicId);
+      });
+    } else if (needLoad) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _loadPatients(clinicId));
+    }
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Patients'),
+        title: const SizedBox.shrink(), // Title shown in shell (top-left) only
         actions: [
           Row(
             children: [
@@ -104,109 +180,7 @@ class _PatientFinderScreenState extends State<PatientFinderScreen> {
           ),
           const Divider(height: 1),
           Expanded(
-            child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-              stream: patientsCol.snapshots(),
-              builder: (context, snap) {
-                if (snap.connectionState == ConnectionState.waiting) {
-                  return const Center(child: CircularProgressIndicator());
-                }
-                if (snap.hasError) {
-                  return Center(
-                      child: Text('Failed to load patients:\n${snap.error}'));
-                }
-
-                final docs = snap.data?.docs ?? const [];
-                final search = _searchCtl.text.trim().toLowerCase();
-
-                final patients =
-                    docs.map((d) => _PatientLite.fromDoc(d)).where((p) {
-                  // ✅ merged/archived/deleted patients hidden by default
-                  if (!_showArchivedMerged) {
-                    if (p.isMerged) return false;
-                    if (p.isArchived) return false;
-                    if (p.isDeleted) return false;
-                  }
-
-                  final matchesSearch =
-                      search.isEmpty ? true : p.searchBlob.contains(search);
-
-                  final matchesDob = (_dob == null || p.dob == null)
-                      ? true
-                      : (p.dob!.year == _dob!.year &&
-                          p.dob!.month == _dob!.month &&
-                          p.dob!.day == _dob!.day);
-
-                  return matchesSearch && matchesDob;
-                }).toList()
-                      ..sort(
-                        (a, b) => a.lastName
-                            .toLowerCase()
-                            .compareTo(b.lastName.toLowerCase()),
-                      );
-
-                if (patients.isEmpty) {
-                  return const Center(child: Text('No matching patients'));
-                }
-
-                return ListView.separated(
-                  itemCount: patients.length,
-                  separatorBuilder: (_, __) => const Divider(height: 1),
-                  itemBuilder: (context, i) {
-                    final p = patients[i];
-
-                    final statusBits = <String>[
-                      if (p.isMerged) 'Merged',
-                      if (p.isArchived) 'Archived',
-                      if (p.isDeleted) 'Deleted',
-                    ];
-
-                    return ListTile(
-                      leading: const CircleAvatar(child: Icon(Icons.person)),
-                      title: Text(p.displayName),
-                      subtitle: Text(
-                        [
-                          _subtitle(p),
-                          if (statusBits.isNotEmpty) statusBits.join(' · '),
-                        ].where((x) => x.trim().isNotEmpty).join('\n'),
-                      ),
-                      isThreeLine: statusBits.isNotEmpty,
-                      onTap: () {
-                        Navigator.of(context).push(
-                          PatientDetailsScreen.routeEdit(
-                            clinicId: clinicId,
-                            patientId: p.id,
-                          ),
-                        );
-                      },
-                      trailing: PopupMenuButton<String>(
-                        tooltip: 'Actions',
-                        onSelected: (value) async {
-                          if (value == 'merge') {
-                            await _startMergeFlow(
-                              clinicId: clinicId,
-                              source: p,
-                              allPatients: patients,
-                            );
-                          }
-                        },
-                        itemBuilder: (_) => const [
-                          PopupMenuItem(
-                            value: 'merge',
-                            child: Row(
-                              children: [
-                                Icon(Icons.call_merge, size: 18),
-                                SizedBox(width: 10),
-                                Text('Merge…'),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                    );
-                  },
-                );
-              },
-            ),
+            child: _buildBody(clinicId),
           ),
         ],
       ),
@@ -221,10 +195,167 @@ class _PatientFinderScreenState extends State<PatientFinderScreen> {
     );
   }
 
+  Widget _buildBody(String clinicId) {
+    if (_loading && _patients == null) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (_error != null && _patients == null) {
+      final e = _error!;
+      final errStr = e.toString();
+      final isPermissionDenied = e is FirebaseException &&
+          (e.code == 'permission-denied' ||
+              (e.message ?? '').toLowerCase().contains('permission'));
+      final isTimeout = e is TimeoutException;
+      final isFirestoreInternal = errStr.contains('INTERNAL ASSERTION FAILED') ||
+          errStr.contains('Unexpected state');
+
+      final String message;
+      final String? subMessage;
+      if (isPermissionDenied) {
+        message = 'You don\'t have permission to view patients. '
+            'Ask an admin to grant you "Patients read" (patients.read) for this clinic.';
+        subMessage = null;
+      } else if (isTimeout) {
+        message = 'Patient list took too long to load. Check your connection and try again.';
+        subMessage = null;
+      } else if (isFirestoreInternal) {
+        message = 'Firestore ran into an error (often after another action failed).';
+        subMessage = 'Refresh the page (F5 or reload) and try again. Retry below may work.';
+      } else {
+        message = 'Failed to load patients.';
+        subMessage = errStr.length > 200 ? '${errStr.substring(0, 200)}…' : errStr;
+      }
+
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                isPermissionDenied
+                    ? Icons.lock_outline
+                    : Icons.error_outline,
+                size: 48,
+                color: Theme.of(context).colorScheme.outline,
+              ),
+              const SizedBox(height: 16),
+              Text(message, textAlign: TextAlign.center),
+              if (subMessage != null) ...[
+                const SizedBox(height: 8),
+                Text(
+                  subMessage,
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                ),
+              ],
+              const SizedBox(height: 16),
+              FilledButton.icon(
+                onPressed: () => _loadPatients(clinicId),
+                icon: const Icon(Icons.refresh, size: 20),
+                label: const Text('Retry'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    final rawPatients = _patients ?? const [];
+    final search = _searchCtl.text.trim().toLowerCase();
+    final filteredPatients = rawPatients.where((p) {
+      if (!_showArchivedMerged) {
+        if (p.isMerged) return false;
+        if (p.isArchived) return false;
+        if (p.isDeleted) return false;
+      }
+      final matchesSearch =
+          search.isEmpty ? true : p.searchBlob.contains(search);
+      final matchesDob = (_dob == null || p.dob == null)
+          ? true
+          : (p.dob!.year == _dob!.year &&
+              p.dob!.month == _dob!.month &&
+              p.dob!.day == _dob!.day);
+      return matchesSearch && matchesDob;
+    }).toList()
+      ..sort(
+        (a, b) => a.lastName
+            .toLowerCase()
+            .compareTo(b.lastName.toLowerCase()),
+      );
+
+    if (filteredPatients.isEmpty) {
+      return const Center(child: Text('No matching patients'));
+    }
+
+    return RefreshIndicator(
+      onRefresh: () => _loadPatients(clinicId),
+      child: ListView.separated(
+        physics: const AlwaysScrollableScrollPhysics(),
+        itemCount: filteredPatients.length,
+        separatorBuilder: (_, __) => const Divider(height: 1),
+        itemBuilder: (context, i) {
+          final p = filteredPatients[i];
+          final statusBits = <String>[
+            if (p.isMerged) 'Merged',
+            if (p.isArchived) 'Archived',
+            if (p.isDeleted) 'Deleted',
+          ];
+          return ListTile(
+            leading: const CircleAvatar(child: Icon(Icons.person)),
+            title: Text(p.displayName),
+            subtitle: Text(
+              [
+                _subtitle(p),
+                if (statusBits.isNotEmpty) statusBits.join(' · '),
+              ].where((x) => x.trim().isNotEmpty).join('\n'),
+            ),
+            isThreeLine: statusBits.isNotEmpty,
+            onTap: () {
+              Navigator.of(context).push(
+                PatientDetailsScreen.routeEdit(
+                  clinicId: clinicId,
+                  patientId: p.id,
+                ),
+              );
+            },
+            trailing: PopupMenuButton<String>(
+              tooltip: 'Actions',
+              onSelected: (value) async {
+                if (value == 'merge') {
+                  await _startMergeFlow(
+                    clinicId: clinicId,
+                    source: p,
+                    allPatients: rawPatients,
+                  );
+                }
+              },
+              itemBuilder: (_) => const [
+                PopupMenuItem(
+                  value: 'merge',
+                  child: Row(
+                    children: [
+                      Icon(Icons.call_merge, size: 18),
+                      SizedBox(width: 10),
+                      Text('Merge…'),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+
   String _subtitle(_PatientLite p) {
     final parts = <String>[];
-    if (p.dob != null)
+    if (p.dob != null) {
       parts.add('DOB: ${p.dob!.day}/${p.dob!.month}/${p.dob!.year}');
+    }
     if (p.email.isNotEmpty) parts.add(p.email);
     if (p.email.isEmpty && p.phone.isNotEmpty) parts.add(p.phone);
     return parts.isEmpty ? '—' : parts.join(' · ');
@@ -323,9 +454,7 @@ class _PatientFinderScreenState extends State<PatientFinderScreen> {
         SnackBar(content: Text('Merged successfully. Updated refs: $updated')),
       );
 
-      // ✅ Immediately hide source in UI (even before Firestore snapshot refresh)
-      // (No extra state needed: snapshot will update; this is just a UX nudge)
-      setState(() {});
+      await _loadPatients(clinicId);
     } on FirebaseFunctionsException catch (e) {
       if (mounted) navigator.pop();
       messenger.showSnackBar(
@@ -463,8 +592,9 @@ class _MergePickTargetDialogState extends State<_MergePickTargetDialog> {
 
   Widget _pickTile(BuildContext context, _PatientLite p) {
     final subtitleParts = <String>[];
-    if (p.dob != null)
+    if (p.dob != null) {
       subtitleParts.add('DOB ${p.dob!.day}/${p.dob!.month}/${p.dob!.year}');
+    }
     if (p.email.isNotEmpty) subtitleParts.add(p.email);
     if (p.email.isEmpty && p.phone.isNotEmpty) subtitleParts.add(p.phone);
 

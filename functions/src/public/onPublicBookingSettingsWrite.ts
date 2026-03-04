@@ -61,17 +61,24 @@ export const onPublicBookingSettingsWrite = onDocumentWritten(
       safeStr(clinicDoc?.branding?.logoUrl) ||
       "";
 
-    const [servicesSnap, practitionersSnap, membershipsSnap] = await Promise.all([
-      db.collection(`clinics/${clinicId}/services`).get(),
-      db.collection(`clinics/${clinicId}/practitioners`).get(),
-      db.collection(`clinics/${clinicId}/memberships`).get(),
-    ]);
+    const [servicesSnap, practitionersSnap, membersSnap, membershipsSnap, locationsSnap, typesSnap] =
+      await Promise.all([
+        db.collection(`clinics/${clinicId}/services`).get(),
+        db.collection(`clinics/${clinicId}/practitioners`).get(),
+        db.collection(`clinics/${clinicId}/members`).get(),
+        db.collection(`clinics/${clinicId}/memberships`).get(),
+        db.collection(`clinics/${clinicId}/locations`).get(),
+        db.collection(`clinics/${clinicId}/appointmentTypes`).get(),
+      ]);
 
     logger.info("collection counts", {
       clinicId,
       services: servicesSnap.size,
       practitioners: practitionersSnap.size,
+      members: membersSnap.size,
       memberships: membershipsSnap.size,
+      locations: locationsSnap.size,
+      appointmentTypes: typesSnap.size,
     });
 
     const services = servicesSnap.docs.map((d) => ({ id: d.id, data: (d.data() ?? {}) as AnyMap }));
@@ -79,10 +86,17 @@ export const onPublicBookingSettingsWrite = onDocumentWritten(
       id: d.id,
       data: (d.data() ?? {}) as AnyMap,
     }));
-    const memberships = membershipsSnap.docs.map((d) => ({
-      id: d.id,
-      data: (d.data() ?? {}) as AnyMap,
-    }));
+    // Merge members (canonical) + memberships (legacy) so projection has membership data for all; prefer members.
+    const memberById = new Map<string, { id: string; data: AnyMap }>();
+    for (const d of membersSnap.docs) {
+      memberById.set(d.id, { id: d.id, data: (d.data() ?? {}) as AnyMap });
+    }
+    for (const d of membershipsSnap.docs) {
+      if (!memberById.has(d.id)) {
+        memberById.set(d.id, { id: d.id, data: (d.data() ?? {}) as AnyMap });
+      }
+    }
+    const memberships = Array.from(memberById.values());
 
     const projection = buildPublicBookingProjection({
       clinicId,
@@ -95,21 +109,64 @@ export const onPublicBookingSettingsWrite = onDocumentWritten(
       memberships,
     });
 
+    // Curated lists for public booking: locations and appointmentTypes (active + showInOnlineBooking)
+    const locationsList =
+      locationsSnap.docs
+        .filter((d) => {
+          const dta = d.data() as AnyMap;
+          return dta?.active === true && dta?.showInOnlineBooking === true;
+        })
+        .map((d) => {
+          const dta = d.data() as AnyMap;
+          return { id: d.id, name: safeStr(dta?.name) || d.id };
+        });
+
+    const appointmentTypesList =
+      typesSnap.docs
+        .filter((d) => {
+          const dta = d.data() as AnyMap;
+          return dta?.active === true && dta?.showInOnlineBooking === true;
+        })
+        .map((d) => {
+          const dta = d.data() as AnyMap;
+          return {
+            id: d.id,
+            name: safeStr(dta?.name) || d.id,
+            defaultDurationMinutes:
+              typeof dta?.defaultDurationMinutes === "number"
+                ? dta.defaultDurationMinutes
+                : 30,
+            telehealth: dta?.telehealth === true,
+          };
+        });
+
+    // Practitioners in mirror must include allowedLocationIds for location filtering
+    const practitionersList = (projection.practitioners ?? []).map((p) => ({
+      id: p.id,
+      displayName: p.displayName ?? p.id,
+      ...(Array.isArray(p.allowedLocationIds) && p.allowedLocationIds.length > 0
+        ? { allowedLocationIds: p.allowedLocationIds }
+        : {}),
+    }));
+
     logger.info("projection practitioners", {
       clinicId,
-      count: projection.practitioners?.length ?? 0,
-      sample: projection.practitioners?.[0] ?? null,
+      count: practitionersList.length,
+      locationsCount: locationsList.length,
     });
 
     await publicDocRef.set(
       {
         ...projection,
+        locations: locationsList,
+        practitioners: practitionersList,
+        appointmentTypes: appointmentTypesList,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         updatedBy: "onPublicBookingSettingsWrite-gen2",
       },
       { merge: true }
     );
 
-    logger.info("wrote public mirror", { path: publicDocRef.path });
+    logger.info("wrote public mirror", { path: publicDocRef.path, locations: locationsList.length });
   }
 );

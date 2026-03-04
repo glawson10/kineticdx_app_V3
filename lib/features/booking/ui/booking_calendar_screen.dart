@@ -1,4 +1,5 @@
 // lib/features/booking/ui/booking_calendar_screen.dart
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -11,6 +12,7 @@ import '../../../app/clinic_session.dart';
 import '../../../data/repositories/appointments_repository.dart'
     show AppointmentsRepository, ClinicClosureConflictException, PractitionerOverlapException;
 import '../../../data/repositories/calendar_display_settings_repository.dart';
+import '../../../data/repositories/clinic_repository.dart';
 import '../../../data/repositories/services_repository.dart';
 import '../../../data/repositories/staff_repository.dart';
 import '../../../data/repositories/waitlist_repository.dart';
@@ -54,6 +56,13 @@ class BookingCalendarScreen extends StatefulWidget {
 
   /// Set to true to show Repeat? dialog, series badge, and scope picker when editing/dragging series.
   static const bool showRecurrenceUI = false;
+
+  /// Pre-loads current week opening hours so the calendar tab shows immediately when opened.
+  /// Call when the user has a clinic selected (e.g. from shell) to warm the cache.
+  static void preWarmWeeklyHours(String clinicId) {
+    if (clinicId.trim().isEmpty) return;
+    _BookingCalendarScreenState._preWarmWeeklyHours(clinicId);
+  }
 
   const BookingCalendarScreen({
     super.key,
@@ -102,8 +111,8 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
   DateTime? _cachedWeeklyHoursWeekStart;
   String? _cachedWeeklyHoursPractitionerId;
 
-  /// Cached Firestore streams so StreamBuilder keeps the same subscription across rebuilds (avoids Firestore "Unexpected state" + LateInitializationError on web).
-  Stream<DocumentSnapshot<Map<String, dynamic>>>? _cachedClinicDocStream;
+  /// Cached streams so StreamBuilder keeps the same subscription across rebuilds (avoids Firestore "Unexpected state" + LateInitializationError on web).
+  Stream<ClinicDocSnapshot>? _cachedClinicDocStream;
   String? _cachedClinicDocClinicId;
   Stream<List<_ClinicClosure>>? _cachedClosuresStream;
   String? _cachedClosuresClinicId;
@@ -112,12 +121,13 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
   Stream<CalendarDisplaySettings>? _cachedDisplaySettingsStream;
   String? _cachedDisplaySettingsClinicId;
 
+  /// Cache for listPublicSlotsFn results so calendar can show immediately when pre-warmed.
+  static final Map<String, _WeeklyHours> _weeklyHoursCache = {};
+  static String _weeklyHoursCacheKey(String clinicId, DateTime weekStart, String? practitionerId) =>
+      '$clinicId|${weekStart.millisecondsSinceEpoch}|${practitionerId ?? ""}';
+
   static const double _timeGutterWidth = 64;
   static const double _headerHeight = 48;
-
-  /// Defaults if no opening-hours are configured yet.
-  static const int _fallbackStartHour = 7;
-  static const int _fallbackEndHour = 20;
 
   // Drag snap
   static const int _dragSnapMinutes = 5;
@@ -204,7 +214,9 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
     super.dispose();
   }
 
-  Future<_WeeklyHours> _weeklyHoursFromListPublicSlots({
+  /// Fetches weekly hours via listPublicSlotsFn. Static so pre-warm can call without an instance.
+  static Future<_WeeklyHours> _fetchWeeklyHours(
+    FirebaseFunctions functions, {
     required String clinicId,
     required DateTime weekStartLocal,
     required String? practitionerId,
@@ -228,7 +240,7 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
       'tz': _tz,
     };
 
-    final callable = _functions.httpsCallable('listPublicSlotsFn');
+    final callable = functions.httpsCallable('listPublicSlotsFn');
     final callResult = await callable.call(payload);
     final data = callResult.data;
 
@@ -238,7 +250,6 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
       );
     }
 
-    // ✅ Preferred: server-provided weeklyHours (authoritative)
     final rawWeekly = data['weeklyHours'];
     if (rawWeekly is Map) {
       return _WeeklyHours.fromServerWeeklyHours(
@@ -246,7 +257,6 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
       );
     }
 
-    // Fallback: older function shape -> derive windows from slots
     final rawSlots = (data['slots'] as List?) ?? const [];
     final ranges = rawSlots
         .whereType<Map>()
@@ -263,6 +273,17 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
         .toList();
 
     return _WeeklyHours.fromUtcOpenWindows(ranges);
+  }
+
+  /// Start loading current week's opening hours in the background so calendar opens fast.
+  static void _preWarmWeeklyHours(String clinicId) {
+    final ws = _startOfWeek(DateTime.now());
+    final key = _weeklyHoursCacheKey(clinicId, ws, null);
+    if (_weeklyHoursCache.containsKey(key)) return;
+    final functions = FirebaseFunctions.instanceFor(region: 'europe-west3');
+    _fetchWeeklyHours(functions, clinicId: clinicId, weekStartLocal: ws, practitionerId: null)
+        .then((h) => _weeklyHoursCache[key] = h)
+        .catchError((_) => _WeeklyHours.fromFirestore(null));
   }
 
   // ───────────────────────────────────────────────────────────────────────────
@@ -574,16 +595,15 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
 
     final apptRepo = context.read<AppointmentsRepository>();
     final servicesRepo = context.read<ServicesRepository>();
+    final clinicRepo = context.read<ClinicRepository>();
 
     // Reuse same stream instance for same clinicId so StreamBuilder does not cancel/resubscribe on rebuild (avoids Firestore web SDK "Unexpected state").
-    Stream<DocumentSnapshot<Map<String, dynamic>>> clinicDoc;
+    // Uses ClinicRepository.watchClinic (callable-based) instead of direct Firestore to avoid web SDK bug.
+    Stream<ClinicDocSnapshot> clinicDoc;
     if (_cachedClinicDocClinicId == clinicId && _cachedClinicDocStream != null) {
       clinicDoc = _cachedClinicDocStream!;
     } else {
-      clinicDoc = FirebaseFirestore.instance
-          .collection('clinics')
-          .doc(clinicId)
-          .snapshots();
+      clinicDoc = clinicRepo.watchClinic(clinicId);
       _cachedClinicDocStream = clinicDoc;
       _cachedClinicDocClinicId = clinicId;
     }
@@ -592,21 +612,16 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
     if (_cachedClosuresClinicId == clinicId && _cachedClosuresStream != null) {
       closuresStream = _cachedClosuresStream!;
     } else {
-      closuresStream = FirebaseFirestore.instance
-          .collection('clinics')
-          .doc(clinicId)
-          .collection('closures')
-          .where('active', isEqualTo: true)
-          .orderBy('fromAt')
-          .snapshots()
-          .map((snap) => snap.docs
+      closuresStream = clinicRepo
+          .watchActiveClosures(clinicId)
+          .map((closures) => closures
               .map((d) => _ClinicClosure.fromFirestore(d.id, d.data()))
               .toList());
       _cachedClosuresStream = closuresStream;
       _cachedClosuresClinicId = clinicId;
     }
 
-    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+    return StreamBuilder<ClinicDocSnapshot>(
       stream: clinicDoc,
       builder: (context, clinicSnap) {
         if (clinicSnap.connectionState == ConnectionState.waiting && !clinicSnap.hasData) {
@@ -649,11 +664,21 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
             _cachedWeeklyHoursClinicId != clinicId ||
             _cachedWeeklyHoursWeekStart?.millisecondsSinceEpoch != _weekStart.millisecondsSinceEpoch ||
             _cachedWeeklyHoursPractitionerId != _selectedPractitionerId) {
-          _cachedWeeklyHoursFuture = _weeklyHoursFromListPublicSlots(
-            clinicId: clinicId,
-            weekStartLocal: _weekStart,
-            practitionerId: _selectedPractitionerId,
-          );
+          final cacheKey = _weeklyHoursCacheKey(clinicId, _weekStart, _selectedPractitionerId);
+          final cached = _weeklyHoursCache[cacheKey];
+          if (cached != null) {
+            _cachedWeeklyHoursFuture = Future.value(cached);
+          } else {
+            _cachedWeeklyHoursFuture = _fetchWeeklyHours(
+              _functions,
+              clinicId: clinicId,
+              weekStartLocal: _weekStart,
+              practitionerId: _selectedPractitionerId,
+            ).then((h) {
+              _weeklyHoursCache[cacheKey] = h;
+              return h;
+            });
+          }
           _cachedWeeklyHoursClinicId = clinicId;
           _cachedWeeklyHoursWeekStart = _weekStart;
           _cachedWeeklyHoursPractitionerId = _selectedPractitionerId;
@@ -760,7 +785,10 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
                           ? allAppts.where((a) => a.status.toLowerCase() != 'cancelled').toList()
                           : allAppts;
                       if (visiblePractitionerIds.isNotEmpty) {
-                        appts = appts.where((a) => visiblePractitionerIds.contains(a.practitionerId)).toList();
+                        appts = appts.where((a) =>
+                            a.kind == 'admin' ||
+                            a.practitionerId.isEmpty ||
+                            visiblePractitionerIds.contains(a.practitionerId)).toList();
                       }
                       final calendarDisplayRepo = context.read<CalendarDisplaySettingsRepository>();
                       Stream<CalendarDisplaySettings> displayStream;
@@ -820,7 +848,10 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
                                       ),
                                     ),
                                   );
-                                  if (saved != null && mounted) setState(() {});
+                                  if (saved != null && mounted) {
+                                    repo.clearDisplaySettingsCache();
+                                    setState(() {});
+                                  }
                                 },
                                 condensedHeader: displaySettings.condensedHeader,
                               ),
@@ -890,7 +921,10 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
                       return aCancelled ? 1 : -1;
                     });
                     if (visiblePractitionerIds.isNotEmpty) {
-                      appts = appts.where((a) => visiblePractitionerIds.contains(a.practitionerId)).toList();
+                      appts = appts.where((a) =>
+                          a.kind == 'admin' ||
+                          a.practitionerId.isEmpty ||
+                          visiblePractitionerIds.contains(a.practitionerId)).toList();
                     }
 
                     final calendarDisplayRepo = context.read<CalendarDisplaySettingsRepository>();
@@ -1024,7 +1058,10 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
                                     ),
                                   ),
                                 );
-                                if (saved != null && mounted) setState(() {});
+                                if (saved != null && mounted) {
+                                  repo.clearDisplaySettingsCache();
+                                  setState(() {});
+                                }
                               },
                             ),
 
@@ -1908,6 +1945,11 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
     WaitlistEntry? waitlistEntry,
   }) async {
     try {
+      // Preload services and members while user chooses action so pickers open fast.
+      final staffRepo = context.read<StaffRepository>();
+      final preloadServicesFuture = servicesRepo.activeServices(clinicId).first;
+      final preloadMembersFuture = staffRepo.watchMembershipsWithFallback(clinicId).first;
+
       final action = await showDialog<_BookingAction>(
         context: context,
         builder: (_) => _ActionDialog(slotStart: slotStart),
@@ -1919,12 +1961,26 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
       _PickedPractitioner? pickedPractitioner;
 
       if (action != _BookingAction.adminBlock) {
+        List<Service>? initialServices;
+        List<MemberDocSnapshot>? initialMembers;
+        try {
+          final results = await Future.wait([
+            preloadServicesFuture,
+            preloadMembersFuture,
+          ]).timeout(const Duration(seconds: 10));
+          initialServices = results[0] as List<Service>;
+          initialMembers = results[1] as List<MemberDocSnapshot>;
+        } catch (_) {
+          // Fall back to dialogs loading themselves
+        }
+
         pickedService = await showDialog<_PickedService>(
           context: context,
           barrierDismissible: false,
           builder: (_) => _ServicePickerDialog(
             clinicId: clinicId,
             servicesRepo: servicesRepo,
+            initialServices: initialServices,
           ),
         );
         if (!mounted) return;
@@ -1933,7 +1989,10 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
         pickedPractitioner = await showDialog<_PickedPractitioner>(
           context: context,
           barrierDismissible: false,
-          builder: (_) => _PractitionerPickerDialog(clinicId: clinicId),
+          builder: (_) => _PractitionerPickerDialog(
+            clinicId: clinicId,
+            initialMembers: initialMembers,
+          ),
         );
         if (!mounted) return;
         if (pickedPractitioner == null) return;
@@ -1990,6 +2049,11 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
         );
 
         if (!mounted) return;
+        apptRepo.invalidateAppointmentsCache();
+        setState(() {
+          _cachedAppointmentsKey = null;
+          _cachedAppointmentsStream = null;
+        });
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
@@ -2109,6 +2173,11 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
         );
         final ids = result['createdAppointmentIds'] as List<dynamic>? ?? [];
         if (!mounted) return;
+        apptRepo.invalidateAppointmentsCache();
+        setState(() {
+          _cachedAppointmentsKey = null;
+          _cachedAppointmentsStream = null;
+        });
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Created repeating appointments (${ids.length})'),
@@ -2118,6 +2187,11 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
       }
 
       if (!mounted) return;
+      apptRepo.invalidateAppointmentsCache();
+      setState(() {
+        _cachedAppointmentsKey = null;
+        _cachedAppointmentsStream = null;
+      });
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
@@ -2975,7 +3049,7 @@ class _PractitionerInlineDropdown extends StatelessWidget {
     return true;
   }
 
-  String _labelFor(QueryDocumentSnapshot<Map<String, dynamic>> d) {
+  String _labelFor(MemberDocSnapshot d) {
     final data = d.data();
     final name = (data['displayName'] ?? '').toString().trim();
     if (name.isNotEmpty) return name;
@@ -3000,12 +3074,12 @@ class _PractitionerInlineDropdown extends StatelessWidget {
         minHeight: headerStyle ? 32 : 0,
         maxHeight: headerStyle ? 32 : double.infinity,
       ),
-      child: StreamBuilder<List<QueryDocumentSnapshot<Map<String, dynamic>>>>(
+      child: StreamBuilder<List<MemberDocSnapshot>>(
         stream: membersStream,
         builder: (context, snap) {
           final docs = snap.data ?? const [];
 
-          final practitioners = <QueryDocumentSnapshot<Map<String, dynamic>>>[];
+          final practitioners = <MemberDocSnapshot>[];
           final seen = <String>{};
 
           for (final d in docs) {
@@ -3522,6 +3596,15 @@ class _ClinicClosure {
 
   static DateTime _parseTs(dynamic v) {
     if (v is Timestamp) return v.toDate().toUtc();
+    if (v is Map) {
+      final sec = v['seconds'] ?? v['_seconds'];
+      if (sec != null) {
+        final ms = (sec is int ? sec : int.tryParse(sec.toString()) ?? 0) * 1000;
+        final nano = v['nanoseconds'] ?? v['_nanoseconds'] ?? 0;
+        final nanoMs = (nano is int ? nano : int.tryParse(nano.toString()) ?? 0) ~/ 1000000;
+        return DateTime.fromMillisecondsSinceEpoch(ms + nanoMs).toUtc();
+      }
+    }
     if (v is String) {
       return (DateTime.tryParse(v) ?? DateTime.fromMillisecondsSinceEpoch(0))
           .toUtc();
@@ -4186,11 +4269,45 @@ class _PickedService {
 class _ServicePickerDialog extends StatelessWidget {
   final String clinicId;
   final ServicesRepository servicesRepo;
+  final List<Service>? initialServices;
 
   const _ServicePickerDialog({
     required this.clinicId,
     required this.servicesRepo,
+    this.initialServices,
   });
+
+  Widget _buildServiceList(BuildContext context, List<Service> list) {
+    return ListView.separated(
+      itemCount: list.length,
+      separatorBuilder: (_, __) => const Divider(height: 1),
+      itemBuilder: (_, i) {
+        final s = list[i];
+        return ListTile(
+          leading: const Icon(Icons.medical_services_outlined),
+          title: Text(s.name.isEmpty ? '(Unnamed service)' : s.name),
+          subtitle: s.description.isEmpty
+              ? null
+              : Text(
+                  s.description,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+          trailing: s.defaultMinutes > 0
+              ? Text('${s.defaultMinutes} min')
+              : null,
+          onTap: () => Navigator.pop(
+            context,
+            _PickedService(
+              id: s.id,
+              name: s.name,
+              defaultMinutes: s.defaultMinutes,
+            ),
+          ),
+        );
+      },
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -4202,48 +4319,31 @@ class _ServicePickerDialog extends StatelessWidget {
         child: StreamBuilder<List<Service>>(
           stream: servicesRepo.activeServices(clinicId),
           builder: (context, snap) {
-            if (snap.connectionState == ConnectionState.waiting && !snap.hasData) {
+            if (snap.hasData) {
+              final list = snap.data!;
+              if (list.isEmpty) {
+                return const Center(child: Text('No active services found.'));
+              }
+              return _buildServiceList(context, list);
+            }
+            if (snap.connectionState == ConnectionState.waiting &&
+                initialServices != null &&
+                initialServices!.isNotEmpty) {
+              return _buildServiceList(context, initialServices!);
+            }
+            if (snap.connectionState == ConnectionState.waiting &&
+                !snap.hasData) {
               return const Center(child: CircularProgressIndicator());
             }
             if (snap.hasError) {
               return Center(
                   child: Text('Failed to load services:\n${snap.error}'));
             }
-
             final list = snap.data ?? const <Service>[];
             if (list.isEmpty) {
               return const Center(child: Text('No active services found.'));
             }
-
-            return ListView.separated(
-              itemCount: list.length,
-              separatorBuilder: (_, __) => const Divider(height: 1),
-              itemBuilder: (_, i) {
-                final s = list[i];
-                return ListTile(
-                  leading: const Icon(Icons.medical_services_outlined),
-                  title: Text(s.name.isEmpty ? '(Unnamed service)' : s.name),
-                  subtitle: s.description.isEmpty
-                      ? null
-                      : Text(
-                          s.description,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                  trailing: s.defaultMinutes > 0
-                      ? Text('${s.defaultMinutes} min')
-                      : null,
-                  onTap: () => Navigator.pop(
-                    context,
-                    _PickedService(
-                      id: s.id,
-                      name: s.name,
-                      defaultMinutes: s.defaultMinutes,
-                    ),
-                  ),
-                );
-              },
-            );
+            return _buildServiceList(context, list);
           },
         ),
       ),
@@ -4265,24 +4365,96 @@ class _PickedPractitioner {
 
 class _PractitionerPickerDialog extends StatelessWidget {
   final String clinicId;
-  const _PractitionerPickerDialog({required this.clinicId});
+  final List<MemberDocSnapshot>? initialMembers;
+
+  const _PractitionerPickerDialog({
+    required this.clinicId,
+    this.initialMembers,
+  });
+
+  static List<MemberDocSnapshot> _activeMembersSorted(
+      List<MemberDocSnapshot> docs) {
+    final active =
+        docs.where((d) => d.data()['active'] == true).toList();
+    active.sort((a, b) {
+      final aCan = _canScheduleWrite(a.data());
+      final bCan = _canScheduleWrite(b.data());
+      if (aCan != bCan) return bCan ? 1 : -1;
+      return a.id.compareTo(b.id);
+    });
+    return active;
+  }
+
+  Widget _buildMemberList(
+      BuildContext context, List<MemberDocSnapshot> activeMembers) {
+    return ListView.separated(
+      itemCount: activeMembers.length,
+      separatorBuilder: (_, __) => const Divider(height: 1),
+      itemBuilder: (_, i) {
+        final d = activeMembers[i];
+        final uid = d.id;
+        final data = d.data();
+        final roleId = (data['roleId'] ?? '').toString();
+        final canWrite = _canScheduleWrite(data);
+
+        return ListTile(
+          leading: CircleAvatar(
+            child: Icon(canWrite ? Icons.event_available : Icons.person),
+          ),
+          title: Text(_shortUid(uid)),
+          subtitle: Text(
+            [
+              if (roleId.isNotEmpty) 'Role: $roleId',
+              canWrite
+                  ? 'schedule.write ✓ (can be booked)'
+                  : 'schedule.write ✕ (cannot be booked)',
+            ].join(' • '),
+          ),
+          onTap: () => Navigator.pop(
+            context,
+            _PickedPractitioner(uid: uid, canScheduleWrite: canWrite),
+          ),
+        );
+      },
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
-    final membersCol = FirebaseFirestore.instance
-        .collection('clinics')
-        .doc(clinicId)
-        .collection('members');
+    final staffRepo = context.read<StaffRepository>();
+    final stream = staffRepo.watchMembershipsWithFallback(clinicId);
 
     return AlertDialog(
       title: const Text('Select practitioner'),
       content: SizedBox(
         width: 520,
         height: 360,
-        child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-          stream: membersCol.snapshots(),
+        child: StreamBuilder<List<MemberDocSnapshot>>(
+          stream: stream,
           builder: (context, snap) {
-            if (snap.connectionState == ConnectionState.waiting && !snap.hasData) {
+            if (snap.hasData) {
+              final activeMembers = _activeMembersSorted(snap.data!);
+              if (activeMembers.isEmpty) {
+                return const Center(
+                  child: Text(
+                    'No active clinic members found.\n\n'
+                    'Create a member doc in clinics/{clinicId}/members/{uid} with active:true.',
+                    textAlign: TextAlign.center,
+                  ),
+                );
+              }
+              return _buildMemberList(context, activeMembers);
+            }
+            if (snap.connectionState == ConnectionState.waiting &&
+                initialMembers != null &&
+                initialMembers!.isNotEmpty) {
+              final activeMembers = _activeMembersSorted(initialMembers!);
+              if (activeMembers.isNotEmpty) {
+                return _buildMemberList(context, activeMembers);
+              }
+            }
+            if (snap.connectionState == ConnectionState.waiting &&
+                !snap.hasData) {
               return const Center(child: CircularProgressIndicator());
             }
             if (snap.hasError) {
@@ -4290,9 +4462,8 @@ class _PractitionerPickerDialog extends StatelessWidget {
                   child: Text('Failed to load members:\n${snap.error}'));
             }
 
-            final docs = snap.data?.docs ?? const [];
-            final activeMembers =
-                docs.where((d) => d.data()['active'] == true).toList();
+            final docs = snap.data ?? const [];
+            final activeMembers = _activeMembersSorted(docs);
 
             if (activeMembers.isEmpty) {
               return const Center(
@@ -4304,44 +4475,7 @@ class _PractitionerPickerDialog extends StatelessWidget {
               );
             }
 
-            activeMembers.sort((a, b) {
-              final aCan = _canScheduleWrite(a.data());
-              final bCan = _canScheduleWrite(b.data());
-              if (aCan != bCan) return bCan ? 1 : -1;
-              return a.id.compareTo(b.id);
-            });
-
-            return ListView.separated(
-              itemCount: activeMembers.length,
-              separatorBuilder: (_, __) => const Divider(height: 1),
-              itemBuilder: (_, i) {
-                final d = activeMembers[i];
-                final uid = d.id;
-                final data = d.data();
-                final roleId = (data['roleId'] ?? '').toString();
-                final canWrite = _canScheduleWrite(data);
-
-                return ListTile(
-                  leading: CircleAvatar(
-                    child:
-                        Icon(canWrite ? Icons.event_available : Icons.person),
-                  ),
-                  title: Text(_shortUid(uid)),
-                  subtitle: Text(
-                    [
-                      if (roleId.isNotEmpty) 'Role: $roleId',
-                      canWrite
-                          ? 'schedule.write ✓ (can be booked)'
-                          : 'schedule.write ✕ (cannot be booked)',
-                    ].join(' • '),
-                  ),
-                  onTap: () => Navigator.pop(
-                    context,
-                    _PickedPractitioner(uid: uid, canScheduleWrite: canWrite),
-                  ),
-                );
-              },
-            );
+            return _buildMemberList(context, activeMembers);
           },
         ),
       ),
@@ -4579,6 +4713,25 @@ class _PatientSnapshot {
       address: (data['address'] ?? '').toString(),
     );
   }
+
+  /// From listPatientsForBookingFn response row (server-side list).
+  static _PatientSnapshot fromListRow(Map<String, dynamic> row) {
+    DateTime dob = DateTime(2000, 1, 1);
+    final v = row['dateOfBirth'];
+    if (v != null && v is String) {
+      dob = DateTime.tryParse(v) ?? dob;
+    }
+    dob = DateTime(dob.year, dob.month, dob.day);
+    return _PatientSnapshot(
+      id: (row['id'] ?? '').toString(),
+      firstName: (row['firstName'] ?? '').toString(),
+      lastName: (row['lastName'] ?? '').toString(),
+      dob: dob,
+      phone: (row['phone'] ?? '').toString(),
+      email: (row['email'] ?? '').toString(),
+      address: (row['address'] ?? '').toString(),
+    );
+  }
 }
 
 class _NewPatientDialog extends StatefulWidget {
@@ -4730,11 +4883,50 @@ class _PatientFinderDialogState extends State<_PatientFinderDialog> {
   final _nameCtl = TextEditingController();
   DateTime? _dobFilter;
 
-  CollectionReference<Map<String, dynamic>> get _patientsCol =>
-      FirebaseFirestore.instance
-          .collection('clinics')
-          .doc(widget.clinicId)
-          .collection('patients');
+  List<_PatientSnapshot>? _loadedPatients;
+  Object? _loadError;
+  bool _loading = true;
+
+  static final _functions = FirebaseFunctions.instanceFor(region: 'europe-west3');
+
+  @override
+  void initState() {
+    super.initState();
+    _loadPatients();
+  }
+
+  Future<void> _loadPatients() async {
+    setState(() {
+      _loading = true;
+      _loadError = null;
+      _loadedPatients = null;
+    });
+    try {
+      final result = await _functions
+          .httpsCallable('listPatientsForBookingFn')
+          .call<Map<String, dynamic>>({'clinicId': widget.clinicId});
+      if (!mounted) return;
+      final data = result.data ?? const <String, dynamic>{};
+      final rawList = data['patients'] as List<dynamic>? ?? [];
+      final list = rawList
+          .whereType<Map<String, dynamic>>()
+          .map(_PatientSnapshot.fromListRow)
+          .toList();
+      setState(() {
+        _loadedPatients = list;
+        _loading = false;
+        _loadError = null;
+      });
+    } catch (e, st) {
+      debugPrint('listPatientsForBookingFn failed: $e\n$st');
+      if (!mounted) return;
+      setState(() {
+        _loadError = e;
+        _loading = false;
+        _loadedPatients = null;
+      });
+    }
+  }
 
   @override
   void dispose() {
@@ -4800,58 +4992,7 @@ class _PatientFinderDialogState extends State<_PatientFinderDialog> {
             const SizedBox(height: 12),
             SizedBox(
               height: 320,
-              child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                stream: _patientsCol.orderBy('lastName').limit(200).snapshots(),
-                builder: (context, snap) {
-                  if (snap.connectionState == ConnectionState.waiting && !snap.hasData) {
-                    return const Center(child: CircularProgressIndicator());
-                  }
-                  if (snap.hasError) {
-                    return Center(
-                        child: Text('Failed to load patients:\n${snap.error}'));
-                  }
-
-                  var list =
-                      snap.data?.docs.map(_PatientSnapshot.fromDoc).toList() ??
-                          <_PatientSnapshot>[];
-
-                  if (queryText.isNotEmpty) {
-                    list = list.where((p) {
-                      final fn = p.firstName.toLowerCase();
-                      final ln = p.lastName.toLowerCase();
-                      return fn.contains(queryText) || ln.contains(queryText);
-                    }).toList();
-                  }
-
-                  if (_dobFilter != null) {
-                    list = list.where((p) {
-                      final d = p.dob;
-                      return d.year == _dobFilter!.year &&
-                          d.month == _dobFilter!.month &&
-                          d.day == _dobFilter!.day;
-                    }).toList();
-                  }
-
-                  if (list.isEmpty) {
-                    return const Center(child: Text('No matching patients'));
-                  }
-
-                  return ListView.separated(
-                    itemCount: list.length,
-                    separatorBuilder: (_, __) => const Divider(height: 1),
-                    itemBuilder: (_, i) {
-                      final p = list[i];
-                      final dob = '${p.dob.day}/${p.dob.month}/${p.dob.year}';
-                      return ListTile(
-                        leading: const CircleAvatar(child: Icon(Icons.person)),
-                        title: Text(p.fullName),
-                        subtitle: Text('DOB: $dob'),
-                        onTap: () => Navigator.pop(context, p),
-                      );
-                    },
-                  );
-                },
-              ),
+              child: _buildPatientList(queryText),
             ),
           ],
         ),
@@ -4860,7 +5001,72 @@ class _PatientFinderDialogState extends State<_PatientFinderDialog> {
         TextButton(
             onPressed: () => Navigator.pop(context, null),
             child: const Text('Cancel')),
+        if (_loadError != null)
+          TextButton(
+            onPressed: () => _loadPatients(),
+            child: const Text('Retry'),
+          ),
       ],
+    );
+  }
+
+  Widget _buildPatientList(String queryText) {
+    if (_loading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (_loadError != null) {
+      final e = _loadError!;
+      final isPermissionDenied = e is FirebaseFunctionsException &&
+          (e.code == 'permission-denied' ||
+              (e.message ?? '').toLowerCase().contains('permission'));
+      final message = isPermissionDenied
+          ? 'You don\'t have permission to search patients. '
+              'Please ask an admin to grant patients.read.'
+          : 'Failed to load patients:\n$e';
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Text(message, textAlign: TextAlign.center),
+        ),
+      );
+    }
+
+    var list = _loadedPatients ?? <_PatientSnapshot>[];
+
+    if (queryText.isNotEmpty) {
+      list = list.where((p) {
+        final fn = p.firstName.toLowerCase();
+        final ln = p.lastName.toLowerCase();
+        return fn.contains(queryText) || ln.contains(queryText);
+      }).toList();
+    }
+
+    if (_dobFilter != null) {
+      list = list.where((p) {
+        final d = p.dob;
+        return d.year == _dobFilter!.year &&
+            d.month == _dobFilter!.month &&
+            d.day == _dobFilter!.day;
+      }).toList();
+    }
+
+    if (list.isEmpty) {
+      return const Center(child: Text('No matching patients'));
+    }
+
+    return ListView.separated(
+      itemCount: list.length,
+      separatorBuilder: (_, __) => const Divider(height: 1),
+      itemBuilder: (_, i) {
+        final p = list[i];
+        final dob = '${p.dob.day}/${p.dob.month}/${p.dob.year}';
+        return ListTile(
+          leading: const CircleAvatar(child: Icon(Icons.person)),
+          title: Text(p.fullName),
+          subtitle: Text('DOB: $dob'),
+          onTap: () => Navigator.pop(context, p),
+        );
+      },
     );
   }
 }
