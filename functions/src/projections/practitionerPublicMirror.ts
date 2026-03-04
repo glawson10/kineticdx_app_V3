@@ -1,59 +1,19 @@
 import { onDocumentWritten } from "firebase-functions/v2/firestore";
+import { logger } from "firebase-functions/logger";
 import * as admin from "firebase-admin";
+
+import { writePublicBookingMirror } from "../clinic/writePublicBookingMirror";
 
 if (!admin.apps.length) {
   admin.initializeApp();
 }
+const db = admin.firestore();
 
-type PublicPractitioner = {
-  practitionerId: string;
-  displayName: string;
-  active: boolean;
-};
-
-async function rebuildPublicPractitionerMirrors(clinicId: string) {
-  const db = admin.firestore();
-
-  const dirSnap = await db
-    .collection(`clinics/${clinicId}/public/directory/practitioners`)
-    .get();
-
-  const list: PublicPractitioner[] = dirSnap.docs.map((d) => {
-    const data = d.data() ?? {};
-    return {
-      practitionerId: String(data.practitionerId ?? d.id),
-      displayName: String(data.displayName ?? "").trim(),
-      active: Boolean(data.active ?? false),
-    };
-  });
-
-  const payload = {
-    // UI might expect this exact nesting
-    publicBooking: { practitioners: list },
-
-    // Some code might expect a top-level list
-    practitioners: list,
-
-    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    updatedBy: "mirrorPractitionerToPublic.rebuildMirrors",
-  };
-
-  const refA = db.doc(`clinics/${clinicId}/public/config/publicBooking`);
-  const refB = db.doc(`clinics/${clinicId}/public/publicBooking`);
-
-  console.log("rebuild mirrors", {
-    clinicId,
-    count: list.length,
-    refA: refA.path,
-    refB: refB.path,
-  });
-
-  await Promise.all([
-    refA.set(payload, { merge: true }),
-    refB.set(payload, { merge: true }),
-  ]);
-}
-
+/**
+ * When a practitioner doc is written, rebuild the canonical public booking mirror
+ * at clinics/{clinicId}/public/config/publicBooking/publicBooking so the
+ * practitioner list is always up to date.
+ */
 export const mirrorPractitionerToPublic = onDocumentWritten(
   {
     document: "clinics/{clinicId}/practitioners/{practitionerId}",
@@ -62,43 +22,36 @@ export const mirrorPractitionerToPublic = onDocumentWritten(
   async (event) => {
     const { clinicId, practitionerId } = event.params;
 
-    console.log("mirrorPractitionerToPublic fired", { clinicId, practitionerId });
+    logger.info("mirrorPractitionerToPublic fired", { clinicId, practitionerId });
 
     try {
-      const afterSnap = event.data?.after;
+      const settingsSnap = await db
+        .doc(`clinics/${clinicId}/settings/publicBooking`)
+        .get();
 
-      const publicDirRef = admin
-        .firestore()
-        .doc(
-          `clinics/${clinicId}/public/directory/practitioners/${practitionerId}`
+      if (!settingsSnap.exists) {
+        logger.info(
+          "mirrorPractitionerToPublic: no settings/publicBooking — skipping mirror rebuild",
+          { clinicId }
         );
-
-      // Delete
-      if (!afterSnap?.exists) {
-        console.log("deleted -> removing directory doc", publicDirRef.path);
-        await publicDirRef.delete().catch(() => {});
-        await rebuildPublicPractitionerMirrors(clinicId);
         return;
       }
 
-      const data = afterSnap.data() ?? {};
+      const settings = (settingsSnap.data() ?? {}) as Record<string, any>;
 
-      const dirPayload = {
+      const projection = await writePublicBookingMirror(clinicId, settings);
+
+      logger.info("mirrorPractitionerToPublic: mirror rebuilt", {
+        clinicId,
         practitionerId,
-        displayName: String(data.displayName ?? "").trim(),
-        active: Boolean(data.active ?? false),
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        updatedBy: "mirrorPractitionerToPublic",
-      };
-
-      console.log("writing directory doc", { path: publicDirRef.path, dirPayload });
-      await publicDirRef.set(dirPayload, { merge: true });
-
-      await rebuildPublicPractitionerMirrors(clinicId);
-
-      console.log("mirrorPractitionerToPublic complete");
+        practitionerCount: projection?.practitioners?.length ?? 0,
+      });
     } catch (err: any) {
-      console.error("mirrorPractitionerToPublic FAILED", err?.message ?? err, err);
+      logger.error("mirrorPractitionerToPublic FAILED", {
+        clinicId,
+        practitionerId,
+        err: err?.message ?? String(err),
+      });
       throw err;
     }
   }

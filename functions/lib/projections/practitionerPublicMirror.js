@@ -35,79 +35,47 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.mirrorPractitionerToPublic = void 0;
 const firestore_1 = require("firebase-functions/v2/firestore");
+const logger_1 = require("firebase-functions/logger");
 const admin = __importStar(require("firebase-admin"));
+const writePublicBookingMirror_1 = require("../clinic/writePublicBookingMirror");
 if (!admin.apps.length) {
     admin.initializeApp();
 }
-async function rebuildPublicPractitionerMirrors(clinicId) {
-    const db = admin.firestore();
-    const dirSnap = await db
-        .collection(`clinics/${clinicId}/public/directory/practitioners`)
-        .get();
-    const list = dirSnap.docs.map((d) => {
-        var _a, _b, _c, _d;
-        const data = (_a = d.data()) !== null && _a !== void 0 ? _a : {};
-        return {
-            practitionerId: String((_b = data.practitionerId) !== null && _b !== void 0 ? _b : d.id),
-            displayName: String((_c = data.displayName) !== null && _c !== void 0 ? _c : "").trim(),
-            active: Boolean((_d = data.active) !== null && _d !== void 0 ? _d : false),
-        };
-    });
-    const payload = {
-        // UI might expect this exact nesting
-        publicBooking: { practitioners: list },
-        // Some code might expect a top-level list
-        practitioners: list,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        updatedBy: "mirrorPractitionerToPublic.rebuildMirrors",
-    };
-    const refA = db.doc(`clinics/${clinicId}/public/config/publicBooking`);
-    const refB = db.doc(`clinics/${clinicId}/public/publicBooking`);
-    console.log("rebuild mirrors", {
-        clinicId,
-        count: list.length,
-        refA: refA.path,
-        refB: refB.path,
-    });
-    await Promise.all([
-        refA.set(payload, { merge: true }),
-        refB.set(payload, { merge: true }),
-    ]);
-}
+const db = admin.firestore();
+/**
+ * When a practitioner doc is written, rebuild the canonical public booking mirror
+ * at clinics/{clinicId}/public/config/publicBooking/publicBooking so the
+ * practitioner list is always up to date.
+ */
 exports.mirrorPractitionerToPublic = (0, firestore_1.onDocumentWritten)({
     document: "clinics/{clinicId}/practitioners/{practitionerId}",
     region: "europe-west3",
 }, async (event) => {
-    var _a, _b, _c, _d, _e;
+    var _a, _b, _c, _d;
     const { clinicId, practitionerId } = event.params;
-    console.log("mirrorPractitionerToPublic fired", { clinicId, practitionerId });
+    logger_1.logger.info("mirrorPractitionerToPublic fired", { clinicId, practitionerId });
     try {
-        const afterSnap = (_a = event.data) === null || _a === void 0 ? void 0 : _a.after;
-        const publicDirRef = admin
-            .firestore()
-            .doc(`clinics/${clinicId}/public/directory/practitioners/${practitionerId}`);
-        // Delete
-        if (!(afterSnap === null || afterSnap === void 0 ? void 0 : afterSnap.exists)) {
-            console.log("deleted -> removing directory doc", publicDirRef.path);
-            await publicDirRef.delete().catch(() => { });
-            await rebuildPublicPractitionerMirrors(clinicId);
+        const settingsSnap = await db
+            .doc(`clinics/${clinicId}/settings/publicBooking`)
+            .get();
+        if (!settingsSnap.exists) {
+            logger_1.logger.info("mirrorPractitionerToPublic: no settings/publicBooking — skipping mirror rebuild", { clinicId });
             return;
         }
-        const data = (_b = afterSnap.data()) !== null && _b !== void 0 ? _b : {};
-        const dirPayload = {
+        const settings = ((_a = settingsSnap.data()) !== null && _a !== void 0 ? _a : {});
+        const projection = await (0, writePublicBookingMirror_1.writePublicBookingMirror)(clinicId, settings);
+        logger_1.logger.info("mirrorPractitionerToPublic: mirror rebuilt", {
+            clinicId,
             practitionerId,
-            displayName: String((_c = data.displayName) !== null && _c !== void 0 ? _c : "").trim(),
-            active: Boolean((_d = data.active) !== null && _d !== void 0 ? _d : false),
-            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-            updatedBy: "mirrorPractitionerToPublic",
-        };
-        console.log("writing directory doc", { path: publicDirRef.path, dirPayload });
-        await publicDirRef.set(dirPayload, { merge: true });
-        await rebuildPublicPractitionerMirrors(clinicId);
-        console.log("mirrorPractitionerToPublic complete");
+            practitionerCount: (_c = (_b = projection === null || projection === void 0 ? void 0 : projection.practitioners) === null || _b === void 0 ? void 0 : _b.length) !== null && _c !== void 0 ? _c : 0,
+        });
     }
     catch (err) {
-        console.error("mirrorPractitionerToPublic FAILED", (_e = err === null || err === void 0 ? void 0 : err.message) !== null && _e !== void 0 ? _e : err, err);
+        logger_1.logger.error("mirrorPractitionerToPublic FAILED", {
+            clinicId,
+            practitionerId,
+            err: (_d = err === null || err === void 0 ? void 0 : err.message) !== null && _d !== void 0 ? _d : String(err),
+        });
         throw err;
     }
 });
