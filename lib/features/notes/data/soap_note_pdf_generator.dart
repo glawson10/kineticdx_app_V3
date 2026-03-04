@@ -5,8 +5,9 @@
 
 import 'dart:typed_data';
 import 'package:pdf/pdf.dart';
-import 'package:pdf/widgets' as pw;
+import 'package:pdf/widgets.dart' as pw;
 import '../../../models/soap_note.dart';
+import '../../../models/clinical_tests.dart';
 
 class SoapNotePdfGenerator {
   /// Generate a professional PDF from a SOAP note

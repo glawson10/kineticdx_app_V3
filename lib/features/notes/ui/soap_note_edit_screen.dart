@@ -544,7 +544,7 @@ class _SoapNoteEditScreenState extends State<SoapNoteEditScreen> with TickerProv
         onLayout: (format) => SoapNotePdfGenerator.generate(
           note,
           patientName: 'Patient', // TODO: Get actual patient name
-          clinicianName: clinicCtx.session.displayName ?? 'Clinician',
+          clinicianName: 'Clinician',
         ),
       );
     } catch (e) {
