@@ -1,7 +1,7 @@
 import * as admin from "firebase-admin";
 import { onDocumentWritten } from "firebase-functions/v2/firestore";
 import { logger } from "firebase-functions/logger";
-import { buildPublicBookingProjection } from "../clinic/publicProjection";
+import { buildPublicBookingProjection, mergeMemberships } from "../clinic/publicProjection";
 
 if (!admin.apps.length) admin.initializeApp();
 const db = admin.firestore();
@@ -61,9 +61,10 @@ export const onPublicBookingSettingsWrite = onDocumentWritten(
       safeStr(clinicDoc?.branding?.logoUrl) ||
       "";
 
-    const [servicesSnap, practitionersSnap, membershipsSnap] = await Promise.all([
+    const [servicesSnap, practitionersSnap, membersSnap, membershipsSnap] = await Promise.all([
       db.collection(`clinics/${clinicId}/services`).get(),
       db.collection(`clinics/${clinicId}/practitioners`).get(),
+      db.collection(`clinics/${clinicId}/members`).get(),
       db.collection(`clinics/${clinicId}/memberships`).get(),
     ]);
 
@@ -71,6 +72,7 @@ export const onPublicBookingSettingsWrite = onDocumentWritten(
       clinicId,
       services: servicesSnap.size,
       practitioners: practitionersSnap.size,
+      members: membersSnap.size,
       memberships: membershipsSnap.size,
     });
 
@@ -79,10 +81,15 @@ export const onPublicBookingSettingsWrite = onDocumentWritten(
       id: d.id,
       data: (d.data() ?? {}) as AnyMap,
     }));
-    const memberships = membershipsSnap.docs.map((d) => ({
+    const membersRaw = membersSnap.docs.map((d) => ({
       id: d.id,
       data: (d.data() ?? {}) as AnyMap,
     }));
+    const membershipsRaw = membershipsSnap.docs.map((d) => ({
+      id: d.id,
+      data: (d.data() ?? {}) as AnyMap,
+    }));
+    const memberships = mergeMemberships(membersRaw, membershipsRaw);
 
     const projection = buildPublicBookingProjection({
       clinicId,

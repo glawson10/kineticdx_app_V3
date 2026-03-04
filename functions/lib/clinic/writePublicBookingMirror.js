@@ -80,9 +80,10 @@ async function writePublicBookingMirror(clinicId, publicBookingSettingsDoc) {
         safeStr(clinicDoc === null || clinicDoc === void 0 ? void 0 : clinicDoc.logoUrl) ||
         safeStr((_d = clinicDoc === null || clinicDoc === void 0 ? void 0 : clinicDoc.branding) === null || _d === void 0 ? void 0 : _d.logoUrl) ||
         "";
-    const [servicesSnap, practitionersSnap, membershipsSnap] = await Promise.all([
+    const [servicesSnap, practitionersSnap, membersSnap, membershipsSnap] = await Promise.all([
         db.collection(`clinics/${clinicId}/services`).get(),
         db.collection(`clinics/${clinicId}/practitioners`).get(),
+        db.collection(`clinics/${clinicId}/members`).get(),
         db.collection(`clinics/${clinicId}/memberships`).get(),
     ]);
     const services = servicesSnap.docs.map((d) => {
@@ -99,13 +100,21 @@ async function writePublicBookingMirror(clinicId, publicBookingSettingsDoc) {
             data: ((_a = d.data()) !== null && _a !== void 0 ? _a : {}),
         });
     });
-    const memberships = membershipsSnap.docs.map((d) => {
+    const membersRaw = membersSnap.docs.map((d) => {
         var _a;
         return ({
             id: d.id,
             data: ((_a = d.data()) !== null && _a !== void 0 ? _a : {}),
         });
     });
+    const membershipsRaw = membershipsSnap.docs.map((d) => {
+        var _a;
+        return ({
+            id: d.id,
+            data: ((_a = d.data()) !== null && _a !== void 0 ? _a : {}),
+        });
+    });
+    const memberships = (0, publicProjection_1.mergeMemberships)(membersRaw, membershipsRaw);
     const projection = (0, publicProjection_1.buildPublicBookingProjection)({
         clinicId,
         clinicName,

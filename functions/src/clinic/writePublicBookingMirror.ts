@@ -1,5 +1,5 @@
 import * as admin from "firebase-admin";
-import { buildPublicBookingProjection } from "./publicProjection";
+import { buildPublicBookingProjection, mergeMemberships } from "./publicProjection";
 
 if (!admin.apps.length) admin.initializeApp();
 const db = admin.firestore();
@@ -45,7 +45,7 @@ function normalizeWeeklyHours(
 export async function writePublicBookingMirror(
   clinicId: string,
   publicBookingSettingsDoc: any
-) {
+): Promise<AnyMap> {
   const clinicSnap = await db.doc(`clinics/${clinicId}`).get();
   const clinicDoc: AnyMap = (clinicSnap.data() ?? {}) as AnyMap;
 
@@ -61,9 +61,10 @@ export async function writePublicBookingMirror(
     safeStr(clinicDoc?.branding?.logoUrl) ||
     "";
 
-  const [servicesSnap, practitionersSnap, membershipsSnap] = await Promise.all([
+  const [servicesSnap, practitionersSnap, membersSnap, membershipsSnap] = await Promise.all([
     db.collection(`clinics/${clinicId}/services`).get(),
     db.collection(`clinics/${clinicId}/practitioners`).get(),
+    db.collection(`clinics/${clinicId}/members`).get(),
     db.collection(`clinics/${clinicId}/memberships`).get(),
   ]);
 
@@ -77,10 +78,15 @@ export async function writePublicBookingMirror(
     data: (d.data() ?? {}) as AnyMap,
   }));
 
-  const memberships = membershipsSnap.docs.map((d) => ({
+  const membersRaw = membersSnap.docs.map((d) => ({
     id: d.id,
     data: (d.data() ?? {}) as AnyMap,
   }));
+  const membershipsRaw = membershipsSnap.docs.map((d) => ({
+    id: d.id,
+    data: (d.data() ?? {}) as AnyMap,
+  }));
+  const memberships = mergeMemberships(membersRaw, membershipsRaw);
 
   const projection = buildPublicBookingProjection({
     clinicId,
