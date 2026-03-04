@@ -1,6 +1,7 @@
 import { onCall, HttpsError } from "firebase-functions/v2/https";
 import * as admin from "firebase-admin";
 import { logger } from "firebase-functions/logger";
+import { requireClinicPermission } from "../permissions";
 
 if (!admin.apps.length) admin.initializeApp();
 const db = admin.firestore();
@@ -119,8 +120,7 @@ function normalizeWeeklyMeta(raw: any): WeeklyHoursMeta {
  * Writes to:
  * clinics/{clinicId}/public/config/publicBooking/publicBooking
  *
- * Requires: caller is authenticated
- * (and your rules or backend membership check can be added later)
+ * Requires: caller is authenticated AND has settings.write on the clinic.
  */
 export const updateClinicWeeklyHoursFn = onCall(
   { region: "europe-west3", cors: true },
@@ -131,6 +131,8 @@ export const updateClinicWeeklyHoursFn = onCall(
     const data = (request.data ?? {}) as Partial<Input>;
     const clinicId = safeStr(data.clinicId);
     if (!clinicId) throw new HttpsError("invalid-argument", "clinicId is required.");
+
+    await requireClinicPermission(db, clinicId, uid, "settings.write");
 
     if (!data.weeklyHours || typeof data.weeklyHours !== "object") {
       throw new HttpsError("invalid-argument", "weeklyHours is required.");

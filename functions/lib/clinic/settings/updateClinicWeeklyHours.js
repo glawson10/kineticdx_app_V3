@@ -37,6 +37,7 @@ exports.updateClinicWeeklyHoursFn = void 0;
 const https_1 = require("firebase-functions/v2/https");
 const admin = __importStar(require("firebase-admin"));
 const logger_1 = require("firebase-functions/logger");
+const permissions_1 = require("../permissions");
 if (!admin.apps.length)
     admin.initializeApp();
 const db = admin.firestore();
@@ -117,8 +118,7 @@ function normalizeWeeklyMeta(raw) {
  * Writes to:
  * clinics/{clinicId}/public/config/publicBooking/publicBooking
  *
- * Requires: caller is authenticated
- * (and your rules or backend membership check can be added later)
+ * Requires: caller is authenticated AND has settings.write on the clinic.
  */
 exports.updateClinicWeeklyHoursFn = (0, https_1.onCall)({ region: "europe-west3", cors: true }, async (request) => {
     var _a, _b;
@@ -129,6 +129,7 @@ exports.updateClinicWeeklyHoursFn = (0, https_1.onCall)({ region: "europe-west3"
     const clinicId = safeStr(data.clinicId);
     if (!clinicId)
         throw new https_1.HttpsError("invalid-argument", "clinicId is required.");
+    await (0, permissions_1.requireClinicPermission)(db, clinicId, uid, "settings.write");
     if (!data.weeklyHours || typeof data.weeklyHours !== "object") {
         throw new https_1.HttpsError("invalid-argument", "weeklyHours is required.");
     }
