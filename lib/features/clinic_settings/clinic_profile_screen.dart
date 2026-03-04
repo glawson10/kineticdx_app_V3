@@ -741,7 +741,7 @@ class _ClinicProfileEditScreenState extends State<_ClinicProfileEditScreen> {
                   ),
                   const SizedBox(height: 12),
                   DropdownButtonFormField<String>(
-                    initialValue: _languages.contains(_defaultLanguage)
+                    value: _languages.contains(_defaultLanguage)
                         ? _defaultLanguage
                         : 'en',
                     items: _languages
@@ -766,7 +766,7 @@ class _ClinicProfileEditScreenState extends State<_ClinicProfileEditScreen> {
                   ),
                   const SizedBox(height: 12),
                   DropdownButtonFormField<String>(
-                    initialValue: _timezones.contains(_timezone)
+                    value: _timezones.contains(_timezone)
                         ? _timezone
                         : 'Europe/Prague',
                     items: _timezones

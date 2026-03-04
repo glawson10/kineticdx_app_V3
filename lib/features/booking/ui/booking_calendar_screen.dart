@@ -1606,7 +1606,7 @@ class _PractitionerInlineDropdown extends StatelessWidget {
               (value != null && allowedIds.contains(value)) ? value : null;
 
           return DropdownButtonFormField<String?>(
-            initialValue: safeValue,
+            value: safeValue,
             isExpanded: true,
             decoration: InputDecoration(
               labelText: compact ? null : 'Clinician',
@@ -2270,7 +2270,7 @@ class _EditBookingDialogState extends State<_EditBookingDialog> {
           mainAxisSize: MainAxisSize.min,
           children: [
             DropdownButtonFormField<String>(
-              initialValue: _kind,
+              value: _kind,
               items: const [
                 DropdownMenuItem(value: 'new', child: Text('New patient (NP)')),
                 DropdownMenuItem(

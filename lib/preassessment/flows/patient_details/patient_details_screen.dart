@@ -306,7 +306,7 @@ class _PatientDetailsScreenState extends State<PatientDetailsScreen> {
           const Divider(),
           const SizedBox(height: 10),
           DropdownButtonFormField<String>(
-            initialValue: _ageRange,
+            value: _ageRange,
             items: const [
               DropdownMenuItem(value: 'under-18', child: Text('Under 18')),
               DropdownMenuItem(value: '18-25', child: Text('18–25')),
@@ -321,7 +321,7 @@ class _PatientDetailsScreenState extends State<PatientDetailsScreen> {
           ),
           const SizedBox(height: 10),
           DropdownButtonFormField<String>(
-            initialValue: _sex,
+            value: _sex,
             items: const [
               DropdownMenuItem(value: 'female', child: Text('Female')),
               DropdownMenuItem(value: 'male', child: Text('Male')),
@@ -335,7 +335,7 @@ class _PatientDetailsScreenState extends State<PatientDetailsScreen> {
           ),
           const SizedBox(height: 10),
           DropdownButtonFormField<String>(
-            initialValue: _workType,
+            value: _workType,
             items: const [
               DropdownMenuItem(
                   value: 'desk', child: Text('Desk-based / office')),
