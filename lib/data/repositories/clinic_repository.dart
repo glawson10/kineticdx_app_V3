@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 
+typedef ClinicDocSnapshot = DocumentSnapshot<Map<String, dynamic>>;
+
 class ClinicRepository {
   ClinicRepository({
     FirebaseFirestore? firestore,

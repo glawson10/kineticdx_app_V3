@@ -129,14 +129,15 @@ export const onPublicBookingSettingsWrite = onDocumentWritten(
         })
         .map((d) => {
           const dta = d.data() as AnyMap;
+          const durationMinutes =
+            typeof dta?.durationMinutes === "number" ? dta.durationMinutes : 30;
           return {
             id: d.id,
             name: safeStr(dta?.name) || d.id,
-            defaultDurationMinutes:
-              typeof dta?.defaultDurationMinutes === "number"
-                ? dta.defaultDurationMinutes
-                : 30,
-            telehealth: dta?.telehealth === true,
+            defaultDurationMinutes: durationMinutes,
+            description: safeStr(dta?.description) || undefined,
+            defaultPrice: typeof dta?.defaultPrice === "number" ? dta.defaultPrice : undefined,
+            colorHex: safeStr(dta?.colorHex) || undefined,
           };
         });
 

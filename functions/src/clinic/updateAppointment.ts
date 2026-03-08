@@ -24,6 +24,8 @@ type Input = {
   kind?: string; // admin|new|followup
   serviceId?: string | null; // allow null/empty to clear
   practitionerId?: string | null; // allow reassign
+  /** BOOKING_DATA_CONTRACT: optional location for the appointment. */
+  locationId?: string | null;
 };
 
 const ALLOW_KIND_CONVERSION = false;
@@ -404,6 +406,14 @@ export async function updateAppointment(req: CallableRequest<Input>) {
 
     patch.practitionerId = pid || "";
     patch.practitionerName = pid ? pracResult.displayName : "";
+  }
+
+  // ─────────────────────────────
+  // locationId update (BOOKING_DATA_CONTRACT)
+  // ─────────────────────────────
+  if ("locationId" in (req.data ?? {})) {
+    const raw = req.data?.locationId;
+    patch.locationId = (raw ?? "").toString().trim() || null;
   }
 
   // ─────────────────────────────

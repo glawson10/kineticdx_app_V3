@@ -15,6 +15,7 @@ import '../widgets/public_shell.dart';
 import '../widgets/public_contact_actions.dart';
 import '../widgets/inline_month_calendar.dart';
 import '../widgets/therapy_loading_indicator.dart';
+import '../models/day_availability.dart';
 
 /// Selectable slot tile — fixed height, centered label, grid-friendly.
 class SlotTile extends StatefulWidget {
@@ -227,6 +228,12 @@ class _PatientBookingSimpleScreenState
   List<_PractitionerOption> _practitioners = const [];
   String? _selectedPractitionerId; // null = not yet chosen/resolved
 
+  // --- Appointment type (Option A step 2) ---
+  bool _loadingAppointmentTypes = false;
+  String? _appointmentTypesError;
+  List<_AppointmentTypeOption> _appointmentTypes = const [];
+  String? _selectedAppointmentTypeId;
+
   CollectionReference<Map<String, dynamic>> get _bookingRequestsCol =>
       FirebaseFirestore.instance
           .collection('clinics')
@@ -271,7 +278,8 @@ class _PatientBookingSimpleScreenState
       if (!mounted) return;
       setState(() => _authReady = true);
 
-      await _refreshAll();
+      await _loadAppointmentTypesIfNeeded();
+      if (mounted) await _refreshAll();
       if (mounted) _loadMonthAvailability();
     } catch (e) {
       if (!mounted) return;
@@ -285,6 +293,79 @@ class _PatientBookingSimpleScreenState
   Future<void> _refreshAll() async {
     await _loadPractitionersIfNeeded();
     await _loadSlots();
+  }
+
+  /// Loads appointment types from public mirror (getPublicBookingAppointmentTypesFn). Single type → auto-select.
+  Future<void> _loadAppointmentTypesIfNeeded({bool force = false}) async {
+    if (!force && _appointmentTypes.isNotEmpty) return;
+
+    setState(() {
+      _loadingAppointmentTypes = true;
+      _appointmentTypesError = null;
+    });
+
+    try {
+      final cid = widget.clinicId.trim();
+      if (cid.isEmpty) throw StateError('Missing clinicId');
+
+      final fn = FirebaseFunctions.instanceFor(region: 'europe-west3');
+      final result = await fn.httpsCallable('getPublicBookingAppointmentTypesFn').call({'clinicId': cid});
+      final data = result.data as Map<String, dynamic>?;
+      final rawList = data?['appointmentTypes'] as List<dynamic>? ?? [];
+
+      final list = <_AppointmentTypeOption>[];
+      for (final item in rawList) {
+        if (item is Map) {
+          final m = Map<String, dynamic>.from(item);
+          final id = (m['id'] ?? '').toString().trim();
+          final name = (m['name'] ?? '').toString().trim();
+          final duration = m['defaultDurationMinutes'] is num
+              ? (m['defaultDurationMinutes'] as num).toInt()
+              : 30;
+          final desc = (m['description'] as String?)?.trim();
+          double? defaultPrice;
+          if (m['defaultPrice'] != null) {
+            if (m['defaultPrice'] is num) {
+              defaultPrice = (m['defaultPrice'] as num).toDouble();
+            } else {
+              defaultPrice = double.tryParse(m['defaultPrice'].toString());
+            }
+          }
+          if (id.isNotEmpty) {
+            final locRaw = m['allowedLocationIds'];
+            list.add(_AppointmentTypeOption(
+              id: id,
+              name: name.isNotEmpty ? name : id,
+              defaultDurationMinutes: duration,
+              description: desc?.isNotEmpty == true ? desc : null,
+              defaultPrice: defaultPrice,
+              allowedLocationIds: locRaw is List
+                  ? locRaw.map((e) => e.toString().trim()).where((e) => e.isNotEmpty).toList().cast<String>()
+                  : const [],
+            ));
+          }
+        }
+      }
+
+      if (!mounted) return;
+      String? autoSelect;
+      if (list.length == 1) autoSelect = list.single.id;
+      setState(() {
+        _appointmentTypes = list;
+        _loadingAppointmentTypes = false;
+        _appointmentTypesError = null;
+        if (autoSelect != null && (_selectedAppointmentTypeId == null || _selectedAppointmentTypeId!.isEmpty)) {
+          _selectedAppointmentTypeId = autoSelect;
+        }
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _appointmentTypes = [];
+        _loadingAppointmentTypes = false;
+        _appointmentTypesError = 'Could not load appointment types: $e';
+      });
+    }
   }
 
   /// Loads practitioners for dropdown via callable (avoids Firestore client "Unexpected state" on web).
@@ -325,10 +406,28 @@ class _PatientBookingSimpleScreenState
           final id = (m['id'] ?? '').toString().trim();
           final name = (m['displayName'] ?? '').toString().trim();
           if (id.isNotEmpty) {
+            final svcRaw = m['serviceIdsAllowed'];
+            final locRaw = m['allowedLocationIds'];
             options.add(
               _PractitionerOption(
                 id: id,
                 displayName: name.isNotEmpty ? name : _shortId(id),
+                title: (m['title'] ?? '').toString().trim().isNotEmpty
+                    ? m['title'].toString().trim()
+                    : null,
+                photoUrl: (m['photoUrl'] ?? '').toString().trim().isNotEmpty
+                    ? m['photoUrl'].toString().trim()
+                    : null,
+                bio: (m['bio'] ?? '').toString().trim().isNotEmpty
+                    ? m['bio'].toString().trim()
+                    : null,
+                serviceIdsAllowed: svcRaw is List
+                    ? svcRaw.map((e) => e.toString().trim()).where((e) => e.isNotEmpty).toList().cast<String>()
+                    : const [],
+                allowedLocationIds: locRaw is List
+                    ? locRaw.map((e) => e.toString().trim()).where((e) => e.isNotEmpty).toList().cast<String>()
+                    : const [],
+                sortOrder: (m['sortOrder'] is num) ? (m['sortOrder'] as num).toInt() : 0,
               ),
             );
           }
@@ -399,6 +498,16 @@ class _PatientBookingSimpleScreenState
   static String _shortId(String id) {
     if (id.length <= 8) return id;
     return '${id.substring(0, 4)}…${id.substring(id.length - 4)}';
+  }
+
+  Future<void> _onAppointmentTypeChanged(String? id) async {
+    final next = (id ?? '').trim();
+    if (next == (_selectedAppointmentTypeId ?? '').trim()) return;
+
+    setState(() => _selectedAppointmentTypeId = next.isEmpty ? null : next);
+
+    await _refreshAll();
+    if (mounted) _loadMonthAvailability();
   }
 
   Future<void> _onPractitionerChanged(String? id) async {
@@ -502,6 +611,8 @@ class _PatientBookingSimpleScreenState
         'rangeEndMs': endUtc.millisecondsSinceEpoch,
         'tz': 'Europe/Prague',
       };
+      final apptTypeId = (_selectedAppointmentTypeId ?? '').trim();
+      if (apptTypeId.isNotEmpty) payload['appointmentTypeId'] = apptTypeId;
 
       final res = await fn.call(payload).timeout(_confirmTimeout);
       if (token != _requestToken) return;
@@ -580,14 +691,17 @@ class _PatientBookingSimpleScreenState
       final startUtc = DateTime.utc(day.year, day.month, day.day, 0, 0);
       final endUtc = startUtc.add(const Duration(days: 1));
       final fn = FirebaseFunctions.instanceFor(region: 'europe-west3').httpsCallable('listPublicSlotsFn');
-      final res = await fn.call(<String, dynamic>{
+      final prefetchPayload = <String, dynamic>{
         'clinicId': widget.clinicId.trim(),
         'serviceId': 'default',
         'practitionerId': practitionerId,
         'rangeStartMs': startUtc.millisecondsSinceEpoch,
         'rangeEndMs': endUtc.millisecondsSinceEpoch,
         'tz': 'Europe/Prague',
-      }).timeout(const Duration(seconds: 15));
+      };
+      final apptTypeId = (_selectedAppointmentTypeId ?? '').trim();
+      if (apptTypeId.isNotEmpty) prefetchPayload['appointmentTypeId'] = apptTypeId;
+      final res = await fn.call(prefetchPayload).timeout(const Duration(seconds: 15));
       final rawData = res.data;
       if (rawData is! Map) return;
       final data = Map<String, dynamic>.from(rawData);
@@ -766,14 +880,17 @@ class _PatientBookingSimpleScreenState
       final functions = FirebaseFunctions.instanceFor(region: 'europe-west3');
       final fn = functions.httpsCallable('getPublicMonthAvailabilityFn');
 
-      final res = await fn.call(<String, dynamic>{
+      final monthPayload = <String, dynamic>{
         'clinicId': widget.clinicId.trim(),
         'serviceId': 'default',
         'practitionerId': practitionerId,
         'monthStartMs': startUtc.millisecondsSinceEpoch,
         'monthEndMs': endUtc.millisecondsSinceEpoch,
         'tz': 'Europe/Prague',
-      }).timeout(const Duration(seconds: 15));
+      };
+      final apptTypeId = (_selectedAppointmentTypeId ?? '').trim();
+      if (apptTypeId.isNotEmpty) monthPayload['appointmentTypeId'] = apptTypeId;
+      final res = await fn.call(monthPayload).timeout(const Duration(seconds: 15));
 
       if (token != _requestToken) return;
 
@@ -1267,12 +1384,23 @@ class _PatientBookingSimpleScreenState
 
     if (!mounted) return;
     setState(() => _selectedSlot = slot);
+    final selectedId = (_selectedAppointmentTypeId ?? '').trim();
+    _AppointmentTypeOption? selectedOption;
+    if (selectedId.isNotEmpty) {
+      try {
+        selectedOption = _appointmentTypes.firstWhere((o) => o.id == selectedId);
+      } catch (_) {
+        selectedOption = null;
+      }
+    }
     await Navigator.of(context).push<void>(
       MaterialPageRoute(
         builder: (_) => BookingDetailsScreen(
           slot: slot,
           clinicId: widget.clinicId,
           prettyDateTime: _prettyDateTime,
+          appointmentTypeOptions: _appointmentTypes,
+          initialAppointmentType: selectedOption?.toAppointmentType(),
           onSubmit: (appt, patient) =>
               _submitBookingFromDetails(slot, appt, patient),
           onSuccess: (
@@ -1384,6 +1512,11 @@ class _PatientBookingSimpleScreenState
       key: _clinicianKey,
       child: _BookingControls(
         selectedDay: _selectedDay,
+        appointmentTypes: _appointmentTypes,
+        selectedAppointmentTypeId: _selectedAppointmentTypeId,
+        onAppointmentTypeChanged: _onAppointmentTypeChanged,
+        loadingAppointmentTypes: _loadingAppointmentTypes,
+        appointmentTypesError: _appointmentTypesError,
         practitioners: _practitioners,
         selectedPractitionerId: _selectedPractitionerId,
         onPractitionerChanged: _onPractitionerChanged,
@@ -1567,6 +1700,11 @@ class _BookingStepIndicator extends StatelessWidget {
 
 class _BookingControls extends StatelessWidget {
   final DateTime selectedDay;
+  final List<_AppointmentTypeOption> appointmentTypes;
+  final String? selectedAppointmentTypeId;
+  final void Function(String?) onAppointmentTypeChanged;
+  final bool loadingAppointmentTypes;
+  final String? appointmentTypesError;
   final List<_PractitionerOption> practitioners;
   final String? selectedPractitionerId;
   final void Function(String?) onPractitionerChanged;
@@ -1576,6 +1714,11 @@ class _BookingControls extends StatelessWidget {
 
   const _BookingControls({
     required this.selectedDay,
+    required this.appointmentTypes,
+    required this.selectedAppointmentTypeId,
+    required this.onAppointmentTypeChanged,
+    required this.loadingAppointmentTypes,
+    required this.appointmentTypesError,
     required this.practitioners,
     required this.selectedPractitionerId,
     required this.onPractitionerChanged,
@@ -1592,6 +1735,45 @@ class _BookingControls extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        if (appointmentTypes.isNotEmpty) ...[
+          InputDecorator(
+            decoration: InputDecoration(
+              labelText: 'Appointment type',
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(AppRadius.element),
+              ),
+              isDense: true,
+            ),
+            child: DropdownButtonHideUnderline(
+              child: DropdownButton<String>(
+                isExpanded: true,
+                value: (selectedAppointmentTypeId ?? '').trim().isEmpty ? null : selectedAppointmentTypeId,
+                hint: const Text('Select appointment type'),
+                items: appointmentTypes
+                    .map(
+                      (t) => DropdownMenuItem<String>(
+                        value: t.id,
+                        child: Text(t.name),
+                      ),
+                    )
+                    .toList(),
+                onChanged: loadingAppointmentTypes ? null : onAppointmentTypeChanged,
+              ),
+            ),
+          ),
+          if (appointmentTypesError != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Text(
+                appointmentTypesError!,
+                softWrap: true,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Theme.of(context).colorScheme.error,
+                    ),
+              ),
+            ),
+          const SizedBox(height: 12),
+        ],
         InputDecorator(
           decoration: InputDecoration(
             labelText: 'Clinician',
@@ -1611,7 +1793,21 @@ class _BookingControls extends StatelessWidget {
                   .map(
                     (p) => DropdownMenuItem<String>(
                       value: p.id,
-                      child: Text(p.displayName),
+                      child: p.title != null && p.title!.isNotEmpty
+                          ? Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(p.displayName),
+                                Text(
+                                  p.title!,
+                                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                                  ),
+                                ),
+                              ],
+                            )
+                          : Text(p.displayName),
                     ),
                   )
                   .toList(),
@@ -2303,13 +2499,59 @@ class _PublicSlot {
   }
 }
 
+class _AppointmentTypeOption {
+  final String id;
+  final String name;
+  final int defaultDurationMinutes;
+  final String? description;
+  final double? defaultPrice;
+  final List<String> allowedLocationIds;
+
+  const _AppointmentTypeOption({
+    required this.id,
+    required this.name,
+    required this.defaultDurationMinutes,
+    this.description,
+    this.defaultPrice,
+    this.allowedLocationIds = const [],
+  });
+
+  /// Builds _AppointmentType for confirm step and submission (single source from mirror).
+  _AppointmentType toAppointmentType() {
+    final priceText = defaultPrice != null
+        ? (defaultPrice! == defaultPrice!.roundToDouble()
+            ? '${defaultPrice!.round()}'
+            : defaultPrice!.toStringAsFixed(2))
+        : '';
+    return _AppointmentType(
+      minutes: defaultDurationMinutes,
+      kind: BookingKind.newPatient,
+      label: '$name ($defaultDurationMinutes mins)',
+      priceText: priceText,
+      description: description ?? '',
+    );
+  }
+}
+
 class _PractitionerOption {
   final String id;
   final String displayName;
+  final String? title;
+  final String? photoUrl;
+  final String? bio;
+  final List<String> serviceIdsAllowed;
+  final List<String> allowedLocationIds;
+  final int sortOrder;
 
   const _PractitionerOption({
     required this.id,
     required this.displayName,
+    this.title,
+    this.photoUrl,
+    this.bio,
+    this.serviceIdsAllowed = const [],
+    this.allowedLocationIds = const [],
+    this.sortOrder = 0,
   });
 }
 
@@ -2321,6 +2563,8 @@ class BookingDetailsScreen extends StatefulWidget {
   final _PublicSlot slot;
   final String clinicId;
   final String Function(DateTime) prettyDateTime;
+  final List<_AppointmentTypeOption> appointmentTypeOptions;
+  final _AppointmentType? initialAppointmentType;
   final Future<Map<String, dynamic>?> Function(
     _AppointmentType appt,
     _PatientFormResult patient,
@@ -2336,6 +2580,8 @@ class BookingDetailsScreen extends StatefulWidget {
     required this.slot,
     required this.clinicId,
     required this.prettyDateTime,
+    required this.appointmentTypeOptions,
+    this.initialAppointmentType,
     required this.onSubmit,
     required this.onSuccess,
   });
@@ -2345,30 +2591,24 @@ class BookingDetailsScreen extends StatefulWidget {
 }
 
 class _BookingDetailsScreenState extends State<BookingDetailsScreen> {
-  int _step = 0;
+  late int _step;
   _AppointmentType? _apptType;
   _PatientFormResult? _patient;
   bool _submitting = false;
   String? _error;
 
-  static const _typeInitial = _AppointmentType(
-    minutes: 60,
-    kind: BookingKind.newPatient,
-    label: 'Initial consultation (60 mins)',
-    priceText: '1300 Kč',
-    description:
-        'Initial consultation, mobility assessment & manual techniques',
-  );
-  static const _typeFollowUp = _AppointmentType(
-    minutes: 45,
-    kind: BookingKind.followUp,
-    label: 'Follow-up (45 mins)',
-    priceText: '1000 Kč',
-    description:
-        'Follow-up focusing on movement progression & soft-tissue work',
-  );
-
   static const Duration _stepTransitionDuration = Duration(milliseconds: 240);
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.initialAppointmentType != null) {
+      _apptType = widget.initialAppointmentType;
+      _step = 1; // Skip type step; type already selected on main screen.
+    } else {
+      _step = 0;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -2470,6 +2710,13 @@ class _BookingDetailsScreenState extends State<BookingDetailsScreen> {
   }
 
   Widget _buildStepType() {
+    final options = widget.appointmentTypeOptions;
+    if (options.isEmpty) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 24),
+        child: Text('No appointment types available. Please go back and try again.'),
+      );
+    }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
@@ -2479,27 +2726,22 @@ class _BookingDetailsScreenState extends State<BookingDetailsScreen> {
           subtitle: 'Select one option to continue.',
         ),
         const SizedBox(height: AppSpacing.sectionGap),
-        _TypeOptionTile(
-          type: _typeInitial,
-          onTap: () {
-            setState(() {
-              _apptType = _typeInitial;
-              _step = 1;
-              _error = null;
-            });
-          },
-        ),
-        const SizedBox(height: AppSpacing.elementGap),
-        _TypeOptionTile(
-          type: _typeFollowUp,
-          onTap: () {
-            setState(() {
-              _apptType = _typeFollowUp;
-              _step = 1;
-              _error = null;
-            });
-          },
-        ),
+        ...options.map((option) {
+          final type = option.toAppointmentType();
+          return Padding(
+            padding: const EdgeInsets.only(bottom: AppSpacing.elementGap),
+            child: _TypeOptionTile(
+              type: type,
+              onTap: () {
+                setState(() {
+                  _apptType = type;
+                  _step = 1;
+                  _error = null;
+                });
+              },
+            ),
+          );
+        }),
       ],
     );
   }

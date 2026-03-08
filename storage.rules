@@ -64,6 +64,12 @@ service firebase.storage {
       allow write: if hasPerm(clinicId, "patients.write");
     }
 
+    // Staff profile photos: clinic-scoped; members.read can read; self or members.manage can write
+    match /clinics/{clinicId}/staffProfiles/{uid}/{fileName} {
+      allow read: if hasPerm(clinicId, "members.read") || hasPerm(clinicId, "schedule.read");
+      allow write: if hasPerm(clinicId, "members.manage") || (uid == uid() && hasMemberDoc(clinicId));
+    }
+
     // Default deny
     match /{allPaths=**} {
       allow read, write: if false;

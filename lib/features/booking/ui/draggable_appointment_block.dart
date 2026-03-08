@@ -13,6 +13,8 @@ class DraggableAppointmentBlock extends StatefulWidget {
   const DraggableAppointmentBlock({
     super.key,
     required this.appointment,
+    this.serviceIdToColorHex,
+    this.showFinancialIndicators = false,
     required this.weekStart,
     required this.daysCount,
     required this.dayWidth,
@@ -26,6 +28,12 @@ class DraggableAppointmentBlock extends StatefulWidget {
   });
 
   final Appointment appointment;
+
+  /// Optional. BOOKING_DATA_CONTRACT: appointment type color. When set, booked blocks use service color.
+  final Map<String, String>? serviceIdToColorHex;
+
+  /// When true, show a financial/billing indicator icon on the block (CalendarDisplaySettings.showFinancialIndicators).
+  final bool showFinancialIndicators;
   final DateTime weekStart;
   final int daysCount;
   final double dayWidth;
@@ -179,6 +187,18 @@ class _DraggableAppointmentBlockState extends State<DraggableAppointmentBlock> {
               color: _bgColor(context, appt),
               child: Stack(
                 children: [
+                  // Financial indicator (top-left when enabled)
+                  if (widget.showFinancialIndicators && !appt.isAdmin)
+                    Positioned(
+                      top: 6,
+                      left: 6,
+                      child: Icon(
+                        Icons.payments,
+                        size: 14,
+                        color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.7),
+                      ),
+                    ),
+
                   // 🚨 Closure override badge (top-left)
                   if (appt.isClosureOverride)
                     Positioned(
@@ -591,8 +611,31 @@ class _DraggableAppointmentBlockState extends State<DraggableAppointmentBlock> {
         return scheme.errorContainer;
       case 'booked':
       default:
+        // BOOKING_DATA_CONTRACT: use appointment type colorHex when available
+        if (!appt.isAdmin &&
+            appt.serviceId.trim().isNotEmpty &&
+            widget.serviceIdToColorHex != null) {
+          final hex = widget.serviceIdToColorHex![appt.serviceId];
+          if (hex != null && hex.trim().isNotEmpty) {
+            final c = _colorFromHex(hex.trim());
+            if (c != null) return c;
+          }
+        }
         return scheme.primaryContainer;
     }
+  }
+
+  static Color? _colorFromHex(String hex) {
+    if (hex.startsWith('#')) hex = hex.substring(1);
+    if (hex.length == 6) {
+      final n = int.tryParse(hex, radix: 16);
+      if (n != null) return Color(0xFF000000 | n);
+    }
+    if (hex.length == 8) {
+      final n = int.tryParse(hex, radix: 16);
+      if (n != null) return Color(n);
+    }
+    return null;
   }
 
   static String _fmt(DateTime d) =>

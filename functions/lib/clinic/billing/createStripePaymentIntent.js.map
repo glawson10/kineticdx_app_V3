@@ -1,0 +1,1 @@
+{"version":3,"file":"createStripePaymentIntent.js","sourceRoot":"","sources":["../../../src/clinic/billing/createStripePaymentIntent.ts"],"names":[],"mappings":";;AAEA,8DAEC;AAJD,uDAAyD;AAElD,KAAK,UAAU,yBAAyB,CAAC,QAAqD;IACnG,MAAM,IAAI,kBAAU,CAAC,eAAe,EAAE,2CAA2C,CAAC,CAAC;AACrF,CAAC"}

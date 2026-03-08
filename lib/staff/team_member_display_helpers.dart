@@ -71,3 +71,47 @@ String statusDisplayLabel({
   if (s.isNotEmpty) return s == 'active' ? 'Active' : s == 'suspended' ? 'Suspended' : status;
   return active ? 'Active' : 'Suspended';
 }
+
+String memberDisplayName(Map<String, dynamic> data, String uid) {
+  final displayName =
+      (data['displayName'] ?? data['fullName'] ?? data['name'] ?? '')
+          .toString()
+          .trim();
+  if (displayName.isNotEmpty) return displayName;
+  final email = memberEmail(data);
+  if (email.isNotEmpty) return email;
+  return uid;
+}
+
+String memberEmail(Map<String, dynamic> data) {
+  return (data['invitedEmail'] ?? data['email'] ?? '').toString().trim();
+}
+
+List<String> enabledPermissionKeys(Map<String, dynamic> data) {
+  final permsRaw = data['permissions'];
+  if (permsRaw is! Map) return const [];
+  final perms = Map<String, dynamic>.from(permsRaw);
+  return perms.entries
+      .where((entry) => entry.value == true)
+      .map((entry) => entry.key)
+      .toList()
+    ..sort();
+}
+
+bool memberHasPermission(Map<String, dynamic> data, String key) {
+  return enabledPermissionKeys(data).contains(key);
+}
+
+bool memberIsBookable(Map<String, dynamic> data) {
+  return memberHasPermission(data, PermissionKeys.scheduleRead) ||
+      memberHasPermission(data, PermissionKeys.scheduleWrite);
+}
+
+bool memberCanCreateBookings(Map<String, dynamic> data) {
+  return memberHasPermission(data, PermissionKeys.scheduleWrite);
+}
+
+bool memberHasClinicalAccess(Map<String, dynamic> data) {
+  return memberHasPermission(data, PermissionKeys.clinicalRead) ||
+      memberHasPermission(data, PermissionKeys.notesRead);
+}

@@ -105,9 +105,11 @@ service cloud.firestore {
       }
 
       // Members (canonical path). Writes are function-only (invite accept, update, suspend).
+      // schedule.read: so booking calendar can list team members (clinician dropdown); same list for future public booking.
       match /members/{memberUid} {
         allow read:
           if hasPerm(clinicId, "members.read")
+          || hasPerm(clinicId, "schedule.read")
           || (isSignedIn() && uid() == memberUid);
         allow write: if false;
       }
@@ -116,6 +118,7 @@ service cloud.firestore {
       match /memberships/{memberUid} {
         allow read:
           if hasPerm(clinicId, "members.read")
+          || hasPerm(clinicId, "schedule.read")
           || (isSignedIn() && uid() == memberUid);
         allow write: if false;
       }
@@ -146,17 +149,27 @@ service cloud.firestore {
       match /practitioners/{practitionerId} {
         allow read: if isActiveMember(clinicId);
         allow write: if hasPerm(clinicId, "members.manage");
+        match /availability/{availabilityId} {
+          allow read: if hasPerm(clinicId, "members.read") || (isSignedIn() && uid() == practitionerId);
+          allow create, update, delete: if false;
+        }
+        match /overrides/{overrideId} {
+          allow read: if hasPerm(clinicId, "members.read") || (isSignedIn() && uid() == practitionerId);
+          allow create, update, delete: if false;
+        }
       }
 
       // Locations (Commit 06: read-only list; writes via callable in Commit 07)
+      // schedule.read: so booking calendar can list locations when creating appointments
       match /locations/{locationId} {
-        allow read: if hasPerm(clinicId, "settings.read");
+        allow read: if hasPerm(clinicId, "settings.read") || hasPerm(clinicId, "schedule.read");
         allow write: if false;
       }
 
       // Appointment types (Commit 11: read-only list; writes callable-only in Commit 12)
+      // schedule.read: needed so clinician booking calendar can list types when creating appointments
       match /appointmentTypes/{id} {
-        allow read: if hasPerm(clinicId, "settings.read");
+        allow read: if hasPerm(clinicId, "settings.read") || hasPerm(clinicId, "schedule.read");
         allow write: if false;
       }
 

@@ -56,9 +56,10 @@ export async function runPublicBookingMirrorForClinic(clinicId: string): Promise
   const membersCol = db.collection(`clinics/${cid}/members`);
   const locationsCol = db.collection(`clinics/${cid}/locations`);
   const appointmentTypesCol = db.collection(`clinics/${cid}/appointmentTypes`);
+  const staffProfilesCol = db.collection(`clinics/${cid}/staffProfiles`);
 
   const membershipsCol = db.collection(`clinics/${cid}/memberships`);
-  const [clinicSnap, servicesSnap, practitionersSnap, membersSnap, membershipsSnap, locationsSnap, typesSnap] =
+  const [clinicSnap, servicesSnap, practitionersSnap, membersSnap, membershipsSnap, locationsSnap, typesSnap, staffProfilesSnap] =
     await Promise.all([
       clinicRef.get().catch(() => null),
       servicesCol.where("active", "==", true).get().catch(() => null),
@@ -67,6 +68,7 @@ export async function runPublicBookingMirrorForClinic(clinicId: string): Promise
       membershipsCol.get().catch(() => null),
       locationsCol.get().catch(() => null),
       appointmentTypesCol.get().catch(() => null),
+      staffProfilesCol.get().catch(() => null),
     ]);
 
   const clinicDoc: AnyMap = clinicSnap?.exists ? asMap(clinicSnap.data()) : {};
@@ -102,6 +104,9 @@ export async function runPublicBookingMirrorForClinic(clinicId: string): Promise
   const practitioners =
     practitionersSnap?.docs.map((d) => ({ id: d.id, data: asMap(d.data()) })) ?? [];
 
+  const staffProfiles =
+    staffProfilesSnap?.docs.map((d) => ({ id: d.id, data: asMap(d.data()) })) ?? [];
+
   const input = {
     clinicId: cid,
     clinicName,
@@ -111,6 +116,7 @@ export async function runPublicBookingMirrorForClinic(clinicId: string): Promise
     services,
     practitioners,
     memberships,
+    staffProfiles,
   };
 
   const projection = buildPublicBookingProjection(input as any);
@@ -137,11 +143,20 @@ export async function runPublicBookingMirrorForClinic(clinicId: string): Promise
       })
       .map((d) => {
         const dta = d.data() || {};
+        // Backend stores durationMinutes; mirror exposes defaultDurationMinutes for public consumers.
+        const durationMinutes =
+          typeof dta.durationMinutes === "number" ? dta.durationMinutes : 30;
+        const allowedLocs = Array.isArray(dta.allowedLocationIds)
+          ? dta.allowedLocationIds.filter((x: any) => typeof x === "string" && x.trim())
+          : undefined;
         return {
           id: d.id,
           name: safeStr(dta.name) || d.id,
-          defaultDurationMinutes: typeof dta.defaultDurationMinutes === "number" ? dta.defaultDurationMinutes : 30,
-          telehealth: dta?.telehealth === true,
+          defaultDurationMinutes: durationMinutes,
+          description: safeStr(dta.description) || undefined,
+          defaultPrice: typeof dta.defaultPrice === "number" ? dta.defaultPrice : undefined,
+          colorHex: safeStr(dta.colorHex) || undefined,
+          allowedLocationIds: allowedLocs && allowedLocs.length > 0 ? allowedLocs : undefined,
         };
       }) ?? [];
 
@@ -152,7 +167,11 @@ export async function runPublicBookingMirrorForClinic(clinicId: string): Promise
       practitioners: practitionersList.map((p: AnyMap) => ({
         id: p.id,
         displayName: p.displayName ?? p.id,
-        designation: p.designation ?? undefined,
+        title: p.title ?? p.designation ?? undefined,
+        photoUrl: p.photoUrl ?? undefined,
+        bio: p.bio ?? undefined,
+        serviceIdsAllowed: Array.isArray(p.serviceIdsAllowed) ? p.serviceIdsAllowed : undefined,
+        sortOrder: typeof p.sortOrder === "number" ? p.sortOrder : undefined,
         allowedLocationIds: Array.isArray(p.allowedLocationIds) ? p.allowedLocationIds : undefined,
       })),
       appointmentTypes: appointmentTypesList,

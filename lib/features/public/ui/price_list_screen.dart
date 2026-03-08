@@ -32,9 +32,11 @@
 
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-import '../../../app/app_routes.dart'; // ✅ use the correct AppRoutes import
+import '../../../app/app_routes.dart';
+import '../../../data/repositories/public_booking_mirror_repository.dart';
 
 class PriceListItem {
   final String title;
@@ -172,15 +174,6 @@ class PublicContactActions extends StatelessWidget {
     this.debug = false,
   });
 
-  DocumentReference<Map<String, dynamic>> get _publicBookingDoc =>
-      FirebaseFirestore.instance
-          .collection('clinics')
-          .doc(clinicId)
-          .collection('public')
-          .doc('config')
-          .collection('publicBooking')
-          .doc('publicBooking');
-
   static String _s(dynamic v) => (v ?? '').toString().trim();
 
   static Uri? _tryParseUrl(String raw) {
@@ -236,8 +229,11 @@ class PublicContactActions extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final stream = clinicId.isEmpty
+        ? Stream<DocumentSnapshot<Map<String, dynamic>>>.empty()
+        : context.read<PublicBookingMirrorRepository>().streamFullMirrorDoc(clinicId);
     return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-      stream: _publicBookingDoc.snapshots(),
+      stream: stream,
       builder: (context, snap) {
         final data = snap.data?.data() ?? const <String, dynamic>{};
 
@@ -351,20 +347,84 @@ class PriceListScreen extends StatefulWidget {
 }
 
 class _PriceListScreenState extends State<PriceListScreen> {
-  late Future<PriceListConfig> _configFuture;
+  Future<PriceListConfig>? _configFuture;
 
-  @override
-  void initState() {
-    super.initState();
-    _configFuture = _resolveConfig();
-  }
-
-  Future<PriceListConfig> _resolveConfig() async {
+  Future<PriceListConfig> _resolveConfig(BuildContext context) async {
     var config = PriceListConfig.defaults;
+    final clinicId = widget.clinicId?.trim();
 
-    if (widget.clinicId != null && widget.clinicId!.trim().isNotEmpty) {
-      final fromDb = await _loadConfigFromFirestore(widget.clinicId!.trim());
-      config = config.merge(fromDb);
+    if (clinicId != null && clinicId.isNotEmpty) {
+      // Load appointment types from public mirror (single source of truth).
+      List<PriceListItem>? mirrorItems;
+      try {
+        PublicBookingMirrorRepository? repo;
+        try {
+          repo = context.read<PublicBookingMirrorRepository>();
+        } catch (_) {
+          repo = null;
+        }
+        if (repo != null) {
+          final mirrorData = await repo.getFullMirrorData(clinicId);
+        final raw = mirrorData?['appointmentTypes'];
+        if (raw is List && raw.isNotEmpty) {
+          mirrorItems = <PriceListItem>[];
+          for (final item in raw) {
+            if (item is! Map) continue;
+            final m = Map<String, dynamic>.from(item);
+            final name = (m['name'] as String?)?.trim() ?? '';
+            final duration = m['defaultDurationMinutes'] is num
+                ? (m['defaultDurationMinutes'] as num).toInt()
+                : 30;
+            final description = (m['description'] as String?)?.trim() ?? '';
+            double? defaultPrice;
+            if (m['defaultPrice'] != null) {
+              if (m['defaultPrice'] is num) {
+                defaultPrice = (m['defaultPrice'] as num).toDouble();
+              } else {
+                defaultPrice = double.tryParse(m['defaultPrice'].toString());
+              }
+            }
+            final price = defaultPrice != null
+                ? (defaultPrice == defaultPrice.roundToDouble()
+                    ? '${defaultPrice.round()}'
+                    : defaultPrice.toStringAsFixed(2))
+                : '';
+            if (name.isNotEmpty) {
+              mirrorItems.add(PriceListItem(
+                title: '$name ($duration mins)',
+                price: price,
+                description: description,
+              ));
+            }
+          }
+        }
+      }
+      } catch (_) {
+        mirrorItems = null;
+      }
+
+      final fromDb = await _loadConfigFromFirestore(clinicId);
+
+      // Branding doc overrides; if it has no items, use mirror items; else defaults.
+      if (fromDb != null) {
+        config = PriceListConfig(
+          screenTitle: fromDb.screenTitle,
+          items: fromDb.items.isNotEmpty
+              ? fromDb.items
+              : (mirrorItems != null && mirrorItems.isNotEmpty)
+                  ? mirrorItems
+                  : config.items,
+          infoNotes: fromDb.infoNotes,
+          primaryCtaText: fromDb.primaryCtaText,
+        );
+      } else if (mirrorItems != null && mirrorItems.isNotEmpty) {
+        config = PriceListConfig(
+          screenTitle: config.screenTitle,
+          items: mirrorItems,
+          infoNotes: config.infoNotes,
+          primaryCtaText: config.primaryCtaText,
+        );
+      }
     }
 
     config = config.merge(widget.configOverride);
@@ -406,6 +466,7 @@ class _PriceListScreenState extends State<PriceListScreen> {
 
   @override
   Widget build(BuildContext context) {
+    _configFuture ??= _resolveConfig(context);
     final cid = (widget.clinicId ?? '').trim();
 
     return FutureBuilder<PriceListConfig>(

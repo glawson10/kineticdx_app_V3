@@ -319,8 +319,12 @@ export type PublicBookingServiceProjection = {
 export type PublicBookingPractitionerProjection = {
   id: string;
   displayName: string;
+  title?: string;
+  photoUrl?: string;
+  bio?: string;
   serviceIdsAllowed?: string[];
   sortOrder?: number;
+  allowedLocationIds?: string[];
 };
 
 export type PublicBookingContactProjection = {
@@ -396,6 +400,13 @@ function normalizeSortOrder(pract: AnyMap): number | undefined {
   return Number.isFinite(n) ? n : undefined;
 }
 
+function normalizeAllowedLocationIds(pract: AnyMap): string[] | undefined {
+  const raw = pract.allowedLocationIds ?? pract.locationIds;
+  if (!Array.isArray(raw)) return undefined;
+  const cleaned = raw.map((x: any) => safeStr(x)).filter((x: string) => !!x);
+  return cleaned.length ? cleaned : undefined;
+}
+
 function isPractitionerActiveForBooking(pract: AnyMap): boolean {
   const v = boolish(pract.activeForBooking);
   if (v === null) return true;
@@ -413,14 +424,27 @@ function isPractitionerActive(pract: AnyMap): boolean {
  * - If membership exists and is NOT active -> exclude
  * - If membership does not exist -> still include (so public booking works)
  */
+function isPractitionerPublicVisible(pract: AnyMap): boolean {
+  const v = boolish(pract.showInPublicBooking);
+  if (v === null) return false;
+  return v === true;
+}
+
 function buildPublicPractitioners(args: {
   practitioners: Array<{ id: string; data: AnyMap }>;
   memberships: Array<{ id: string; data: AnyMap }>;
+  staffProfiles?: Array<{ id: string; data: AnyMap }>;
 }): PublicBookingPractitionerProjection[] {
   const memberById = new Map<string, AnyMap>();
   for (const m of args.memberships ?? []) {
     if (!m || !safeStr(m.id)) continue;
     memberById.set(safeStr(m.id), isObj(m.data) ? m.data : {});
+  }
+
+  const profileById = new Map<string, AnyMap>();
+  for (const sp of args.staffProfiles ?? []) {
+    if (!sp || !safeStr(sp.id)) continue;
+    profileById.set(safeStr(sp.id), isObj(sp.data) ? sp.data : {});
   }
 
   const out: PublicBookingPractitionerProjection[] = [];
@@ -430,17 +454,29 @@ function buildPublicPractitioners(args: {
     if (!uid) continue;
 
     const pData = isObj(p.data) ? p.data : {};
-    const mem = memberById.get(uid); // may be undefined
+    const mem = memberById.get(uid);
+    const profile = profileById.get(uid);
 
     if (mem && !isActiveMembership(mem)) continue;
 
     if (!isPractitionerActive(pData)) continue;
     if (!isPractitionerActiveForBooking(pData)) continue;
+    if (!isPractitionerPublicVisible(pData)) continue;
 
     const proj: PublicBookingPractitionerProjection = {
       id: uid,
       displayName: normalizePractitionerDisplayName(pData, mem),
     };
+
+    // Public-safe profile fields from staffProfiles
+    const title = safeStr(profile?.title ?? pData.title);
+    if (title) proj.title = title;
+
+    const photoUrl = safeStr(profile?.photoUrl ?? pData.photoUrl);
+    if (photoUrl) proj.photoUrl = photoUrl;
+
+    const bio = safeStr(profile?.bio ?? profile?.about ?? pData.bio);
+    if (bio) proj.bio = bio;
 
     const serviceIdsAllowed = normalizeServiceIdsAllowed(pData);
     if (serviceIdsAllowed && serviceIdsAllowed.length) {
@@ -450,6 +486,11 @@ function buildPublicPractitioners(args: {
     const sortOrder = normalizeSortOrder(pData);
     if (typeof sortOrder === "number" && Number.isFinite(sortOrder)) {
       proj.sortOrder = sortOrder;
+    }
+
+    const allowedLocationIds = normalizeAllowedLocationIds(pData);
+    if (allowedLocationIds && allowedLocationIds.length > 0) {
+      proj.allowedLocationIds = allowedLocationIds;
     }
 
     out.push(proj);
@@ -495,6 +536,7 @@ export function buildPublicBookingProjection(args: {
   services: Array<{ id: string; data: AnyMap }>;
   practitioners: Array<{ id: string; data: AnyMap }>;
   memberships: Array<{ id: string; data: AnyMap }>;
+  staffProfiles?: Array<{ id: string; data: AnyMap }>;
 }): PublicBookingProjection {
   const now = admin.firestore.FieldValue.serverTimestamp();
 
@@ -540,6 +582,7 @@ export function buildPublicBookingProjection(args: {
   const practitioners = buildPublicPractitioners({
     practitioners: args.practitioners ?? [],
     memberships: args.memberships ?? [],
+    staffProfiles: args.staffProfiles,
   });
 
   const clinicDoc = isObj(args.clinicDoc) ? args.clinicDoc : {};

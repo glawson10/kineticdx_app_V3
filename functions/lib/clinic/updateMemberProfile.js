@@ -115,7 +115,8 @@ async function updateMemberProfile(req) {
     // Keep membership doc tidy / predictable
     const displayName = clampLen(displayNameRaw, 120);
     const actorUid = req.auth.uid;
-    // ✅ authorize actor
+    const isSelf = actorUid === memberUid;
+    // ✅ authorize actor: members.manage can update any member; otherwise only own display name
     const actorMembership = await getMembershipWithFallback({ clinicId, uid: actorUid });
     if (!actorMembership)
         throw new https_1.HttpsError("permission-denied", "Not a clinic member.");
@@ -123,7 +124,7 @@ async function updateMemberProfile(req) {
         throw new https_1.HttpsError("permission-denied", "Membership not active.");
     }
     const perms = getPermissionsMap(actorMembership);
-    if (perms["members.manage"] !== true) {
+    if (!isSelf && perms["members.manage"] !== true) {
         throw new https_1.HttpsError("permission-denied", "Insufficient permissions.");
     }
     // ✅ target must exist in at least one place

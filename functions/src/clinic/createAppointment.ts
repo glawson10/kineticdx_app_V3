@@ -10,6 +10,8 @@ type Input = {
   patientId?: string;
   serviceId?: string;
   practitionerId?: string;
+  /** BOOKING_DATA_CONTRACT: optional location for the appointment. */
+  locationId?: string;
 
   // Preferred: epoch millis (unambiguous)
   startMs?: number;
@@ -34,12 +36,13 @@ function requirePerm(perms: unknown, keys: string[], message: string) {
   if (!ok) throw new HttpsError("permission-denied", message);
 }
 
-function parseMillis(label: string, ms?: number): Date | null {
+function parseMillis(label: string, ms?: number | string): Date | null {
   if (ms == null) return null;
-  if (typeof ms !== "number" || !Number.isFinite(ms) || ms <= 0) {
+  const n = typeof ms === "number" ? ms : Number(ms);
+  if (!Number.isFinite(n) || n <= 0) {
     throw new HttpsError("invalid-argument", `Invalid ${label}Ms.`);
   }
-  return new Date(ms);
+  return new Date(n);
 }
 
 function parseIso(label: string, value?: string): Date | null {
@@ -140,25 +143,30 @@ export async function createAppointment(req: CallableRequest<Input>) {
     }
 
     const perms = member.permissions ?? {};
+    const roleId = typeof (member as any).roleId === "string" ? (member as any).roleId.trim() : "";
+    const isOwner = roleId === "owner";
     const allowClosedOverride = data.allowClosedOverride === true;
 
-    if (allowClosedOverride) {
-      requirePerm(
-        perms,
-        ["settings.write"],
-        "No permission to override clinic closures (settings.write required)."
-      );
-    } else {
-      requirePerm(perms, ["schedule.read"], "No schedule access (schedule.read required).");
-      requirePerm(
-        perms,
-        ["schedule.write", "schedule.manage"],
-        "No scheduling permission (schedule.write required)."
-      );
-    }
+    // Owners always pass (full access even if permissions map is incomplete)
+    if (!isOwner) {
+      if (allowClosedOverride) {
+        requirePerm(
+          perms,
+          ["settings.write"],
+          "No permission to override clinic closures (settings.write required)."
+        );
+      } else {
+        requirePerm(perms, ["schedule.read"], "No schedule access (schedule.read required).");
+        requirePerm(
+          perms,
+          ["schedule.write", "schedule.manage"],
+          "No scheduling permission (schedule.write required)."
+        );
+      }
 
-    if (kind !== "admin") {
-      requirePerm(perms, ["patients.read"], "No patient access (patients.read required).");
+      if (kind !== "admin") {
+        requirePerm(perms, ["patients.read"], "No patient access (patients.read required).");
+      }
     }
 
     return await createAppointmentInternal(db, {
@@ -167,6 +175,7 @@ export async function createAppointment(req: CallableRequest<Input>) {
       patientId: data.patientId,
       serviceId: data.serviceId,
       practitionerId: data.practitionerId,
+      locationId: data.locationId,
       startDt,
       endDt,
       resourceIds: data.resourceIds,
@@ -174,8 +183,9 @@ export async function createAppointment(req: CallableRequest<Input>) {
       allowClosedOverride,
     });
   } catch (err: any) {
+    const msg = err?.message ?? String(err);
     logger.error("createAppointment failed", {
-      err: err?.message ?? String(err),
+      err: msg,
       stack: err?.stack,
       code: err?.code,
       details: err?.details,
@@ -183,8 +193,8 @@ export async function createAppointment(req: CallableRequest<Input>) {
 
     if (err instanceof HttpsError) throw err;
 
-    throw new HttpsError("internal", "createAppointment crashed. Check function logs.", {
-      original: err?.message ?? String(err),
+    throw new HttpsError("internal", msg || "createAppointment failed.", {
+      original: msg,
     });
   }
 }

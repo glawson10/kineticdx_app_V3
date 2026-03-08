@@ -278,6 +278,11 @@ function extractPublicPractitioners(mirrorDoc) {
                 sortOrder: typeof x.sortOrder === "number"
                     ? x.sortOrder
                     : undefined,
+                allowedLocationIds: Array.isArray(x.allowedLocationIds)
+                    ? x.allowedLocationIds
+                        .map((v) => safeStr(v))
+                        .filter(Boolean)
+                    : undefined,
             });
             continue;
         }

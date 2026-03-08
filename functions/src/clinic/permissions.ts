@@ -25,6 +25,7 @@ async function loadMemberDoc(
   exists: boolean;
   active: boolean;
   permissions: PermissionMap;
+  roleId: string | null;
 }> {
   // ✅ Primary path used by your Flutter self-check UI
   const ref = db.doc(`clinics/${clinicId}/members/${uid}`);
@@ -32,10 +33,12 @@ async function loadMemberDoc(
 
   if (snap.exists) {
     const d = snap.data() as any;
+    const roleId = typeof d?.roleId === "string" ? d.roleId.trim() : null;
     return {
       exists: true,
       active: d?.active === true,
       permissions: readPerms(d?.permissions),
+      roleId,
     };
   }
 
@@ -44,14 +47,16 @@ async function loadMemberDoc(
   const legacySnap = await legacyRef.get();
   if (legacySnap.exists) {
     const d = legacySnap.data() as any;
+    const roleId = typeof d?.roleId === "string" ? d.roleId.trim() : null;
     return {
       exists: true,
       active: d?.active === true,
       permissions: readPerms(d?.permissions),
+      roleId,
     };
   }
 
-  return { exists: false, active: false, permissions: {} };
+  return { exists: false, active: false, permissions: {}, roleId: null };
 }
 
 /**
@@ -89,6 +94,11 @@ export async function requireClinicPermission(
       "permission-denied",
       "Membership inactive for this clinic."
     );
+  }
+
+  // Owners always pass (full access even if permissions map is incomplete or mis-typed)
+  if (member.roleId === "owner") {
+    return { active: member.active, permissions: member.permissions };
   }
 
   if (member.permissions[k] !== true) {

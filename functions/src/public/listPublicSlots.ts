@@ -1109,6 +1109,8 @@ type MonthAvailabilityInput = {
   serviceId?: string;
   /** Location-first booking. Optional. */
   locationId?: string;
+  /** Appointment type filter. Optional. */
+  appointmentTypeId?: string;
   monthStartMs: number;
   monthEndMs: number;
   tz?: string;
@@ -1358,6 +1360,47 @@ export const getPublicBookingLocationsFn = onCall(
         code: err?.code,
       });
       return { locations: [] };
+    }
+  }
+);
+
+/**
+ * Returns the public booking appointment types list from the full mirror (server-side read).
+ * Use from the public booking UI for the appointment-type selector (location-first flow step 2).
+ */
+export const getPublicBookingAppointmentTypesFn = onCall(
+  { region: "europe-west3", cors: true },
+  async (request) => {
+    try {
+      const clinicId = safeStr((request.data as any)?.clinicId);
+      if (!clinicId) {
+        throw new HttpsError("invalid-argument", "clinicId is required.");
+      }
+      const fullRef = db.doc(FULL_MIRROR_PATH(clinicId));
+      const snap = await fullRef.get();
+      if (!snap.exists || !snap.data()) {
+        return { appointmentTypes: [] };
+      }
+      const d = snap.data() as any;
+      const raw = Array.isArray(d?.appointmentTypes) ? d.appointmentTypes : [];
+      const appointmentTypes = raw.map((item: any) => ({
+        id: safeStr(item?.id) || "",
+        name: safeStr(item?.name) || safeStr(item?.id) || "",
+        defaultDurationMinutes: typeof item?.defaultDurationMinutes === "number" ? item.defaultDurationMinutes : 30,
+        description: safeStr(item?.description) || undefined,
+        defaultPrice: typeof item?.defaultPrice === "number" ? item.defaultPrice : undefined,
+        colorHex: safeStr(item?.colorHex) || undefined,
+      })).filter((x: { id: string }) => x.id.length > 0);
+      return { appointmentTypes };
+    } catch (err: any) {
+      if (err instanceof HttpsError) throw err;
+      const msg = err?.message ?? String(err);
+      logger.error("getPublicBookingAppointmentTypesFn failed", {
+        clinicId: (request.data as any)?.clinicId,
+        error: msg,
+        code: err?.code,
+      });
+      return { appointmentTypes: [] };
     }
   }
 );

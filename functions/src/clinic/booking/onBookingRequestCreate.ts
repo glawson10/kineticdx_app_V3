@@ -67,6 +67,7 @@ type PublicPractitioner = {
   displayName?: string;
   serviceIdsAllowed?: string[];
   sortOrder?: number;
+  allowedLocationIds?: string[];
 };
 
 type AnyMap = Record<string, any>;
@@ -391,6 +392,11 @@ function extractPublicPractitioners(mirrorDoc: any): PublicPractitioner[] {
           typeof (x as any).sortOrder === "number"
             ? (x as any).sortOrder
             : undefined,
+        allowedLocationIds: Array.isArray((x as any).allowedLocationIds)
+          ? (x as any).allowedLocationIds
+              .map((v: any) => safeStr(v))
+              .filter(Boolean)
+          : undefined,
       });
       continue;
     }

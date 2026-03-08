@@ -11,6 +11,9 @@ class Appointment {
   final String serviceId;
   final String practitionerId;
 
+  /// Optional. BOOKING_DATA_CONTRACT: locationId. Backend may not write yet; optional during migration.
+  final String? locationId;
+
   /// Denormalized display fields (written by createAppointmentFn)
   final String patientName;
   final String serviceName;
@@ -30,6 +33,9 @@ class Appointment {
   final String? closureOverrideByUid;
   final DateTime? closureOverrideAt;
 
+  final String? seriesId;
+  bool get isSeriesOccurrence => seriesId != null && seriesId!.isNotEmpty;
+
   Appointment({
     required this.id,
     required this.clinicId,
@@ -37,6 +43,7 @@ class Appointment {
     required this.patientId,
     required this.serviceId,
     required this.practitionerId,
+    this.locationId,
     required this.patientName,
     required this.serviceName,
     required this.practitionerName,
@@ -46,6 +53,7 @@ class Appointment {
     required this.closureOverride,
     this.closureOverrideByUid,
     this.closureOverrideAt,
+    this.seriesId,
   });
 
   static DateTime _fallbackEpoch() => DateTime.fromMillisecondsSinceEpoch(0);
@@ -94,6 +102,9 @@ class Appointment {
       patientId: (data['patientId'] ?? '').toString(),
       serviceId: (data['serviceId'] ?? '').toString(),
       practitionerId: (data['practitionerId'] ?? '').toString(),
+      locationId: (data['locationId'] as String?)?.trim().isNotEmpty == true
+          ? (data['locationId'] as String).trim()
+          : null,
 
       patientName: (data['patientName'] ?? '').toString(),
       serviceName: (data['serviceName'] ?? '').toString(),
@@ -109,6 +120,9 @@ class Appointment {
       closureOverrideByUid: data['closureOverrideByUid']?.toString(),
       closureOverrideAt: data['closureOverrideAt'] != null
           ? _toLocalDate(data['closureOverrideAt'])
+          : null,
+      seriesId: (data['seriesId'] as String?)?.trim().isNotEmpty == true
+          ? (data['seriesId'] as String).trim()
           : null,
     );
   }

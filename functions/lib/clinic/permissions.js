@@ -20,10 +20,12 @@ async function loadMemberDoc(db, clinicId, uid) {
     const snap = await ref.get();
     if (snap.exists) {
         const d = snap.data();
+        const roleId = typeof (d === null || d === void 0 ? void 0 : d.roleId) === "string" ? d.roleId.trim() : null;
         return {
             exists: true,
             active: (d === null || d === void 0 ? void 0 : d.active) === true,
             permissions: readPerms(d === null || d === void 0 ? void 0 : d.permissions),
+            roleId,
         };
     }
     // Optional fallback (only if you had an older schema)
@@ -31,13 +33,15 @@ async function loadMemberDoc(db, clinicId, uid) {
     const legacySnap = await legacyRef.get();
     if (legacySnap.exists) {
         const d = legacySnap.data();
+        const roleId = typeof (d === null || d === void 0 ? void 0 : d.roleId) === "string" ? d.roleId.trim() : null;
         return {
             exists: true,
             active: (d === null || d === void 0 ? void 0 : d.active) === true,
             permissions: readPerms(d === null || d === void 0 ? void 0 : d.permissions),
+            roleId,
         };
     }
-    return { exists: false, active: false, permissions: {} };
+    return { exists: false, active: false, permissions: {}, roleId: null };
 }
 /**
  * Enforce clinic permission based on member doc:
@@ -56,6 +60,10 @@ async function requireClinicPermission(db, clinicId, uid, permKey) {
     }
     if (!member.active) {
         throw new https_1.HttpsError("permission-denied", "Membership inactive for this clinic.");
+    }
+    // Owners always pass (full access even if permissions map is incomplete or mis-typed)
+    if (member.roleId === "owner") {
+        return { active: member.active, permissions: member.permissions };
     }
     if (member.permissions[k] !== true) {
         throw new https_1.HttpsError("permission-denied", `Missing permission: ${k}`);

@@ -5,6 +5,7 @@ import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../../app/callable_error_mapping.dart';
 import '../../../app/clinic_context.dart';
 import './patient_details_screen.dart';
 
@@ -48,26 +49,21 @@ class _PatientFinderScreenState extends State<PatientFinderScreen> {
     });
 
     try {
-      final patientsCol = FirebaseFirestore.instance
-          .collection('clinics')
-          .doc(clinicId)
-          .collection('patients');
-
-      final snapshot = await patientsCol
-          .get()
+      final result = await _functions
+          .httpsCallable('listPatientsForBookingFn')
+          .call<Map<String, dynamic>>({'clinicId': clinicId})
           .timeout(const Duration(seconds: 15), onTimeout: () {
         throw TimeoutException('Patient list took too long to load.');
       });
 
       if (!mounted) return;
-      final patients = <_PatientLite>[];
-      for (final d in snapshot.docs) {
-        try {
-          patients.add(_PatientLite.fromDoc(d));
-        } catch (_) {}
-      }
+      final data = result.data ?? const <String, dynamic>{};
+      final rawList = data['patients'] as List<dynamic>? ?? [];
+      final patients = rawList
+          .whereType<Map<String, dynamic>>()
+          .map(_PatientLite.fromListRow)
+          .toList();
       if (!mounted) return;
-      // Only apply if we're still loading for this clinic (user may have switched)
       setState(() {
         if (_loadedClinicId != clinicId) return;
         _loading = false;
@@ -202,19 +198,29 @@ class _PatientFinderScreenState extends State<PatientFinderScreen> {
     if (_error != null && _patients == null) {
       final e = _error!;
       final errStr = e.toString();
-      final isPermissionDenied = e is FirebaseException &&
-          (e.code == 'permission-denied' ||
-              (e.message ?? '').toLowerCase().contains('permission'));
+      final isPermissionDenied =
+          (e is FirebaseException &&
+              (e.code == 'permission-denied' ||
+                  (e.message ?? '').toLowerCase().contains('permission'))) ||
+          (e is FirebaseFunctionsException &&
+              (e.code == 'permission-denied' ||
+                  (e.message ?? '').toLowerCase().contains('permission')));
+      // listPatientsForBookingFn can surface permission-denied as "internal" on some clients
+      final isLikelyPermissionDenied = e is FirebaseFunctionsException &&
+          e.code == 'internal' &&
+          (e.message == null || e.message!.trim().isEmpty || e.message!.toLowerCase().contains('internal'));
       final isTimeout = e is TimeoutException;
       final isFirestoreInternal = errStr.contains('INTERNAL ASSERTION FAILED') ||
           errStr.contains('Unexpected state');
 
       final String message;
       final String? subMessage;
-      if (isPermissionDenied) {
+      if (isPermissionDenied || isLikelyPermissionDenied) {
         message = 'You don\'t have permission to view patients. '
             'Ask an admin to grant you "Patients read" (patients.read) for this clinic.';
-        subMessage = null;
+        subMessage = isLikelyPermissionDenied
+            ? 'The server returned an error that usually means missing patients.read. Check your role in Clinic Settings → Team.'
+            : null;
       } else if (isTimeout) {
         message = 'Patient list took too long to load. Check your connection and try again.';
         subMessage = null;
@@ -222,8 +228,12 @@ class _PatientFinderScreenState extends State<PatientFinderScreen> {
         message = 'Firestore ran into an error (often after another action failed).';
         subMessage = 'Refresh the page (F5 or reload) and try again. Retry below may work.';
       } else {
-        message = 'Failed to load patients.';
-        subMessage = errStr.length > 200 ? '${errStr.substring(0, 200)}…' : errStr;
+        message = messageForCallableError(e, fallback: 'Failed to load patients. Please try again.');
+        final hideTechnical = e is FirebaseFunctionsException &&
+            (e.code == 'internal' || e.code == 'unknown');
+        subMessage = hideTechnical
+            ? null
+            : (errStr.length > 200 ? '${errStr.substring(0, 200)}…' : errStr);
       }
 
       return Center(
@@ -233,7 +243,7 @@ class _PatientFinderScreenState extends State<PatientFinderScreen> {
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               Icon(
-                isPermissionDenied
+                (isPermissionDenied || isLikelyPermissionDenied)
                     ? Icons.lock_outline
                     : Icons.error_outline,
                 size: 48,
@@ -692,6 +702,23 @@ class _PatientLite {
       isArchived: isArchived,
       isMerged: isMerged,
       isDeleted: isDeleted,
+    );
+  }
+
+  /// From listPatientsForBookingFn response row (server-side list).
+  factory _PatientLite.fromListRow(Map<String, dynamic> row) {
+    final dobValue = row['dateOfBirth'];
+    final dob = dobValue is String ? DateTime.tryParse(dobValue) : null;
+    return _PatientLite(
+      id: (row['id'] ?? '').toString(),
+      firstName: (row['firstName'] ?? '').toString(),
+      lastName: (row['lastName'] ?? '').toString(),
+      dob: dob != null ? DateTime(dob.year, dob.month, dob.day) : null,
+      email: (row['email'] ?? '').toString(),
+      phone: (row['phone'] ?? '').toString(),
+      isArchived: row['isArchived'] == true,
+      isMerged: row['isMerged'] == true,
+      isDeleted: row['isDeleted'] == true,
     );
   }
 }

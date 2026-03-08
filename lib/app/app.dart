@@ -26,11 +26,16 @@ import '../data/repositories/calendar_display_settings_repository.dart';
 import '../data/repositories/memberships_repository.dart';
 import '../data/repositories/services_repository.dart';
 import '../data/repositories/clinic_repository.dart';
+import '../data/repositories/clinic_policies_settings_repository.dart';
+import '../data/repositories/communication_settings_repository.dart';
+import '../data/repositories/location_display_repository.dart';
 import '../data/repositories/locations_repository.dart';
 
 // Staff repos
 import '../data/repositories/staff_repository.dart';
 import '../data/repositories/staff_profile_repository.dart';
+import '../data/repositories/practitioner_availability_repository.dart';
+import '../data/repositories/practitioner_overrides_repository.dart';
 import '../data/repositories/waitlist_repository.dart';
 
 // Public UI
@@ -102,8 +107,10 @@ class MyApp extends StatelessWidget {
     );
     if (qpToken != null) return qpToken;
 
-    final segments =
-        uri.pathSegments.map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
+    final segments = uri.pathSegments
+        .map((s) => s.trim())
+        .where((s) => s.isNotEmpty)
+        .toList();
     if (segments.length < 3) return null;
 
     // Keep it strict: match the LAST 3 non-empty segments exactly.
@@ -336,7 +343,8 @@ class MyApp extends StatelessWidget {
   /// Returns clinicId if path is /c/{clinicId}[ anything], else null.
   String? _clinicIdFromPortalPath(String normalizedPath) {
     if (!normalizedPath.startsWith('/c/')) return null;
-    final segments = normalizedPath.split('/').where((s) => s.isNotEmpty).toList();
+    final segments =
+        normalizedPath.split('/').where((s) => s.isNotEmpty).toList();
     if (segments.length >= 2 && segments[0] == 'c') {
       final id = segments[1].trim();
       return id.isEmpty ? null : id;
@@ -349,9 +357,13 @@ class MyApp extends StatelessWidget {
   /// Returns null when path is just /c/{clinicId} (no settings deep link).
   String? _settingsSectionFromPortalPath(String normalizedPath) {
     if (!normalizedPath.startsWith('/c/')) return null;
-    final segments = normalizedPath.split('/').where((s) => s.isNotEmpty).toList();
-    if (segments.length >= 3 && segments[0] == 'c' && segments[2] == 'settings') {
-      if (segments.length == 3) return ''; // open settings home, default section
+    final segments =
+        normalizedPath.split('/').where((s) => s.isNotEmpty).toList();
+    if (segments.length >= 3 &&
+        segments[0] == 'c' &&
+        segments[2] == 'settings') {
+      if (segments.length == 3)
+        return ''; // open settings home, default section
       if (segments.length >= 4) return segments[3];
     }
     return null;
@@ -387,136 +399,146 @@ class MyApp extends StatelessWidget {
     }
 
     switch (normalizedPath) {
-      case '/': {
-        final clinicId = _resolveClinicIdFromBrowserQuery();
-        _resolveCorpFromBrowserQuery(); // used for side effect / future use
+      case '/':
+        {
+          final clinicId = _resolveClinicIdFromBrowserQuery();
+          _resolveCorpFromBrowserQuery(); // used for side effect / future use
 
-        if (clinicId != null && clinicId.isNotEmpty) {
+          if (clinicId != null && clinicId.isNotEmpty) {
+            return MaterialPageRoute(
+              settings: settings,
+              builder: (_) => const PublicHomeScreen(),
+            );
+          }
+
+          return MaterialPageRoute(
+            settings: settings,
+            builder: (_) => const ClinicEntryScreen(),
+          );
+        }
+
+      case AcceptInviteScreen.routeName:
+        {
+          return MaterialPageRoute(
+            settings: settings,
+            builder: (_) => const AcceptInviteScreen(),
+          );
+        }
+
+      case AppRoutes.publicIntro:
+        {
           return MaterialPageRoute(
             settings: settings,
             builder: (_) => const PublicHomeScreen(),
           );
         }
 
-        return MaterialPageRoute(
-          settings: settings,
-          builder: (_) => const ClinicEntryScreen(),
-        );
-      }
-
-      case AcceptInviteScreen.routeName: {
-        return MaterialPageRoute(
-          settings: settings,
-          builder: (_) => const AcceptInviteScreen(),
-        );
-      }
-
-      case AppRoutes.publicIntro: {
-        return MaterialPageRoute(
-          settings: settings,
-          builder: (_) => const PublicHomeScreen(),
-        );
-      }
-
-      case AppRoutes.publicHome: {
-        return MaterialPageRoute(
-          settings: settings,
-          builder: (_) => const PublicHomeScreen(),
-        );
-      }
-
-      case AppRoutes.priceList: {
-        final clinicId = _clinicIdFor(settings, routeUri);
-        final corp = _corpFor(settings, routeUri);
-
-        return MaterialPageRoute(
-          settings: settings,
-          builder: (_) => PriceListScreen(
-            clinicId: clinicId,
-            corporateCode: corp,
-          ),
-        );
-      }
-
-      case AppRoutes.preassessmentConsent: {
-        final clinicId = _clinicIdFor(settings, routeUri);
-        return MaterialPageRoute(
-          settings: settings,
-          builder: (_) => PreassessmentConsentEntryScreen(
-            fallbackClinicId: clinicId,
-          ),
-        );
-      }
-
-      case AppRoutes.intakeStart: {
-        // IntakeStartScreen reads query params itself (?c & ?t)
-        return MaterialPageRoute(
-          settings: settings,
-          builder: (_) => const intake.IntakeStartScreen(),
-        );
-      }
-
-      case '/intake': {
-        return _intakeMissingRoute(normalizedPath);
-      }
-
-      case AppRoutes.clinicianLogin:
-      case AppRoutes.clinicianHome: {
-        return MaterialPageRoute(
-          settings: settings,
-          builder: (_) => const AuthGate(),
-        );
-      }
-
-      default: {
-        final generalToken = _generalTokenFromUri(routeUri);
-        if (generalToken != null) {
+      case AppRoutes.publicHome:
+        {
           return MaterialPageRoute(
             settings: settings,
-            builder: (_) => GeneralQuestionnaireTokenScreen(
-              token: generalToken,
-            ),
+            builder: (_) => const PublicHomeScreen(),
           );
         }
 
-        // Booking screen (canonical + legacy aliases)
-        if (_isBookingAliasPath(normalizedPath)) {
+      case AppRoutes.priceList:
+        {
+          final clinicId = _clinicIdFor(settings, routeUri);
           final corp = _corpFor(settings, routeUri);
 
-          var clinicId = _clinicIdFor(settings, routeUri);
-          clinicId ??= _resolveClinicIdForLegacyBooking(routeUri, corp);
-
-          if (clinicId == null || clinicId.trim().isEmpty) {
-            return _missingClinicRoute(normalizedPath);
-          }
-
-          final a = _args(settings);
-          final clinicianId = _asTrimmedString(a['clinicianId']);
-
           return MaterialPageRoute(
             settings: settings,
-            builder: (_) => PatientBookingSimpleScreen(
-              clinicId: clinicId!.trim(),
-              clinicianId: clinicianId,
-              initialCorporateCodeFromUrl: corp,
+            builder: (_) => PriceListScreen(
+              clinicId: clinicId,
+              corporateCode: corp,
             ),
           );
         }
 
-        if (shouldLog) {
-          _log('❌ Unknown route (normalized): $normalizedPath');
-          _log('   full settings.name: ${settings.name}');
+      case AppRoutes.preassessmentConsent:
+        {
+          final clinicId = _clinicIdFor(settings, routeUri);
+          return MaterialPageRoute(
+            settings: settings,
+            builder: (_) => PreassessmentConsentEntryScreen(
+              fallbackClinicId: clinicId,
+            ),
+          );
         }
 
-        return MaterialPageRoute(
-          settings: settings,
-          builder: (_) => Scaffold(
-            body: Center(
-              child: Text('Unknown route: ${settings.name ?? "(null)"}'),
+      case AppRoutes.intakeStart:
+        {
+          // IntakeStartScreen reads query params itself (?c & ?t)
+          return MaterialPageRoute(
+            settings: settings,
+            builder: (_) => const intake.IntakeStartScreen(),
+          );
+        }
+
+      case '/intake':
+        {
+          return _intakeMissingRoute(normalizedPath);
+        }
+
+      case AppRoutes.clinicianLogin:
+      case AppRoutes.clinicianHome:
+        {
+          return MaterialPageRoute(
+            settings: settings,
+            builder: (_) => const AuthGate(),
+          );
+        }
+
+      default:
+        {
+          final generalToken = _generalTokenFromUri(routeUri);
+          if (generalToken != null) {
+            return MaterialPageRoute(
+              settings: settings,
+              builder: (_) => GeneralQuestionnaireTokenScreen(
+                token: generalToken,
+              ),
+            );
+          }
+
+          // Booking screen (canonical + legacy aliases)
+          if (_isBookingAliasPath(normalizedPath)) {
+            final corp = _corpFor(settings, routeUri);
+
+            var clinicId = _clinicIdFor(settings, routeUri);
+            clinicId ??= _resolveClinicIdForLegacyBooking(routeUri, corp);
+
+            if (clinicId == null || clinicId.trim().isEmpty) {
+              return _missingClinicRoute(normalizedPath);
+            }
+
+            final a = _args(settings);
+            final clinicianId = _asTrimmedString(a['clinicianId']);
+
+            return MaterialPageRoute(
+              settings: settings,
+              builder: (_) => PatientBookingSimpleScreen(
+                clinicId: clinicId!.trim(),
+                clinicianId: clinicianId,
+                initialCorporateCodeFromUrl: corp,
+              ),
+            );
+          }
+
+          if (shouldLog) {
+            _log('❌ Unknown route (normalized): $normalizedPath');
+            _log('   full settings.name: ${settings.name}');
+          }
+
+          return MaterialPageRoute(
+            settings: settings,
+            builder: (_) => Scaffold(
+              body: Center(
+                child: Text('Unknown route: ${settings.name ?? "(null)"}'),
+              ),
             ),
-          ),
-        );
-      }
+          );
+        }
     }
   }
 
@@ -542,16 +564,35 @@ class MyApp extends StatelessWidget {
     return MultiProvider(
       providers: [
         Provider<MembershipsRepository>(create: (_) => MembershipsRepository()),
-        Provider<AppointmentTypesRepository>(create: (_) => AppointmentTypesRepository(FirebaseFirestore.instance)),
-        Provider<AppointmentsRepository>(create: (_) => AppointmentsRepository()),
-        Provider<PublicBookingSettingsRepository>(create: (_) => PublicBookingSettingsRepository(FirebaseFirestore.instance)),
-        Provider<PublicBookingMirrorRepository>(create: (_) => PublicBookingMirrorRepository(FirebaseFirestore.instance)),
-        Provider<CalendarDisplaySettingsRepository>(create: (_) => CalendarDisplaySettingsRepository()),
+        Provider<AppointmentTypesRepository>(
+            create: (_) =>
+                AppointmentTypesRepository(FirebaseFirestore.instance)),
+        Provider<AppointmentsRepository>(
+            create: (_) => AppointmentsRepository()),
+        Provider<PublicBookingSettingsRepository>(
+            create: (_) =>
+                PublicBookingSettingsRepository(FirebaseFirestore.instance)),
+        Provider<PublicBookingMirrorRepository>(
+            create: (_) =>
+                PublicBookingMirrorRepository(FirebaseFirestore.instance)),
+        Provider<CalendarDisplaySettingsRepository>(
+            create: (_) => CalendarDisplaySettingsRepository()),
         Provider<ServicesRepository>(create: (_) => ServicesRepository()),
         Provider<ClinicRepository>(create: (_) => ClinicRepository()),
+        Provider<ClinicPoliciesSettingsRepository>(
+            create: (_) => ClinicPoliciesSettingsRepository(FirebaseFirestore.instance)),
+        Provider<CommunicationSettingsRepository>(
+            create: (_) => CommunicationSettingsRepository()),
+        Provider<LocationDisplayRepository>(
+            create: (_) => LocationDisplayRepository(FirebaseFirestore.instance)),
         Provider<LocationsRepository>(create: (_) => LocationsRepository()),
         Provider<StaffRepository>(create: (_) => StaffRepository()),
-        Provider<StaffProfileRepository>(create: (_) => StaffProfileRepository()),
+        Provider<StaffProfileRepository>(
+            create: (_) => StaffProfileRepository()),
+        Provider<PractitionerAvailabilityRepository>(
+            create: (_) => PractitionerAvailabilityRepository()),
+        Provider<PractitionerOverridesRepository>(
+            create: (_) => PractitionerOverridesRepository()),
         Provider<WaitlistRepository>(create: (_) => WaitlistRepository()),
         ChangeNotifierProvider<ClinicContext>(create: (_) => ClinicContext()),
       ],

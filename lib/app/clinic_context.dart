@@ -113,6 +113,29 @@ class ClinicContext extends ChangeNotifier {
     notifyListeners();
   }
 
+  void setSessionSilent({
+    required String clinicId,
+    required Membership membership,
+    required String uid,
+  }) {
+    final c = clinicId.trim();
+    if (c.isEmpty) throw ArgumentError('clinicId cannot be empty');
+    final u = uid.trim();
+    if (u.isEmpty) throw ArgumentError('uid cannot be empty');
+    final perms = ClinicPermissions(membership.permissions);
+    _clinicId = c;
+    _uid = u;
+    _session = ClinicSession(
+      clinicId: c,
+      membership: membership,
+      permissions: perms,
+    );
+  }
+
+  void notifySessionListeners() {
+    notifyListeners();
+  }
+
   void clear() {
     if (_clinicId == null && _session == null && _uid == null) return;
     _clinicId = null;

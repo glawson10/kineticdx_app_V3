@@ -285,9 +285,8 @@ class _WideScaffoldState extends State<_WideScaffold>
                             Positioned(
                               left: w,
                               top: top,
-                              child: StickyTabButton(
+                              child: AngledStickyTabButton(
                                 icon: Icons.menu,
-                                arrowPointsLeft: isOpen,
                                 onTap: () {
                                   if (_shellAnimController.value > 0.5) {
                                     _shellAnimController.reverse();
@@ -474,12 +473,7 @@ class _SidebarFooter extends StatelessWidget {
             'assets/kineticdx_logo2.png',
             height: _logoHeight,
             fit: BoxFit.contain,
-            errorBuilder: (_, __, ___) => Image.asset(
-              'assets/kineticdx_logo.png',
-              height: _logoHeight,
-              fit: BoxFit.contain,
-              errorBuilder: (_, __, ___) => Icon(Icons.calendar_today, size: 20, color: Theme.of(context).colorScheme.onSurfaceVariant),
-            ),
+            errorBuilder: (_, __, ___) => Icon(Icons.calendar_today, size: 20, color: Theme.of(context).colorScheme.onSurfaceVariant),
           ),
         ],
       ),
@@ -879,25 +873,45 @@ class _NarrowScaffold extends StatelessWidget {
     final selectedIndex = _selectedIndex(tabs, selected);
 
     return Scaffold(
+      backgroundColor: AppSurfaces.pageBg,
       appBar: AppBar(
+        backgroundColor: AppSurfaces.shellBg,
+        surfaceTintColor: Colors.transparent,
+        elevation: 0,
+        scrolledUnderElevation: 0,
         title: Text(title ?? _labelFor(selected)),
         actions: _appBarActions(context),
+        flexibleSpace: Align(
+          alignment: Alignment.bottomCenter,
+          child: Container(
+            height: 1,
+            color: AppSurfaces.divider,
+          ),
+        ),
       ),
       body: child,
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: selectedIndex,
-        onDestinationSelected: (i) {
-          final next = tabs[i];
-          if (next != selected) _navigateTo(context, next, onTabChanged);
-        },
-        destinations: tabs
-            .map(
-              (t) => NavigationDestination(
-                icon: Icon(_iconFor(t)),
-                label: _labelFor(t),
-              ),
-            )
-            .toList(),
+      bottomNavigationBar: Container(
+        decoration: BoxDecoration(
+          color: AppSurfaces.shellBg,
+          border: Border(top: BorderSide(color: AppSurfaces.divider)),
+        ),
+        child: NavigationBar(
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          selectedIndex: selectedIndex,
+          onDestinationSelected: (i) {
+            final next = tabs[i];
+            if (next != selected) _navigateTo(context, next, onTabChanged);
+          },
+          destinations: tabs
+              .map(
+                (t) => NavigationDestination(
+                  icon: Icon(_iconFor(t)),
+                  label: _labelFor(t),
+                ),
+              )
+              .toList(),
+        ),
       ),
     );
   }
@@ -914,7 +928,8 @@ List<ClinicianTab> _visibleTabs(BuildContext context) {
   // Note: with the session gate in ClinicianShell, perms should not be null here
   // during normal operation. But leaving the checks defensive is fine.
   if (perms == null || has('schedule.read')) tabs.add(ClinicianTab.calendar);
-  if (perms == null || has('patients.read')) tabs.add(ClinicianTab.patients);
+  // Only show Patients tab when we have session and user has patients.read (avoids permission-denied on load).
+  if (perms != null && has('patients.read')) tabs.add(ClinicianTab.patients);
   if (perms == null || has('clinical.read') || has('notes.read')) {
     tabs.add(ClinicianTab.preassess);
   }

@@ -52,7 +52,7 @@ function isOwner(data) {
     return role === "owner";
 }
 async function updateMember(req) {
-    var _a, _b, _c;
+    var _a, _b, _c, _d, _e;
     if (!req.auth)
         throw new https_1.HttpsError("unauthenticated", "Sign in required.");
     const clinicId = safeStr((_a = req.data) === null || _a === void 0 ? void 0 : _a.clinicId);
@@ -110,17 +110,30 @@ async function updateMember(req) {
     const batch = db.batch();
     batch.set(canonRef, updates, { merge: true });
     batch.set(legacyRef, updates, { merge: true });
-    await batch.commit();
+    try {
+        await batch.commit();
+    }
+    catch (err) {
+        const msg = (_d = err === null || err === void 0 ? void 0 : err.message) !== null && _d !== void 0 ? _d : String(err);
+        throw new https_1.HttpsError("internal", `Failed to update member: ${msg}`);
+    }
     const auditRef = db.collection(`clinics/${clinicId}/audit`).doc();
-    await auditRef.set({
-        type: "membership.updated",
-        clinicId,
-        actor: { uid: actorUid },
-        subject: { uid: memberUid },
-        patch: { role: patch.role, permissionsKeys: patch.permissions ? Object.keys(patch.permissions) : [] },
-        at: now,
-        schemaVersion: 1,
-    });
+    try {
+        await auditRef.set({
+            type: "membership.updated",
+            clinicId,
+            actor: { uid: actorUid },
+            subject: { uid: memberUid },
+            patch: { role: patch.role, permissionsKeys: patch.permissions ? Object.keys(patch.permissions) : [] },
+            at: now,
+            schemaVersion: 1,
+        });
+    }
+    catch (err) {
+        // Audit write failure is non-fatal; member was updated
+        const msg = (_e = err === null || err === void 0 ? void 0 : err.message) !== null && _e !== void 0 ? _e : String(err);
+        throw new https_1.HttpsError("internal", `Member updated but audit failed: ${msg}`);
+    }
     return { ok: true };
 }
 //# sourceMappingURL=updateMember.js.map

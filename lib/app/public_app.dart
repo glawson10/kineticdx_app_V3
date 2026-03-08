@@ -90,6 +90,11 @@ class PublicApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
+      theme: ThemeData(
+        useMaterial3: true,
+        fontFamily: 'OpenSans',
+        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF7B1FA2)),
+      ),
       initialRoute: '/public',
       onGenerateRoute: (settings) {
         final uri = Uri.parse((settings.name ?? '/public').trim());

@@ -57,6 +57,7 @@ import { syncMyDisplayName } from "./clinic/syncMyDisplayName";
 import { updateMemberProfile } from "./clinic/updateMemberProfile";
 import { upsertStaffProfile } from "./clinic/staff/upsertStaffProfile";
 import { setStaffAvailabilityDefault } from "./clinic/staff/setStaffAvailabilityDefault";
+import { upsertPractitionerBookingMeta } from "./clinic/staff/upsertPractitionerBookingMeta";
 
 // ─────────────────────────────
 // Closures
@@ -147,6 +148,7 @@ import {
   getPublicMonthAvailabilityFn,
   getPublicBookingPractitionersFn,
   getPublicBookingLocationsFn,
+  getPublicBookingAppointmentTypesFn,
   getPublicBookingDiagnosticsFn,
 } from "./public/listPublicSlots";
 import {
@@ -294,6 +296,11 @@ export const settingsUpsertPractitionerOverride = onCall(
 export const settingsDeletePractitionerOverride = onCall(
   { region: REGION, cors: true },
   deletePractitionerOverride
+);
+
+export const upsertPractitionerBookingMetaFn = onCall(
+  { region: REGION, cors: true },
+  upsertPractitionerBookingMeta
 );
 
 export const setMembershipStatusFn = onCall(
@@ -577,6 +584,7 @@ export {
   getPublicMonthAvailabilityFn,
   getPublicBookingPractitionersFn,
   getPublicBookingLocationsFn,
+  getPublicBookingAppointmentTypesFn,
   getPublicBookingDiagnosticsFn,
 };
 export const getManageContextFn = getManageContext;

@@ -5,12 +5,12 @@
 import { describe, it, expect, jest, beforeEach } from "@jest/globals";
 import { HttpsError } from "firebase-functions/v2/https";
 
-const mockSet = jest.fn().mockResolvedValue(undefined);
-const mockUpdate = jest.fn().mockResolvedValue(undefined);
-const mockGet = jest.fn().mockResolvedValue({ exists: false, data: () => ({}) });
+const mockSet = (jest.fn() as any).mockResolvedValue(undefined);
+const mockUpdate = (jest.fn() as any).mockResolvedValue(undefined);
+const mockGet = (jest.fn() as any).mockResolvedValue({ exists: false, data: () => ({}) });
 
 const createDocRef = (exists: boolean, data: Record<string, unknown> = {}) => ({
-  get: jest.fn().mockResolvedValue({ exists, data: () => data }),
+  get: (jest.fn() as any).mockResolvedValue({ exists, data: () => data }),
   set: mockSet,
   update: mockUpdate,
 });
@@ -80,10 +80,10 @@ const mockDb = {
     if (path.includes("locations/")) return getLocationDocRef(path);
     return createDocRef(false, {});
   },
-  runTransaction: jest.fn().mockResolvedValue(undefined),
+  runTransaction: (jest.fn() as any).mockResolvedValue(undefined),
 };
 
-const firestoreMock = Object.assign(jest.fn(() => mockDb), {
+const firestoreMock = Object.assign(jest.fn(() => mockDb) as any, {
   FieldValue: { serverTimestamp: () => ({ _serverTimestamp: true }) },
 });
 
@@ -99,7 +99,7 @@ jest.mock("../permissions", () => ({
 }));
 
 jest.mock("../audit/audit", () => ({
-  writeSettingsAuditEvent: jest.fn().mockResolvedValue(undefined),
+  writeSettingsAuditEvent: (jest.fn() as any).mockResolvedValue(undefined),
 }));
 
 const { requireClinicPermission } = require("../permissions");
@@ -115,7 +115,7 @@ import { expectAuditChangedKeysOnly } from "./settingsCallablesTestHelpers";
 describe("settings callables", () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    mockGet.mockResolvedValue({ exists: false, data: () => ({}) });
+    mockGet.mockResolvedValue({ exists: false, data: () => ({}) } as any);
   });
 
   describe("upsertLocation", () => {
@@ -183,7 +183,7 @@ describe("settings callables", () => {
         expect.objectContaining({ ok: true, locationId: "generated-id-1" })
       );
       expect(mockSet).toHaveBeenCalled();
-      const setCall = mockSet.mock.calls[0][0];
+      const setCall = mockSet.mock.calls[0][0] as any;
       expect(setCall.name).toBe("New Location");
       expect(setCall.colorHex).toBe("#aabbcc");
       expect(setCall).toHaveProperty("createdAt");
@@ -201,7 +201,7 @@ describe("settings callables", () => {
         },
       } as any);
       expect(mockUpdate).toHaveBeenCalled();
-      const updateCall = mockUpdate.mock.calls[0][0];
+      const updateCall = mockUpdate.mock.calls[0][0] as any;
       expect(updateCall.name).toBe("Updated Name");
       expect(updateCall).toHaveProperty("updatedAt");
     });
@@ -470,7 +470,7 @@ describe("settings callables", () => {
       } as any);
       expect(result).toEqual(expect.objectContaining({ ok: true }));
       expect(mockSet).toHaveBeenCalled();
-      const setCall = mockSet.mock.calls[0][0];
+      const setCall = mockSet.mock.calls[0][0] as any;
       expect(setCall.name).toBe("New Type");
       expect(setCall.durationMinutes).toBe(30);
       expect(setCall).toHaveProperty("createdAt");

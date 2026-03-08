@@ -5,6 +5,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/foundation.dart';
 
+typedef MemberDocSnapshot = QueryDocumentSnapshot<Map<String, dynamic>>;
+
 class StaffRepository {
   StaffRepository({
     FirebaseFirestore? firestore,
@@ -18,6 +20,9 @@ class StaffRepository {
 
   /// Cache members stream per clinicId so multiple widgets get the same stream (avoids cancel/resubscribe and Firestore "Unexpected state" on web).
   final Map<String, Stream<List<QueryDocumentSnapshot<Map<String, dynamic>>>>> _membersStreamCache = {};
+
+  /// Cache for canonical-only list (single listener, emits quickly; used for Team list to avoid combine stall).
+  final Map<String, Stream<List<QueryDocumentSnapshot<Map<String, dynamic>>>>> _membersOnlyStreamCache = {};
 
   // ✅ Canonical = members (matches rules + MembershipsRepository)
   // 🟡 Legacy fallback = memberships (temporary migration support)
@@ -143,7 +148,7 @@ class StaffRepository {
   // Optional list streams
   // ─────────────────────────────
 
-  /// ✅ Canonical-only list (members)
+  /// ✅ Canonical-only list (members). Use for Team list so one listener emits quickly.
   Stream<List<QueryDocumentSnapshot<Map<String, dynamic>>>> watchMembers(
     String clinicId,
   ) {
@@ -153,6 +158,31 @@ class StaffRepository {
     final ref = _membersCol(c);
     debugPrint('[StaffRepository] watchMembers (canonical) path=${ref.path}');
     return ref.snapshots().map((snap) => snap.docs);
+  }
+
+  /// Cached canonical-only list (same stream on rebuild; avoids web cancel-before-init). Prefer for UI lists.
+  Stream<List<QueryDocumentSnapshot<Map<String, dynamic>>>> watchMembersCached(
+    String clinicId,
+  ) {
+    final c = clinicId.trim();
+    if (c.isEmpty) return const Stream.empty();
+
+    return _membersOnlyStreamCache.putIfAbsent(c, () {
+      final ref = _membersCol(c);
+      debugPrint('[StaffRepository] watchMembersCached path=${ref.path}');
+      return ref.snapshots().map((snap) => snap.docs);
+    });
+  }
+
+  /// Clear list stream caches so next watch gets a fresh subscription (e.g. after timeout retry).
+  void clearMembershipListCache([String? clinicId]) {
+    if (clinicId != null && clinicId.trim().isNotEmpty) {
+      _membersStreamCache.remove(clinicId.trim());
+      _membersOnlyStreamCache.remove(clinicId.trim());
+    } else {
+      _membersStreamCache.clear();
+      _membersOnlyStreamCache.clear();
+    }
   }
 
   /// 🟡 Legacy-only list (memberships)
@@ -263,6 +293,63 @@ class StaffRepository {
 
     throw StateError(
         'updateMemberProfileFn returned unexpected payload: $data');
+  }
+
+  // ─────────────────────────────
+  // Practitioner booking metadata
+  // ─────────────────────────────
+
+  /// Stream the practitioner booking metadata doc for a single member.
+  Stream<Map<String, dynamic>?> watchPractitionerBookingMeta(
+    String clinicId,
+    String uid,
+  ) {
+    final c = clinicId.trim();
+    final u = uid.trim();
+    if (c.isEmpty || u.isEmpty) return const Stream.empty();
+
+    return _db
+        .collection('clinics')
+        .doc(c)
+        .collection('practitioners')
+        .doc(u)
+        .snapshots()
+        .map((snap) => snap.exists ? snap.data() : null);
+  }
+
+  /// Stream all practitioner booking metadata docs for a clinic.
+  Stream<List<QueryDocumentSnapshot<Map<String, dynamic>>>>
+      watchPractitionerBookingMetas(String clinicId) {
+    final c = clinicId.trim();
+    if (c.isEmpty) return const Stream.empty();
+
+    return _db
+        .collection('clinics')
+        .doc(c)
+        .collection('practitioners')
+        .snapshots()
+        .map((snap) => snap.docs);
+  }
+
+  /// Upsert practitioner booking metadata via callable.
+  Future<void> upsertPractitionerBookingMeta({
+    required String clinicId,
+    required String uid,
+    required Map<String, dynamic> patch,
+  }) async {
+    final callable = _fn.httpsCallable('upsertPractitionerBookingMetaFn');
+
+    final res = await callable.call(<String, dynamic>{
+      'clinicId': clinicId.trim(),
+      'uid': uid.trim(),
+      'patch': patch,
+    });
+
+    final data = res.data;
+    if (data is Map && data['ok'] == true) return;
+
+    throw StateError(
+        'upsertPractitionerBookingMetaFn returned unexpected payload: $data');
   }
 }
 

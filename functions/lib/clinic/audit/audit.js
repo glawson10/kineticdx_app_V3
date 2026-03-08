@@ -34,6 +34,7 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.writeAuditEvent = writeAuditEvent;
+exports.writeSettingsAuditEvent = writeSettingsAuditEvent;
 const admin = __importStar(require("firebase-admin"));
 function safeStr(v) {
     return (v !== null && v !== void 0 ? v : "").toString().trim();
@@ -101,14 +102,58 @@ async function resolveActorDisplayName(db, clinicId, uid) {
         return u;
     }
 }
+function removeUndefined(obj) {
+    const cleaned = {};
+    for (const [key, value] of Object.entries(obj)) {
+        if (value !== undefined) {
+            // Recursively clean nested objects
+            if (value && typeof value === "object" && !Array.isArray(value) && !(value instanceof admin.firestore.Timestamp)) {
+                cleaned[key] = removeUndefined(value);
+            }
+            else {
+                cleaned[key] = value;
+            }
+        }
+    }
+    return cleaned;
+}
 async function writeAuditEvent(db, clinicId, event) {
     const actorUid = safeStr(event.actorUid);
     const actorDisplayName = safeStr(event.actorDisplayName) ||
         (actorUid ? await resolveActorDisplayName(db, clinicId, actorUid) : "");
-    await db.collection("clinics").doc(clinicId).collection("audit").add({
-        ...event,
+    // Filter out undefined values - Firestore doesn't accept undefined
+    const cleanEvent = {
+        type: event.type,
         actorUid,
         actorDisplayName: actorDisplayName || null,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
+    if (event.patientId)
+        cleanEvent.patientId = event.patientId;
+    if (event.episodeId)
+        cleanEvent.episodeId = event.episodeId;
+    if (event.noteId)
+        cleanEvent.noteId = event.noteId;
+    if (event.appointmentId)
+        cleanEvent.appointmentId = event.appointmentId;
+    if (event.metadata && Object.keys(event.metadata).length > 0) {
+        // Remove undefined values from metadata object
+        const cleanedMetadata = removeUndefined(event.metadata);
+        if (Object.keys(cleanedMetadata).length > 0) {
+            cleanEvent.metadata = cleanedMetadata;
+        }
+    }
+    await db.collection("clinics").doc(clinicId).collection("audit").add(cleanEvent);
+}
+async function writeSettingsAuditEvent(db, clinicId, eventType, actorUserId, entityPath, entityId, changes) {
+    const ref = db.collection("clinics").doc(clinicId).collection("audit").doc();
+    await ref.set({
+        clinicId,
+        eventType,
+        actorUserId: (actorUserId !== null && actorUserId !== void 0 ? actorUserId : "").toString().trim(),
+        entityPath,
+        entityId,
+        changes: changes !== null && changes !== void 0 ? changes : {},
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 }

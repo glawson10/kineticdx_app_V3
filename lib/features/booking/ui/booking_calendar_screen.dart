@@ -7,17 +7,23 @@ import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../../app/callable_error_mapping.dart';
 import '../../../app/clinic_context.dart';
 import '../../../app/clinic_session.dart';
 import '../../../data/repositories/appointments_repository.dart'
-    show AppointmentsRepository, ClinicClosureConflictException, PractitionerOverlapException;
+    show
+        AppointmentsRepository,
+        ClinicClosureConflictException,
+        PractitionerOverlapException;
 import '../../../data/repositories/calendar_display_settings_repository.dart';
 import '../../../data/repositories/clinic_repository.dart';
+import '../../../data/repositories/locations_repository.dart';
 import '../../../data/repositories/services_repository.dart';
 import '../../../data/repositories/staff_repository.dart';
 import '../../../data/repositories/waitlist_repository.dart';
 import '../../../models/appointment.dart';
 import '../../../models/calendar_display_settings.dart';
+import '../../../models/clinic_location.dart';
 import '../../../models/recurrence_draft.dart';
 import '../../../models/service.dart';
 import '../../../models/waitlist_entry.dart';
@@ -26,6 +32,7 @@ import 'calendar_display_settings_screen.dart';
 import 'booking_rail_date_navigator.dart';
 import 'booking_rail_practitioners_section.dart';
 import 'booking_rail_waitlist_section.dart';
+import 'new_booking_form.dart';
 
 import '../../../debug_session_log.dart';
 import '../../../shared/ui/overlay_left_drawer.dart';
@@ -33,7 +40,13 @@ import '../../../shared/ui/sticky_tab_button.dart';
 import '../../shell/shell_overlay_scope.dart';
 
 import '../data/booking_calendar_prefs.dart'
-    show loadBookingRailCollapsed, loadMiniCalendarExpanded, loadPractitionerVisibilityPrefs, PractitionerVisibilityPrefs, saveBookingRailCollapsed, saveMiniCalendarExpanded;
+    show
+        loadBookingRailCollapsed,
+        loadMiniCalendarExpanded,
+        loadPractitionerVisibilityPrefs,
+        PractitionerVisibilityPrefs,
+        saveBookingRailCollapsed,
+        saveMiniCalendarExpanded;
 
 import '../../notes/data/notes_permissions.dart';
 import '../../notes/ui/note_editor_screen.dart';
@@ -123,7 +136,8 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
 
   /// Cache for listPublicSlotsFn results so calendar can show immediately when pre-warmed.
   static final Map<String, _WeeklyHours> _weeklyHoursCache = {};
-  static String _weeklyHoursCacheKey(String clinicId, DateTime weekStart, String? practitionerId) =>
+  static String _weeklyHoursCacheKey(
+          String clinicId, DateTime weekStart, String? practitionerId) =>
       '$clinicId|${weekStart.millisecondsSinceEpoch}|${practitionerId ?? ""}';
 
   static const double _timeGutterWidth = 64;
@@ -281,7 +295,8 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
     final key = _weeklyHoursCacheKey(clinicId, ws, null);
     if (_weeklyHoursCache.containsKey(key)) return;
     final functions = FirebaseFunctions.instanceFor(region: 'europe-west3');
-    _fetchWeeklyHours(functions, clinicId: clinicId, weekStartLocal: ws, practitionerId: null)
+    _fetchWeeklyHours(functions,
+            clinicId: clinicId, weekStartLocal: ws, practitionerId: null)
         .then((h) => _weeklyHoursCache[key] = h)
         .catchError((_) => _WeeklyHours.fromFirestore(null));
   }
@@ -420,11 +435,16 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
     if (!widget.standaloneScaffold) {
       if (isWide) {
         final screenWidth = MediaQuery.sizeOf(context).width;
-        final drawerWidth = screenWidth >= 900 ? 360.0 : (screenWidth * 0.85).clamp(260.0, 360.0);
+        final drawerWidth = screenWidth >= 900
+            ? 360.0
+            : (screenWidth * 0.85).clamp(260.0, 360.0);
         final shellRight = ShellOverlayScope.getShellRightEdge(context);
         final viewHeight = MediaQuery.sizeOf(context).height;
-        final tabGroupHeight = StickyTabButton.restingHeight * 2 + 4; // shell + gap + calendar
-        final tabTopOffset = (viewHeight - tabGroupHeight) / 2 + StickyTabButton.restingHeight + 4;
+        final tabGroupHeight =
+            StickyTabButton.restingHeight * 2 + 4; // shell + gap + calendar
+        final tabTopOffset = (viewHeight - tabGroupHeight) / 2 +
+            StickyTabButton.restingHeight +
+            4;
 
         return Stack(
           clipBehavior: Clip.hardEdge,
@@ -510,7 +530,8 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
               setState(() => _pendingWaitlistEntry = entry);
               ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(
-                  content: Text('Click an empty slot to book ${entry.displayLabel}'),
+                  content:
+                      Text('Click an empty slot to book ${entry.displayLabel}'),
                   duration: const Duration(seconds: 4),
                 ),
               );
@@ -581,7 +602,9 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
       return const Center(child: CircularProgressIndicator());
     }
 
-    final perms = (clinicCtx.hasSession ? clinicCtx.session.permissions : session!.permissions);
+    final perms = (clinicCtx.hasSession
+        ? clinicCtx.session.permissions
+        : session!.permissions);
     final canReadSchedule = perms.has('schedule.read');
     final canWriteSchedule = perms.has('schedule.write');
 
@@ -600,7 +623,8 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
     // Reuse same stream instance for same clinicId so StreamBuilder does not cancel/resubscribe on rebuild (avoids Firestore web SDK "Unexpected state").
     // Uses ClinicRepository.watchClinic (callable-based) instead of direct Firestore to avoid web SDK bug.
     Stream<ClinicDocSnapshot> clinicDoc;
-    if (_cachedClinicDocClinicId == clinicId && _cachedClinicDocStream != null) {
+    if (_cachedClinicDocClinicId == clinicId &&
+        _cachedClinicDocStream != null) {
       clinicDoc = _cachedClinicDocStream!;
     } else {
       clinicDoc = clinicRepo.watchClinic(clinicId);
@@ -612,9 +636,8 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
     if (_cachedClosuresClinicId == clinicId && _cachedClosuresStream != null) {
       closuresStream = _cachedClosuresStream!;
     } else {
-      closuresStream = clinicRepo
-          .watchActiveClosures(clinicId)
-          .map((closures) => closures
+      closuresStream = clinicRepo.watchActiveClosures(clinicId).map(
+          (snap) => snap.docs
               .map((d) => _ClinicClosure.fromFirestore(d.id, d.data()))
               .toList());
       _cachedClosuresStream = closuresStream;
@@ -624,19 +647,20 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
     return StreamBuilder<ClinicDocSnapshot>(
       stream: clinicDoc,
       builder: (context, clinicSnap) {
-        if (clinicSnap.connectionState == ConnectionState.waiting && !clinicSnap.hasData) {
+        if (clinicSnap.connectionState == ConnectionState.waiting &&
+            !clinicSnap.hasData) {
           return const Center(child: CircularProgressIndicator());
         }
         if (clinicSnap.hasError) {
           final err = clinicSnap.error!;
-          final isPermissionDenied = err is FirebaseException &&
-              err.code == 'permission-denied';
+          final isPermissionDenied =
+              err is FirebaseException && err.code == 'permission-denied';
           return _FatalPanel(
             title: 'Failed to load clinic settings',
             message: isPermissionDenied
                 ? 'Missing or insufficient permissions. '
-                  'If you just signed out, sign in again. '
-                  'If you are a new member, ask an admin to grant you schedule.read (or settings.read) for this clinic.'
+                    'If you just signed out, sign in again. '
+                    'If you are a new member, ask an admin to grant you schedule.read (or settings.read) for this clinic.'
                 : err.toString(),
           );
         }
@@ -662,9 +686,11 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
         // Only recreate if clinicId, weekStart, or practitionerId changed
         if (_cachedWeeklyHoursFuture == null ||
             _cachedWeeklyHoursClinicId != clinicId ||
-            _cachedWeeklyHoursWeekStart?.millisecondsSinceEpoch != _weekStart.millisecondsSinceEpoch ||
+            _cachedWeeklyHoursWeekStart?.millisecondsSinceEpoch !=
+                _weekStart.millisecondsSinceEpoch ||
             _cachedWeeklyHoursPractitionerId != _selectedPractitionerId) {
-          final cacheKey = _weeklyHoursCacheKey(clinicId, _weekStart, _selectedPractitionerId);
+          final cacheKey = _weeklyHoursCacheKey(
+              clinicId, _weekStart, _selectedPractitionerId);
           final cached = _weeklyHoursCache[cacheKey];
           if (cached != null) {
             _cachedWeeklyHoursFuture = Future.value(cached);
@@ -687,7 +713,8 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
         return FutureBuilder<_WeeklyHours>(
           future: _cachedWeeklyHoursFuture,
           builder: (context, hoursSnap) {
-            if (hoursSnap.connectionState == ConnectionState.waiting && !hoursSnap.hasData) {
+            if (hoursSnap.connectionState == ConnectionState.waiting &&
+                !hoursSnap.hasData) {
               return const Center(child: CircularProgressIndicator());
             }
             if (hoursSnap.hasError) {
@@ -711,7 +738,8 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
             return StreamBuilder<List<_ClinicClosure>>(
               stream: closuresStream,
               builder: (context, closureSnap) {
-                if (closureSnap.connectionState == ConnectionState.waiting && !closureSnap.hasData) {
+                if (closureSnap.connectionState == ConnectionState.waiting &&
+                    !closureSnap.hasData) {
                   return const Center(child: CircularProgressIndicator());
                 }
                 if (closureSnap.hasError) {
@@ -753,10 +781,13 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
                 // Month view: calendar grid with appointment counts per day
                 if (_viewModeDays == 30) {
                   final monthStart = _weekStart;
-                  final monthEnd = DateTime(_weekStart.year, _weekStart.month + 1, 1);
-                  final apptKey = '$clinicId|${monthStart.millisecondsSinceEpoch}|${monthEnd.millisecondsSinceEpoch}|${_selectedPractitionerId ?? ""}';
+                  final monthEnd =
+                      DateTime(_weekStart.year, _weekStart.month + 1, 1);
+                  final apptKey =
+                      '$clinicId|${monthStart.millisecondsSinceEpoch}|${monthEnd.millisecondsSinceEpoch}|${_selectedPractitionerId ?? ""}';
                   Stream<List<Appointment>> apptsStream;
-                  if (_cachedAppointmentsKey == apptKey && _cachedAppointmentsStream != null) {
+                  if (_cachedAppointmentsKey == apptKey &&
+                      _cachedAppointmentsStream != null) {
                     apptsStream = _cachedAppointmentsStream!;
                   } else {
                     apptsStream = apptRepo.watchAppointmentsForDateRange(
@@ -771,7 +802,8 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
                   return StreamBuilder<List<Appointment>>(
                     stream: apptsStream,
                     builder: (context, apptSnap) {
-                      if (apptSnap.connectionState == ConnectionState.waiting && !apptSnap.hasData) {
+                      if (apptSnap.connectionState == ConnectionState.waiting &&
+                          !apptSnap.hasData) {
                         return const Center(child: CircularProgressIndicator());
                       }
                       if (apptSnap.hasError) {
@@ -782,20 +814,29 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
                       }
                       final allAppts = apptSnap.data ?? const <Appointment>[];
                       var appts = _hideCancelled
-                          ? allAppts.where((a) => a.status.toLowerCase() != 'cancelled').toList()
+                          ? allAppts
+                              .where(
+                                  (a) => a.status.toLowerCase() != 'cancelled')
+                              .toList()
                           : allAppts;
                       if (visiblePractitionerIds.isNotEmpty) {
-                        appts = appts.where((a) =>
-                            a.kind == 'admin' ||
-                            a.practitionerId.isEmpty ||
-                            visiblePractitionerIds.contains(a.practitionerId)).toList();
+                        appts = appts
+                            .where((a) =>
+                                a.kind == 'admin' ||
+                                a.practitionerId.isEmpty ||
+                                visiblePractitionerIds
+                                    .contains(a.practitionerId))
+                            .toList();
                       }
-                      final calendarDisplayRepo = context.read<CalendarDisplaySettingsRepository>();
+                      final calendarDisplayRepo =
+                          context.read<CalendarDisplaySettingsRepository>();
                       Stream<CalendarDisplaySettings> displayStream;
-                      if (_cachedDisplaySettingsClinicId == clinicId && _cachedDisplaySettingsStream != null) {
+                      if (_cachedDisplaySettingsClinicId == clinicId &&
+                          _cachedDisplaySettingsStream != null) {
                         displayStream = _cachedDisplaySettingsStream!;
                       } else {
-                        displayStream = calendarDisplayRepo.streamSettings(clinicId);
+                        displayStream =
+                            calendarDisplayRepo.streamSettings(clinicId);
                         _cachedDisplaySettingsStream = displayStream;
                         _cachedDisplaySettingsClinicId = clinicId;
                       }
@@ -803,7 +844,8 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
                         stream: displayStream,
                         initialData: CalendarDisplaySettings.defaults,
                         builder: (context, displaySnap) {
-                          final displaySettings = displaySnap.data ?? CalendarDisplaySettings.defaults;
+                          final displaySettings = displaySnap.data ??
+                              CalendarDisplaySettings.defaults;
                           return Column(
                             children: [
                               _CalendarHeader(
@@ -825,23 +867,34 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
                                 fitWeek: _fitWeek,
                                 onToggleFit: _toggleFitWeek,
                                 hideCancelled: _hideCancelled,
-                                onToggleHideCancelled: () => setState(() => _hideCancelled = !_hideCancelled),
+                                onToggleHideCancelled: () => setState(
+                                    () => _hideCancelled = !_hideCancelled),
                                 viewModeDays: _viewModeDays,
                                 onViewModeChanged: (v) => setState(() {
                                   _hasUserChosenViewModeThisSession = true;
                                   _viewModeDays = v;
-                                  if (v == 30) _weekStart = DateTime(_weekStart.year, _weekStart.month, 1);
+                                  if (v == 30)
+                                    _weekStart = DateTime(
+                                        _weekStart.year, _weekStart.month, 1);
                                 }),
-                                hidePatientNames: displaySettings.hidePatientNames,
+                                hidePatientNames:
+                                    displaySettings.hidePatientNames,
                                 onToggleHidePatientNames: () async {
-                                  final repo = context.read<CalendarDisplaySettingsRepository>();
-                                  await repo.updateSettings(clinicId, {'hidePatientNames': !displaySettings.hidePatientNames});
+                                  final repo = context.read<
+                                      CalendarDisplaySettingsRepository>();
+                                  await repo.updateSettings(clinicId, {
+                                    'hidePatientNames':
+                                        !displaySettings.hidePatientNames
+                                  });
                                 },
                                 onOpenSettings: () async {
-                                  final repo = context.read<CalendarDisplaySettingsRepository>();
-                                  final saved = await Navigator.of(context).push<CalendarDisplaySettings>(
+                                  final repo = context.read<
+                                      CalendarDisplaySettingsRepository>();
+                                  final saved = await Navigator.of(context)
+                                      .push<CalendarDisplaySettings>(
                                     MaterialPageRoute(
-                                      builder: (_) => CalendarDisplaySettingsScreen(
+                                      builder: (_) =>
+                                          CalendarDisplaySettingsScreen(
                                         clinicId: clinicId,
                                         initial: displaySettings,
                                         repo: repo,
@@ -853,7 +906,8 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
                                     setState(() {});
                                   }
                                 },
-                                condensedHeader: displaySettings.condensedHeader,
+                                condensedHeader:
+                                    displaySettings.condensedHeader,
                               ),
                               const _DevPermissionHintBanner(),
                               Expanded(
@@ -875,9 +929,11 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
                 }
 
                 final weekEnd = _weekStart.add(const Duration(days: 7));
-                final weekApptKey = '$clinicId|${_weekStart.millisecondsSinceEpoch}|${weekEnd.millisecondsSinceEpoch}|${_selectedPractitionerId ?? ""}';
+                final weekApptKey =
+                    '$clinicId|${_weekStart.millisecondsSinceEpoch}|${weekEnd.millisecondsSinceEpoch}|${_selectedPractitionerId ?? ""}';
                 Stream<List<Appointment>> weekApptsStream;
-                if (_cachedAppointmentsKey == weekApptKey && _cachedAppointmentsStream != null) {
+                if (_cachedAppointmentsKey == weekApptKey &&
+                    _cachedAppointmentsStream != null) {
                   weekApptsStream = _cachedAppointmentsStream!;
                 } else {
                   weekApptsStream = apptRepo.watchAppointmentsForWeek(
@@ -891,7 +947,8 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
                 return StreamBuilder<List<Appointment>>(
                   stream: weekApptsStream,
                   builder: (context, apptSnap) {
-                    if (apptSnap.connectionState == ConnectionState.waiting && !apptSnap.hasData) {
+                    if (apptSnap.connectionState == ConnectionState.waiting &&
+                        !apptSnap.hasData) {
                       return const Center(child: CircularProgressIndicator());
                     }
                     if (apptSnap.hasError) {
@@ -908,31 +965,41 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
                     final allAppts = apptSnap.data ?? const <Appointment>[];
                     // Filter cancelled appointments if hide toggle is on
                     var appts = _hideCancelled
-                        ? allAppts.where((a) => a.status.toLowerCase() != 'cancelled').toList()
+                        ? allAppts
+                            .where((a) => a.status.toLowerCase() != 'cancelled')
+                            .toList()
                         : allAppts;
-                    
+
                     // Sort so cancelled appointments render last (on top) to ensure they can receive taps
                     // when squashed side-by-side with booked appointments
-                    appts = List<Appointment>.from(appts)..sort((a, b) {
-                      final aCancelled = a.status.toLowerCase() == 'cancelled';
-                      final bCancelled = b.status.toLowerCase() == 'cancelled';
-                      // Non-cancelled first, cancelled last (so cancelled render on top)
-                      if (aCancelled == bCancelled) return 0;
-                      return aCancelled ? 1 : -1;
-                    });
+                    appts = List<Appointment>.from(appts)
+                      ..sort((a, b) {
+                        final aCancelled =
+                            a.status.toLowerCase() == 'cancelled';
+                        final bCancelled =
+                            b.status.toLowerCase() == 'cancelled';
+                        // Non-cancelled first, cancelled last (so cancelled render on top)
+                        if (aCancelled == bCancelled) return 0;
+                        return aCancelled ? 1 : -1;
+                      });
                     if (visiblePractitionerIds.isNotEmpty) {
-                      appts = appts.where((a) =>
-                          a.kind == 'admin' ||
-                          a.practitionerId.isEmpty ||
-                          visiblePractitionerIds.contains(a.practitionerId)).toList();
+                      appts = appts
+                          .where((a) =>
+                              a.kind == 'admin' ||
+                              a.practitionerId.isEmpty ||
+                              visiblePractitionerIds.contains(a.practitionerId))
+                          .toList();
                     }
 
-                    final calendarDisplayRepo = context.read<CalendarDisplaySettingsRepository>();
+                    final calendarDisplayRepo =
+                        context.read<CalendarDisplaySettingsRepository>();
                     Stream<CalendarDisplaySettings> weekDisplayStream;
-                    if (_cachedDisplaySettingsClinicId == clinicId && _cachedDisplaySettingsStream != null) {
+                    if (_cachedDisplaySettingsClinicId == clinicId &&
+                        _cachedDisplaySettingsStream != null) {
                       weekDisplayStream = _cachedDisplaySettingsStream!;
                     } else {
-                      weekDisplayStream = calendarDisplayRepo.streamSettings(clinicId);
+                      weekDisplayStream =
+                          calendarDisplayRepo.streamSettings(clinicId);
                       _cachedDisplaySettingsStream = weekDisplayStream;
                       _cachedDisplaySettingsClinicId = clinicId;
                     }
@@ -940,411 +1007,513 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
                       stream: weekDisplayStream,
                       initialData: CalendarDisplaySettings.defaults,
                       builder: (context, displaySnap) {
-                        final displaySettings = displaySnap.data ?? CalendarDisplaySettings.defaults;
-                        if (!_hasUserChosenViewModeThisSession && displaySnap.hasData) {
+                        final displaySettings = displaySnap.data ??
+                            CalendarDisplaySettings.defaults;
+                        if (!_hasUserChosenViewModeThisSession &&
+                            displaySnap.hasData) {
                           final s = displaySnap.data!;
                           WidgetsBinding.instance.addPostFrameCallback((_) {
-                            if (!mounted || _hasUserChosenViewModeThisSession) return;
+                            if (!mounted || _hasUserChosenViewModeThisSession)
+                              return;
                             setState(() {
                               _viewModeDays = _defaultViewToDays(s.defaultView);
-                              _weekStart = _startOfWeekWith(DateTime.now(), s.weekStartsOn);
+                              _weekStart = _startOfWeekWith(
+                                  DateTime.now(), s.weekStartsOn);
                               if (_viewModeDays == 30) {
-                                _weekStart = DateTime(_weekStart.year, _weekStart.month, 1);
+                                _weekStart = DateTime(
+                                    _weekStart.year, _weekStart.month, 1);
                               }
                             });
                           });
                         }
                         final gridStartHour = displaySettings.displayStartHour;
                         final gridEndHour = displaySettings.displayEndHour;
-                        final adminGridMinutes = displaySettings.minutesPerBlock;
+                        final adminGridMinutes =
+                            displaySettings.minutesPerBlock;
                         final baseSlotHeight = displaySettings.slotHeightPx;
-                        final effectiveHeaderHeight = displaySettings.condensedHeader ? 40.0 : _headerHeight;
-                        final effectiveDaysCount = (_viewModeDays == 7 && !displaySettings.showWeekends) ? 5 : _viewModeDays;
-                        final effectiveStart = (_viewModeDays == 7 && !displaySettings.showWeekends && displaySettings.weekStartsOn == 'sunday')
+                        final effectiveHeaderHeight =
+                            displaySettings.condensedHeader
+                                ? 40.0
+                                : _headerHeight;
+                        final effectiveDaysCount = (_viewModeDays == 7 &&
+                                !displaySettings.showWeekends)
+                            ? 5
+                            : _viewModeDays;
+                        final effectiveStart = (_viewModeDays == 7 &&
+                                !displaySettings.showWeekends &&
+                                displaySettings.weekStartsOn == 'sunday')
                             ? _weekStart.add(const Duration(days: 1))
                             : _weekStart;
-                        final effectiveDays = List.generate(effectiveDaysCount, (i) => effectiveStart.add(Duration(days: i)));
+                        final effectiveDays = List.generate(effectiveDaysCount,
+                            (i) => effectiveStart.add(Duration(days: i)));
 
-                    return LayoutBuilder(
-                      builder: (context, c) {
-                        final isWide = c.maxWidth >= 900;
-                        final availableWidth = c.maxWidth;
-                        final availableHeight = c.maxHeight;
+                        return LayoutBuilder(
+                          builder: (context, c) {
+                            final isWide = c.maxWidth >= 900;
+                            final availableWidth = c.maxWidth;
+                            final availableHeight = c.maxHeight;
 
-                        final baseDayWidth = isWide ? 220.0 : 160.0;
+                            final baseDayWidth = isWide ? 220.0 : 160.0;
 
-                        final fitDayWidth =
-                            ((availableWidth - _timeGutterWidth) / effectiveDaysCount)
-                                .clamp(90.0, 420.0);
+                            final fitDayWidth =
+                                ((availableWidth - _timeGutterWidth) /
+                                        effectiveDaysCount)
+                                    .clamp(90.0, 420.0);
 
-                        final dayWidth = _fitWeek ? fitDayWidth : baseDayWidth;
+                            final dayWidth =
+                                _fitWeek ? fitDayWidth : baseDayWidth;
 
-                        final rows = (((gridEndHour - gridStartHour) * 60) /
-                                adminGridMinutes)
-                            .ceil();
+                            final rows = (((gridEndHour - gridStartHour) * 60) /
+                                    adminGridMinutes)
+                                .ceil();
 
-                        const approxTopChrome = 110.0;
+                            const approxTopChrome = 110.0;
 
-                        final fitViewportHeight =
-                            (availableHeight - approxTopChrome)
-                                .clamp(200.0, double.infinity);
+                            final fitViewportHeight =
+                                (availableHeight - approxTopChrome)
+                                    .clamp(200.0, double.infinity);
 
-                        final fitSlotHeight =
-                            ((fitViewportHeight - effectiveHeaderHeight) / rows)
-                                .clamp(28.0, 96.0);
+                            final fitSlotHeight =
+                                ((fitViewportHeight - effectiveHeaderHeight) /
+                                        rows)
+                                    .clamp(28.0, 96.0);
 
-                        final effectiveSlotHeight =
-                            _fitWeek ? fitSlotHeight : baseSlotHeight;
+                            final effectiveSlotHeight =
+                                _fitWeek ? fitSlotHeight : baseSlotHeight;
 
-                        final double pxPerMinute =
-                            effectiveSlotHeight / adminGridMinutes;
+                            final double pxPerMinute =
+                                effectiveSlotHeight / adminGridMinutes;
 
-                        final gridHeight =
-                            effectiveHeaderHeight + rows * effectiveSlotHeight;
+                            final gridHeight = effectiveHeaderHeight +
+                                rows * effectiveSlotHeight;
 
-                        _maybeAutoJumpAndPrimeHighlight(
-                          days: effectiveDays,
-                          dayWidth: dayWidth,
-                          adminGridMinutes: adminGridMinutes,
-                          slotHeight: effectiveSlotHeight,
-                          appts: appts,
-                          startHour: gridStartHour,
-                          endHour: gridEndHour,
-                        );
+                            _maybeAutoJumpAndPrimeHighlight(
+                              days: effectiveDays,
+                              dayWidth: dayWidth,
+                              adminGridMinutes: adminGridMinutes,
+                              slotHeight: effectiveSlotHeight,
+                              appts: appts,
+                              startHour: gridStartHour,
+                              endHour: gridEndHour,
+                            );
 
-                        return Column(
-                          children: [
-                            // ✅ 3-zone header: Context (A) | Navigation & View (B) | Actions (C)
-                            _CalendarHeader(
-                              clinicId: clinicId,
-                              weekStartLabel: _viewModeDays == 30 ? _fmtMonthStart(_weekStart) : _fmtWeekStart(_weekStart),
-                              value: _selectedPractitionerId,
-                              onChanged: (v) {
-                                setState(() {
-                                  _selectedPractitionerId = v;
-                                  _didInitialAutoJump = true;
-                                });
-                              },
-                              visiblePractitionerIds: visiblePractitionerIds,
-                              orderPractitionerIds: orderPractitionerIds,
-                              onPrev: _prevPeriod,
-                              onNext: _nextPeriod,
-                              onPickDate: _pickDate,
-                              onCurrentWeek: _goCurrentWeek,
-                              fitWeek: _fitWeek,
-                              onToggleFit: _toggleFitWeek,
-                              hideCancelled: _hideCancelled,
-                              onToggleHideCancelled: () => setState(() => _hideCancelled = !_hideCancelled),
-                              viewModeDays: _viewModeDays,
-                              onViewModeChanged: (v) => setState(() {
+                            return Column(
+                              children: [
+                                // ✅ 3-zone header: Context (A) | Navigation & View (B) | Actions (C)
+                                _CalendarHeader(
+                                  clinicId: clinicId,
+                                  weekStartLabel: _viewModeDays == 30
+                                      ? _fmtMonthStart(_weekStart)
+                                      : _fmtWeekStart(_weekStart),
+                                  value: _selectedPractitionerId,
+                                  onChanged: (v) {
+                                    setState(() {
+                                      _selectedPractitionerId = v;
+                                      _didInitialAutoJump = true;
+                                    });
+                                  },
+                                  visiblePractitionerIds:
+                                      visiblePractitionerIds,
+                                  orderPractitionerIds: orderPractitionerIds,
+                                  onPrev: _prevPeriod,
+                                  onNext: _nextPeriod,
+                                  onPickDate: _pickDate,
+                                  onCurrentWeek: _goCurrentWeek,
+                                  fitWeek: _fitWeek,
+                                  onToggleFit: _toggleFitWeek,
+                                  hideCancelled: _hideCancelled,
+                                  onToggleHideCancelled: () => setState(
+                                      () => _hideCancelled = !_hideCancelled),
+                                  viewModeDays: _viewModeDays,
+                                  onViewModeChanged: (v) => setState(() {
                                     _hasUserChosenViewModeThisSession = true;
                                     _viewModeDays = v;
-                                    if (v == 30) _weekStart = DateTime(_weekStart.year, _weekStart.month, 1);
+                                    if (v == 30)
+                                      _weekStart = DateTime(
+                                          _weekStart.year, _weekStart.month, 1);
                                   }),
-                              hidePatientNames: displaySettings.hidePatientNames,
-                              condensedHeader: displaySettings.condensedHeader,
-                              onToggleHidePatientNames: () async {
-                                final repo = context.read<CalendarDisplaySettingsRepository>();
-                                await repo.updateSettings(clinicId, {'hidePatientNames': !displaySettings.hidePatientNames});
-                              },
-                              onOpenSettings: () async {
-                                final repo = context.read<CalendarDisplaySettingsRepository>();
-                                final saved = await Navigator.of(context).push<CalendarDisplaySettings>(
-                                  MaterialPageRoute(
-                                    builder: (_) => CalendarDisplaySettingsScreen(
-                                      clinicId: clinicId,
-                                      initial: displaySettings,
-                                      repo: repo,
-                                    ),
-                                  ),
-                                );
-                                if (saved != null && mounted) {
-                                  repo.clearDisplaySettingsCache();
-                                  setState(() {});
-                                }
-                              },
-                            ),
+                                  hidePatientNames:
+                                      displaySettings.hidePatientNames,
+                                  condensedHeader:
+                                      displaySettings.condensedHeader,
+                                  onToggleHidePatientNames: () async {
+                                    final repo = context.read<
+                                        CalendarDisplaySettingsRepository>();
+                                    await repo.updateSettings(clinicId, {
+                                      'hidePatientNames':
+                                          !displaySettings.hidePatientNames
+                                    });
+                                  },
+                                  onOpenSettings: () async {
+                                    final repo = context.read<
+                                        CalendarDisplaySettingsRepository>();
+                                    final saved = await Navigator.of(context)
+                                        .push<CalendarDisplaySettings>(
+                                      MaterialPageRoute(
+                                        builder: (_) =>
+                                            CalendarDisplaySettingsScreen(
+                                          clinicId: clinicId,
+                                          initial: displaySettings,
+                                          repo: repo,
+                                        ),
+                                      ),
+                                    );
+                                    if (saved != null && mounted) {
+                                      repo.clearDisplaySettingsCache();
+                                      setState(() {});
+                                    }
+                                  },
+                                ),
 
-                            const _DevPermissionHintBanner(),
+                                const _DevPermissionHintBanner(),
 
-                            Expanded(
-                              child: SingleChildScrollView(
-                                controller: _verticalController,
-                                physics: _fitWeek
-                                    ? const NeverScrollableScrollPhysics()
-                                    : null,
-                                child: Row(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    _TimeGutter(
-                                      startHour: gridStartHour,
-                                      endHour: gridEndHour,
-                                      slotMinutes: adminGridMinutes,
-                                      headerHeight: effectiveHeaderHeight,
-                                      slotHeight: effectiveSlotHeight,
-                                    ),
-                                    Expanded(
-                                      child: SingleChildScrollView(
-                                        controller: _horizontalController,
-                                        physics: _fitWeek
-                                            ? const NeverScrollableScrollPhysics()
-                                            : null,
-                                        scrollDirection: Axis.horizontal,
-                                        child: SizedBox(
-                                          width: dayWidth * effectiveDaysCount,
-                                          height: gridHeight,
-                                          child: Stack(
-                                            children: [
-                                              _WeekGrid(
-                                                days: effectiveDays,
-                                                dayWidth: dayWidth,
-                                                headerHeight: effectiveHeaderHeight,
-                                                startHour: gridStartHour,
-                                                endHour: gridEndHour,
-                                                slotMinutes: adminGridMinutes,
-                                                slotHeight: effectiveSlotHeight,
-                                                weeklyHours: weeklyHours,
-                                                showClosedDayLabel: displaySettings.showClosedDayLabel,
-                                                onTapSlot: (slotStart) {
-                                                  if (!canWriteSchedule) {
-                                                    _showClosedSnack(
-                                                      message:
-                                                          'Read-only: schedule.write required to create bookings.',
-                                                    );
-                                                    return;
-                                                  }
-
-                                                  if (!weeklyHours
-                                                      .isWithinOpeningHours(
-                                                          slotStart)) {
-                                                    _showClosedSnack();
-                                                    return;
-                                                  }
-
-                                                  if (isClosedAt(slotStart)) {
-                                                    _showClosedSnack(
-                                                      message:
-                                                          'Clinic is closed (closure) during this time.',
-                                                    );
-                                                    return;
-                                                  }
-
-                                                  _startBookingFlowDialog(
-                                                    clinicId: clinicId,
-                                                    apptRepo: apptRepo,
-                                                    servicesRepo: servicesRepo,
-                                                    slotStart: slotStart,
-                                                    adminGridMinutes:
+                                Expanded(
+                                  child: SingleChildScrollView(
+                                    controller: _verticalController,
+                                    physics: _fitWeek
+                                        ? const NeverScrollableScrollPhysics()
+                                        : null,
+                                    child: Row(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        _TimeGutter(
+                                          startHour: gridStartHour,
+                                          endHour: gridEndHour,
+                                          slotMinutes: adminGridMinutes,
+                                          headerHeight: effectiveHeaderHeight,
+                                          slotHeight: effectiveSlotHeight,
+                                        ),
+                                        Expanded(
+                                          child: SingleChildScrollView(
+                                            controller: _horizontalController,
+                                            physics: _fitWeek
+                                                ? const NeverScrollableScrollPhysics()
+                                                : null,
+                                            scrollDirection: Axis.horizontal,
+                                            child: SizedBox(
+                                              width:
+                                                  dayWidth * effectiveDaysCount,
+                                              height: gridHeight,
+                                              child: Stack(
+                                                children: [
+                                                  _WeekGrid(
+                                                    days: effectiveDays,
+                                                    dayWidth: dayWidth,
+                                                    headerHeight:
+                                                        effectiveHeaderHeight,
+                                                    startHour: gridStartHour,
+                                                    endHour: gridEndHour,
+                                                    slotMinutes:
                                                         adminGridMinutes,
-                                                    defaultSlotMinutes:
-                                                        defaultSlotMinutes,
-                                                    waitlistEntry: _pendingWaitlistEntry,
-                                                  );
-                                                },
-                                              ),
-                                              _ClosureOverlayLayer(
-                                                closures: closures,
-                                                days: effectiveDays,
-                                                dayWidth: dayWidth,
-                                                headerHeight: effectiveHeaderHeight,
-                                                startHour: gridStartHour,
-                                                endHour: gridEndHour,
-                                                pxPerMinute: pxPerMinute,
-                                              ),
-                                              _AuditHighlightOverlay(
-                                                pulse: _pulseCtrl,
-                                                dayWidth: dayWidth,
-                                                headerHeight: effectiveHeaderHeight,
-                                                startHour: gridStartHour,
-                                                pxPerMinute: pxPerMinute,
-                                                dayIndex: _highlightDayIndex,
-                                                startLocal: _highlightStart,
-                                                endLocal: _highlightEnd,
-                                              ),
-                                              if (displaySettings.showCurrentTimeIndicator)
-                                                _CurrentTimeIndicator(
-                                                  days: effectiveDays,
-                                                  dayWidth: dayWidth,
-                                                  headerHeight: effectiveHeaderHeight,
-                                                  displayStartHour: gridStartHour,
-                                                  displayEndHour: gridEndHour,
-                                                  pxPerMinute: pxPerMinute,
-                                                ),
-                                              for (final a in appts)
-                                                DraggableAppointmentBlock(
-                                                  key: ValueKey('appt_${a.id}'),
-                                                  appointment: a,
-                                                  allAppointments: allAppts,
-                                                  hideCancelled: _hideCancelled,
-                                                  hidePatientNames: displaySettings.hidePatientNames,
-                                                  confirmAppointmentMoves: displaySettings.confirmAppointmentMoves,
-                                                  weekStart: _weekStart,
-                                                  daysCount: effectiveDaysCount,
-                                                  dayWidth: dayWidth,
-                                                  headerHeight: effectiveHeaderHeight,
-                                                  startHour: gridStartHour,
-                                                  endHour: gridEndHour,
-                                                  pxPerMinute: pxPerMinute,
-                                                  snapMinutes: _dragSnapMinutes,
-                                                  showRecurrenceUI: BookingCalendarScreen.showRecurrenceUI,
-                                                  onRequestUpdate: ({
-                                                    required String
-                                                        appointmentId,
-                                                    required DateTime newStart,
-                                                    required DateTime newEnd,
-                                                  }) async {
-                                                    if (!canWriteSchedule) {
-                                                      _showClosedSnack(
-                                                        message:
-                                                            'Read-only: schedule.write required to move bookings.',
-                                                      );
-                                                      return;
-                                                    }
-
-                                                    String? dragScope;
-                                                    if (a.isSeriesOccurrence && BookingCalendarScreen.showRecurrenceUI) {
-                                                      dragScope = await showDialog<String>(
-                                                        context: context,
-                                                        builder: (_) => const _SeriesEditScopeDialog(),
-                                                      );
-                                                      if (!mounted || dragScope == null) return;
-                                                    } else if (a.isSeriesOccurrence) {
-                                                      dragScope = 'this_only';
-                                                    }
-
-                                                    final okHours = weeklyHours
-                                                            .isWithinOpeningHours(
-                                                          newStart,
-                                                        ) &&
-                                                        weeklyHours
-                                                            .isWithinOpeningHours(
-                                                          newEnd.subtract(
-                                                            const Duration(
-                                                                minutes: 1),
-                                                          ),
-                                                        );
-
-                                                    if (!okHours) {
-                                                      _showClosedSnack();
-                                                      return;
-                                                    }
-
-                                                    final isOverlap =
-                                                        overlapsClosure(
-                                                            newStart, newEnd);
-
-                                                    final durationMinutes = newEnd.difference(newStart).inMinutes;
-                                                    final startTimeLocal =
-                                                        '${newStart.hour.toString().padLeft(2, '0')}:${newStart.minute.toString().padLeft(2, '0')}';
-
-                                                    Future<void> performUpdate({required bool allowClosedOverride}) async {
-                                                      if (!a.isSeriesOccurrence) {
-                                                        await _updateAppointment(
-                                                          apptRepo: apptRepo,
-                                                          clinicId: clinicId,
-                                                          appointmentId: appointmentId,
-                                                          start: newStart,
-                                                          end: newEnd,
-                                                          allowClosedOverride: allowClosedOverride,
+                                                    slotHeight:
+                                                        effectiveSlotHeight,
+                                                    weeklyHours: weeklyHours,
+                                                    showClosedDayLabel:
+                                                        displaySettings
+                                                            .showClosedDayLabel,
+                                                    onTapSlot: (slotStart) {
+                                                      if (!canWriteSchedule) {
+                                                        _showClosedSnack(
+                                                          message:
+                                                              'Read-only: schedule.write required to create bookings.',
                                                         );
                                                         return;
                                                       }
-                                                      switch (dragScope ?? 'this_only') {
-                                                        case 'this_only':
-                                                          await apptRepo.updateAppointmentOccurrence(
-                                                            clinicId: clinicId,
-                                                            appointmentId: appointmentId,
-                                                            start: newStart,
-                                                            end: newEnd,
-                                                            markException: true,
-                                                            allowClosedOverride: allowClosedOverride,
-                                                          );
-                                                          break;
-                                                        case 'this_and_following':
-                                                          await apptRepo.splitAppointmentSeries(
-                                                            clinicId: clinicId,
-                                                            seriesId: a.seriesId!,
-                                                            splitFromAppointmentId: appointmentId,
-                                                            newStartTimeLocal: startTimeLocal,
-                                                            newDurationMinutes: durationMinutes,
-                                                            conflictPolicy: 'BLOCK',
-                                                          );
-                                                          break;
-                                                        case 'entire_series':
-                                                          await apptRepo.updateAppointmentSeries(
-                                                            clinicId: clinicId,
-                                                            seriesId: a.seriesId!,
-                                                            startTimeLocal: startTimeLocal,
-                                                            durationMinutes: durationMinutes,
-                                                            tz: _tz,
-                                                            effectiveFromMs: a.start.toUtc().millisecondsSinceEpoch,
-                                                            preserveExceptions: true,
-                                                            conflictPolicy: 'BLOCK',
-                                                          );
-                                                          break;
-                                                      }
-                                                    }
 
-                                                    if (!isOverlap) {
-                                                      try {
-                                                        await performUpdate(allowClosedOverride: false);
-                                                      } on ClinicClosureConflictException {
+                                                      if (!weeklyHours
+                                                          .isWithinOpeningHours(
+                                                              slotStart)) {
+                                                        _showClosedSnack();
+                                                        return;
+                                                      }
+
+                                                      if (isClosedAt(
+                                                          slotStart)) {
                                                         _showClosedSnack(
                                                           message:
-                                                              'Clinic closure conflict.',
+                                                              'Clinic is closed (closure) during this time.',
                                                         );
+                                                        return;
                                                       }
-                                                      return;
-                                                    }
 
-                                                    if (!_canOverrideClosures(
-                                                        context)) {
-                                                      _showClosedSnack();
-                                                      return;
-                                                    }
-
-                                                    final ok =
-                                                        await _confirmClosedOverrideDialog();
-                                                    if (!mounted || !ok) return;
-
-                                                    try {
-                                                      await performUpdate(allowClosedOverride: true);
-                                                    } on ClinicClosureConflictException {
-                                                      _showClosedSnack(
-                                                        message:
-                                                            'Clinic closure conflict.',
+                                                      _startBookingFlowDialog(
+                                                        clinicId: clinicId,
+                                                        apptRepo: apptRepo,
+                                                        slotStart: slotStart,
+                                                        adminGridMinutes:
+                                                            adminGridMinutes,
+                                                        defaultSlotMinutes:
+                                                            defaultSlotMinutes,
+                                                        waitlistEntry:
+                                                            _pendingWaitlistEntry,
                                                       );
-                                                    }
-                                                  },
-                                                  onTap: (appt) =>
-                                                      _onTapAppointment(
-                                                    clinicId: clinicId,
-                                                    appt: appt,
-                                                    apptRepo: apptRepo,
-                                                    servicesRepo: servicesRepo,
+                                                    },
                                                   ),
-                                                ),
-                                            ],
+                                                  _ClosureOverlayLayer(
+                                                    closures: closures,
+                                                    days: effectiveDays,
+                                                    dayWidth: dayWidth,
+                                                    headerHeight:
+                                                        effectiveHeaderHeight,
+                                                    startHour: gridStartHour,
+                                                    endHour: gridEndHour,
+                                                    pxPerMinute: pxPerMinute,
+                                                  ),
+                                                  _AuditHighlightOverlay(
+                                                    pulse: _pulseCtrl,
+                                                    dayWidth: dayWidth,
+                                                    headerHeight:
+                                                        effectiveHeaderHeight,
+                                                    startHour: gridStartHour,
+                                                    pxPerMinute: pxPerMinute,
+                                                    dayIndex:
+                                                        _highlightDayIndex,
+                                                    startLocal: _highlightStart,
+                                                    endLocal: _highlightEnd,
+                                                  ),
+                                                  if (displaySettings
+                                                      .showCurrentTimeIndicator)
+                                                    _CurrentTimeIndicator(
+                                                      days: effectiveDays,
+                                                      dayWidth: dayWidth,
+                                                      headerHeight:
+                                                          effectiveHeaderHeight,
+                                                      displayStartHour:
+                                                          gridStartHour,
+                                                      displayEndHour:
+                                                          gridEndHour,
+                                                      pxPerMinute: pxPerMinute,
+                                                    ),
+                                                  for (final a in appts)
+                                                    DraggableAppointmentBlock(
+                                                      key: ValueKey(
+                                                          'appt_${a.id}'),
+                                                      appointment: a,
+                                                      serviceIdToColorHex: null,
+                                                      showFinancialIndicators:
+                                                          displaySettings.showFinancialIndicators,
+                                                      weekStart: _weekStart,
+                                                      daysCount:
+                                                          effectiveDaysCount,
+                                                      dayWidth: dayWidth,
+                                                      headerHeight:
+                                                          effectiveHeaderHeight,
+                                                      startHour: gridStartHour,
+                                                      endHour: gridEndHour,
+                                                      pxPerMinute: pxPerMinute,
+                                                      snapMinutes:
+                                                          _dragSnapMinutes,
+                                                      onRequestUpdate: ({
+                                                        required String
+                                                            appointmentId,
+                                                        required DateTime
+                                                            newStart,
+                                                        required DateTime
+                                                            newEnd,
+                                                      }) async {
+                                                        if (!canWriteSchedule) {
+                                                          _showClosedSnack(
+                                                            message:
+                                                                'Read-only: schedule.write required to move bookings.',
+                                                          );
+                                                          return;
+                                                        }
+
+                                                        String? dragScope;
+                                                        if (a.isSeriesOccurrence &&
+                                                            BookingCalendarScreen
+                                                                .showRecurrenceUI) {
+                                                          dragScope =
+                                                              await showDialog<
+                                                                  String>(
+                                                            context: context,
+                                                            builder: (_) =>
+                                                                const _SeriesEditScopeDialog(),
+                                                          );
+                                                          if (!mounted ||
+                                                              dragScope == null)
+                                                            return;
+                                                        } else if (a
+                                                            .isSeriesOccurrence) {
+                                                          dragScope =
+                                                              'this_only';
+                                                        }
+
+                                                        final okHours = weeklyHours
+                                                                .isWithinOpeningHours(
+                                                              newStart,
+                                                            ) &&
+                                                            weeklyHours
+                                                                .isWithinOpeningHours(
+                                                              newEnd.subtract(
+                                                                const Duration(
+                                                                    minutes: 1),
+                                                              ),
+                                                            );
+
+                                                        if (!okHours) {
+                                                          _showClosedSnack();
+                                                          return;
+                                                        }
+
+                                                        final isOverlap =
+                                                            overlapsClosure(
+                                                                newStart,
+                                                                newEnd);
+
+                                                        final durationMinutes =
+                                                            newEnd
+                                                                .difference(
+                                                                    newStart)
+                                                                .inMinutes;
+                                                        final startTimeLocal =
+                                                            '${newStart.hour.toString().padLeft(2, '0')}:${newStart.minute.toString().padLeft(2, '0')}';
+
+                                                        Future<void> performUpdate(
+                                                            {required bool
+                                                                allowClosedOverride}) async {
+                                                          if (!a
+                                                              .isSeriesOccurrence) {
+                                                            await _updateAppointment(
+                                                              apptRepo:
+                                                                  apptRepo,
+                                                              clinicId:
+                                                                  clinicId,
+                                                              appointmentId:
+                                                                  appointmentId,
+                                                              start: newStart,
+                                                              end: newEnd,
+                                                              allowClosedOverride:
+                                                                  allowClosedOverride,
+                                                            );
+                                                            return;
+                                                          }
+                                                          switch (dragScope ??
+                                                              'this_only') {
+                                                            case 'this_only':
+                                                              await apptRepo
+                                                                  .updateAppointmentOccurrence(
+                                                                clinicId:
+                                                                    clinicId,
+                                                                appointmentId:
+                                                                    appointmentId,
+                                                                start: newStart,
+                                                                end: newEnd,
+                                                                markException:
+                                                                    true,
+                                                                allowClosedOverride:
+                                                                    allowClosedOverride,
+                                                              );
+                                                              break;
+                                                            case 'this_and_following':
+                                                              await apptRepo
+                                                                  .splitAppointmentSeries(
+                                                                clinicId:
+                                                                    clinicId,
+                                                                seriesId:
+                                                                    a.seriesId!,
+                                                                splitFromAppointmentId:
+                                                                    appointmentId,
+                                                                newStartTimeLocal:
+                                                                    startTimeLocal,
+                                                                newDurationMinutes:
+                                                                    durationMinutes,
+                                                                conflictPolicy:
+                                                                    'BLOCK',
+                                                              );
+                                                              break;
+                                                            case 'entire_series':
+                                                              await apptRepo
+                                                                  .updateAppointmentSeries(
+                                                                clinicId:
+                                                                    clinicId,
+                                                                seriesId:
+                                                                    a.seriesId!,
+                                                                startTimeLocal:
+                                                                    startTimeLocal,
+                                                                durationMinutes:
+                                                                    durationMinutes,
+                                                                tz: _tz,
+                                                                effectiveFromMs: a
+                                                                    .start
+                                                                    .toUtc()
+                                                                    .millisecondsSinceEpoch,
+                                                                preserveExceptions:
+                                                                    true,
+                                                                conflictPolicy:
+                                                                    'BLOCK',
+                                                              );
+                                                              break;
+                                                          }
+                                                        }
+
+                                                        if (!isOverlap) {
+                                                          try {
+                                                            await performUpdate(
+                                                                allowClosedOverride:
+                                                                    false);
+                                                          } on ClinicClosureConflictException {
+                                                            _showClosedSnack(
+                                                              message:
+                                                                  'Clinic closure conflict.',
+                                                            );
+                                                          }
+                                                          return;
+                                                        }
+
+                                                        if (!_canOverrideClosures(
+                                                            context)) {
+                                                          _showClosedSnack();
+                                                          return;
+                                                        }
+
+                                                        final ok =
+                                                            await _confirmClosedOverrideDialog();
+                                                        if (!mounted || !ok)
+                                                          return;
+
+                                                        try {
+                                                          await performUpdate(
+                                                              allowClosedOverride:
+                                                                  true);
+                                                        } on ClinicClosureConflictException {
+                                                          _showClosedSnack(
+                                                            message:
+                                                                'Clinic closure conflict.',
+                                                          );
+                                                        }
+                                                      },
+                                                      onTap: (appt) =>
+                                                          _onTapAppointment(
+                                                        clinicId: clinicId,
+                                                        appt: appt,
+                                                        apptRepo: apptRepo,
+                                                        servicesRepo:
+                                                            servicesRepo,
+                                                      ),
+                                                    ),
+                                                ],
+                                              ),
+                                            ),
                                           ),
                                         ),
-                                      ),
+                                      ],
                                     ),
-                                  ],
+                                  ),
                                 ),
-                              ),
-                            ),
-                          ],
-                        );
+                              ],
+                            );
+                          },
+                        ); // StreamBuilder<CalendarDisplaySettings>
                       },
-                    ); // StreamBuilder<CalendarDisplaySettings>
+                    );
                   },
                 );
               },
             );
           },
         );
-      },
-    );
       },
     );
   }
@@ -1464,7 +1633,8 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
 
     final clinicCtx = context.read<ClinicContext>();
     final canCreateNote = canEditClinicalNotes(clinicCtx.session.permissions);
-    final canWriteSchedule = clinicCtx.session.permissions.has('schedule.write');
+    final canWriteSchedule =
+        clinicCtx.session.permissions.has('schedule.write');
     final action = await _showBookingActions(
       appt,
       canCreateNote: canCreateNote,
@@ -1500,13 +1670,15 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
               ListTile(
                 leading: const Icon(Icons.description_outlined),
                 title: const Text('Basic SOAP note'),
-                subtitle: const Text('Free-text subjective, objective, assessment, plan'),
+                subtitle: const Text(
+                    'Free-text subjective, objective, assessment, plan'),
                 onTap: () => Navigator.pop(ctx, 'basicSoap'),
               ),
               ListTile(
                 leading: const Icon(Icons.assignment_outlined),
                 title: const Text('Initial Assessment'),
-                subtitle: const Text('Structured, region-specific initial assessment'),
+                subtitle: const Text(
+                    'Structured, region-specific initial assessment'),
                 onTap: () => Navigator.pop(ctx, 'initialAssessment'),
               ),
               ListTile(
@@ -1563,6 +1735,7 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
           clinicId: clinicId,
           appt: appt,
           servicesRepo: servicesRepo,
+          locationsRepo: context.read<LocationsRepository>(),
         ),
       );
 
@@ -1577,6 +1750,7 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
             end: edited.end,
             kind: edited.kind,
             serviceId: edited.serviceId,
+            locationId: edited.locationId,
           );
         } else {
           switch (editScope ?? 'this_only') {
@@ -1652,8 +1826,10 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
           );
           if (!mounted) return;
           // F4: Show waitlist matches when toggle is on
-          final displaySettingsRepo = context.read<CalendarDisplaySettingsRepository>();
-          final displaySettings = await displaySettingsRepo.getSettings(clinicId);
+          final displaySettingsRepo =
+              context.read<CalendarDisplaySettingsRepository>();
+          final displaySettings =
+              await displaySettingsRepo.getSettings(clinicId);
           if (displaySettings.showWaitlistMatchesOnCancel && mounted) {
             final waitlistRepo = context.read<WaitlistRepository>();
             final allEntries = await waitlistRepo.watchEntries(clinicId).first;
@@ -1665,7 +1841,8 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
                   matches: matches,
                   freedSlotStart: appt.start,
                   freedSlotEnd: appt.end,
-                  onRemove: (entry) => waitlistRepo.removeEntry(clinicId, entry.id),
+                  onRemove: (entry) =>
+                      waitlistRepo.removeEntry(clinicId, entry.id),
                 ),
               );
               if (!mounted) return;
@@ -1673,14 +1850,15 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
                 await _startBookingFlowDialog(
                   clinicId: clinicId,
                   apptRepo: apptRepo,
-                  servicesRepo: servicesRepo,
                   slotStart: appt.start,
                   adminGridMinutes: 15,
                   defaultSlotMinutes: appt.end.difference(appt.start).inMinutes,
                   waitlistEntry: result.entry,
                 );
                 if (mounted) {
-                  await context.read<WaitlistRepository>().removeEntry(clinicId, result.entry!.id);
+                  await context
+                      .read<WaitlistRepository>()
+                      .removeEntry(clinicId, result.entry!.id);
                   setState(() => _pendingWaitlistEntry = null);
                 }
               } else if (mounted) {
@@ -1718,17 +1896,23 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
               final reason = billing['reason'] as String?;
               final errors = billing['validationErrors'] as List<dynamic>?;
               if (reason == 'billing_not_configured') {
-                message = 'Status updated. No invoice: set up Billing in Clinic Settings first.';
-              } else if (reason == 'validation' && errors != null && errors.isNotEmpty) {
+                message =
+                    'Status updated. No invoice: set up Billing in Clinic Settings first.';
+              } else if (reason == 'validation' &&
+                  errors != null &&
+                  errors.isNotEmpty) {
                 final firstErr = errors.first;
-                final first = firstErr is Map ? firstErr['message']?.toString() ?? '' : '';
+                final first = firstErr is Map
+                    ? firstErr['message']?.toString() ?? ''
+                    : '';
                 message = first.isNotEmpty
                     ? 'Status updated. No invoice: $first'
                     : 'Status updated. No invoice: check service price and tax in Billing settings.';
               } else if (reason == 'already_invoiced') {
                 message = 'Status updated. Invoice already existed.';
               } else if (reason == 'no_patient') {
-                message = 'Status updated. No invoice: appointment has no patient.';
+                message =
+                    'Status updated. No invoice: appointment has no patient.';
               } else {
                 message = 'Status updated. No invoice created.';
               }
@@ -1737,7 +1921,9 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: Text(message),
-              duration: status == 'attended' ? const Duration(seconds: 4) : const Duration(seconds: 2),
+              duration: status == 'attended'
+                  ? const Duration(seconds: 4)
+                  : const Duration(seconds: 2),
             ),
           );
         }
@@ -1808,7 +1994,8 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (appt.isSeriesOccurrence && BookingCalendarScreen.showRecurrenceUI)
+            if (appt.isSeriesOccurrence &&
+                BookingCalendarScreen.showRecurrenceUI)
               ListTile(
                 leading: const Icon(Icons.repeat),
                 title: const Text('Repeating appointment'),
@@ -1867,14 +2054,21 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
     List<WaitlistEntry> entries,
     Appointment appt,
   ) {
-    final slotDate = DateTime(appt.start.year, appt.start.month, appt.start.day);
+    final slotDate =
+        DateTime(appt.start.year, appt.start.month, appt.start.day);
     final list = entries.where((e) {
       if (e.preferredPractitionerIds.isNotEmpty &&
-          !e.preferredPractitionerIds.contains(appt.practitionerId)) return false;
+          !e.preferredPractitionerIds.contains(appt.practitionerId))
+        return false;
       if (e.preferredAppointmentTypeIds.isNotEmpty &&
           !e.preferredAppointmentTypeIds.contains(appt.serviceId)) return false;
-      if (e.earliestDate != null && slotDate.isBefore(DateTime(e.earliestDate!.year, e.earliestDate!.month, e.earliestDate!.day))) return false;
-      if (e.latestDate != null && slotDate.isAfter(DateTime(e.latestDate!.year, e.latestDate!.month, e.latestDate!.day))) return false;
+      if (e.earliestDate != null &&
+          slotDate.isBefore(DateTime(e.earliestDate!.year,
+              e.earliestDate!.month, e.earliestDate!.day))) return false;
+      if (e.latestDate != null &&
+          slotDate.isAfter(DateTime(
+              e.latestDate!.year, e.latestDate!.month, e.latestDate!.day)))
+        return false;
       return true;
     }).toList();
     list.sort((a, b) {
@@ -1923,7 +2117,8 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
     required String appointmentId,
     required String status,
   }) async {
-    final res = await _functions.httpsCallable('updateAppointmentStatusFn').call({
+    final res =
+        await _functions.httpsCallable('updateAppointmentStatusFn').call({
       'clinicId': clinicId,
       'appointmentId': appointmentId,
       'status': status,
@@ -1938,294 +2133,64 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
   Future<void> _startBookingFlowDialog({
     required String clinicId,
     required AppointmentsRepository apptRepo,
-    required ServicesRepository servicesRepo,
     required DateTime slotStart,
     required int adminGridMinutes,
     required int defaultSlotMinutes,
     WaitlistEntry? waitlistEntry,
   }) async {
-    try {
-      // Preload services and members while user chooses action so pickers open fast.
-      final staffRepo = context.read<StaffRepository>();
-      final preloadServicesFuture = servicesRepo.activeServices(clinicId).first;
-      final preloadMembersFuture = staffRepo.watchMembershipsWithFallback(clinicId).first;
-
-      final action = await showDialog<_BookingAction>(
-        context: context,
-        builder: (_) => _ActionDialog(slotStart: slotStart),
-      );
-      if (!mounted) return;
-      if (action == null) return;
-
-      _PickedService? pickedService;
-      _PickedPractitioner? pickedPractitioner;
-
-      if (action != _BookingAction.adminBlock) {
-        List<Service>? initialServices;
-        List<MemberDocSnapshot>? initialMembers;
-        try {
-          final results = await Future.wait([
-            preloadServicesFuture,
-            preloadMembersFuture,
-          ]).timeout(const Duration(seconds: 10));
-          initialServices = results[0] as List<Service>;
-          initialMembers = results[1] as List<MemberDocSnapshot>;
-        } catch (_) {
-          // Fall back to dialogs loading themselves
-        }
-
-        pickedService = await showDialog<_PickedService>(
-          context: context,
-          barrierDismissible: false,
-          builder: (_) => _ServicePickerDialog(
-            clinicId: clinicId,
-            servicesRepo: servicesRepo,
-            initialServices: initialServices,
-          ),
-        );
-        if (!mounted) return;
-        if (pickedService == null) return;
-
-        pickedPractitioner = await showDialog<_PickedPractitioner>(
-          context: context,
-          barrierDismissible: false,
-          builder: (_) => _PractitionerPickerDialog(
-            clinicId: clinicId,
-            initialMembers: initialMembers,
-          ),
-        );
-        if (!mounted) return;
-        if (pickedPractitioner == null) return;
-
-        if (!pickedPractitioner.canScheduleWrite) {
-          if (!mounted) return;
-          await _showFatalDialog(
-            title: 'Cannot book this practitioner',
-            message:
-                'Selected practitioner does not have schedule.write permission.',
-          );
-          return;
-        }
-      }
-
-      final suggestedInitial = (pickedService?.defaultMinutes ?? 0) > 0
-          ? pickedService!.defaultMinutes
-          : defaultSlotMinutes;
-
-      final lengthOptions = _buildLengthOptions(
-        adminGridMinutes: adminGridMinutes,
-        include: {15, 20, 30, 45, 60, 90, 120},
-        maxMinutes: 240,
-      );
-
-      final minutes = await showDialog<int>(
-        context: context,
-        builder: (_) => _LengthPickerDialog(
-          initial: suggestedInitial,
-          options: lengthOptions,
-        ),
-      );
-      if (!mounted) return;
-      if (minutes == null) return;
-
-      final end = slotStart.add(Duration(minutes: minutes));
-
-      if (action == _BookingAction.adminBlock) {
-        final ok = await showDialog<bool>(
-              context: context,
-              builder: (_) =>
-                  _ConfirmAdminBlockDialog(slotStart: slotStart, slotEnd: end),
-            ) ??
-            false;
-
-        if (!mounted) return;
-        if (!ok) return;
-
-        await apptRepo.createAppointment(
-          clinicId: clinicId,
-          kind: 'admin',
-          start: slotStart,
-          end: end,
-        );
-
-        if (!mounted) return;
-        apptRepo.invalidateAppointmentsCache();
-        setState(() {
-          _cachedAppointmentsKey = null;
-          _cachedAppointmentsStream = null;
-        });
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-                'Created admin block ${_fmtTime(slotStart)}–${_fmtTime(end)}'),
-          ),
-        );
-        return;
-      }
-
-      String patientId;
-      _PatientSnapshot patientSnapshot;
-
-      if (waitlistEntry != null) {
-        patientId = waitlistEntry.patientId;
-        patientSnapshot = _PatientSnapshot(
-          id: patientId,
-          firstName: waitlistEntry.displayLabel,
-          lastName: '',
-          dob: DateTime(2000, 1, 1),
-          phone: '',
-          email: '',
-        );
-      } else {
-        final patientMode = await showDialog<_PatientMode>(
-          context: context,
-          builder: (_) => _PatientModeDialog(action: action),
-        );
-        if (!mounted) return;
-        if (patientMode == null) return;
-
-        if (patientMode == _PatientMode.createNew) {
-        final created = await showDialog<_PatientSnapshot>(
-          context: context,
-          barrierDismissible: false,
-          builder: (_) => const _NewPatientDialog(),
-        );
-
-        if (!mounted) return;
-        if (created == null) return;
-
-        final newId =
-            await _createPatientInClinic(clinicId: clinicId, patient: created);
-        if (!mounted) return;
-
-        patientId = newId;
-        patientSnapshot = created.copyWith(id: newId);
-      } else {
+    final success = await NewBookingForm.open(
+      context,
+      clinicId: clinicId,
+      slotStart: slotStart,
+      defaultSlotMinutes: defaultSlotMinutes,
+      adminGridMinutes: adminGridMinutes,
+      initialLocationId: null,
+      waitlistEntry: waitlistEntry,
+      onFindPatient: (ctx) async {
         final picked = await showDialog<_PatientSnapshot>(
-          context: context,
+          context: ctx,
           barrierDismissible: false,
           builder: (_) => _PatientFinderDialog(clinicId: clinicId),
         );
-
-        if (!mounted) return;
-        if (picked == null) return;
-        if (picked.id == null) return;
-
-        patientId = picked.id!;
-        patientSnapshot = picked;
-      }
-      }
-
-      final kind = (action == _BookingAction.newPatient) ? 'new' : 'followup';
-
-      final ok = await showDialog<bool>(
-            context: context,
-            builder: (_) => _ConfirmBookingDialog(
-              kind: kind,
-              slotStart: slotStart,
-              slotEnd: end,
-              patient: patientSnapshot,
-            ),
-          ) ??
-          false;
-
-      if (!mounted) return;
-      if (!ok) return;
-
-      final RecurrenceDraft? repeat = BookingCalendarScreen.showRecurrenceUI
-          ? await showDialog<RecurrenceDraft?>(
-              context: context,
-              builder: (_) => _RecurrenceDialog(initialDay: slotStart),
-            )
-          : RecurrenceDraft.none;
-      if (!mounted) return;
-      if (repeat == null) return;
-
-      final tz = _tz;
-
-      if (repeat.isNone) {
-        await apptRepo.createAppointment(
-          clinicId: clinicId,
-          kind: kind,
-          patientId: patientId,
-          serviceId: pickedService!.id,
-          practitionerId: pickedPractitioner!.uid,
-          start: slotStart,
-          end: end,
+        if (picked == null || picked.id == null) return null;
+        return BookingPatientResult(
+          id: picked.id!,
+          displayLabel: picked.fullName.isEmpty ? 'Patient' : picked.fullName,
         );
-        if (waitlistEntry != null && mounted) {
-          await context.read<WaitlistRepository>().removeEntry(clinicId, waitlistEntry.id);
-          if (mounted) setState(() => _pendingWaitlistEntry = null);
-        }
-      } else {
-        final result = await apptRepo.createAppointmentSeries(
-          clinicId: clinicId,
-          kind: kind,
-          patientId: patientId,
-          serviceId: pickedService!.id,
-          practitionerId: pickedPractitioner!.uid,
-          tz: tz,
-          start: slotStart,
-          durationMinutes: minutes,
-          rule: repeat.toJson(),
-          generateDaysAhead: 180,
-          conflictPolicy: 'BLOCK',
+      },
+      onCreatePatient: (ctx) async {
+        final created = await showDialog<_PatientSnapshot>(
+          context: ctx,
+          barrierDismissible: false,
+          builder: (_) => const _NewPatientDialog(),
         );
-        final ids = result['createdAppointmentIds'] as List<dynamic>? ?? [];
-        if (!mounted) return;
-        apptRepo.invalidateAppointmentsCache();
-        setState(() {
-          _cachedAppointmentsKey = null;
-          _cachedAppointmentsStream = null;
-        });
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Created repeating appointments (${ids.length})'),
-          ),
+        if (created == null) return null;
+        final newId =
+            await _createPatientInClinic(clinicId: clinicId, patient: created);
+        if (!ctx.mounted) return null;
+        return BookingPatientResult(
+          id: newId,
+          displayLabel:
+              created.fullName.isEmpty ? 'Patient' : created.fullName,
         );
-        return;
-      }
-
-      if (!mounted) return;
-      apptRepo.invalidateAppointmentsCache();
-      setState(() {
-        _cachedAppointmentsKey = null;
-        _cachedAppointmentsStream = null;
-      });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-              'Created $kind booking ${_fmtTime(slotStart)}–${_fmtTime(end)}'),
-        ),
-      );
-    } on ClinicClosureConflictException {
-      _showClosedSnack(message: 'Clinic closure conflict.');
-      return;
-    } on PractitionerOverlapException catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.message)),
-      );
-      return;
-    } on FirebaseFunctionsException catch (e, st) {
-      debugPrint(
-          '[BookingCalendar] Functions error: code=${e.code} message=${e.message} details=${e.details}\n$st');
-      if (!mounted) return;
-      final msg = (e.message != null && e.message!.trim().isNotEmpty)
-          ? e.message!
-          : 'Server error (${e.code}). Check Firebase Functions logs for details.';
-      await _showFatalDialog(
-        title: 'Create appointment failed',
-        message: msg,
-      );
-    } catch (e, st) {
-      debugPrint('[BookingCalendar] Booking flow error: $e\n$st');
-      if (!mounted) return;
-      await _showFatalDialog(
-        title: 'Booking flow failed',
-        message: e.toString(),
-      );
+      },
+    );
+    if (!mounted || success != true) return;
+    apptRepo.invalidateAppointmentsCache();
+    setState(() {
+      _cachedAppointmentsKey = null;
+      _cachedAppointmentsStream = null;
+    });
+    if (waitlistEntry != null) {
+      await context
+          .read<WaitlistRepository>()
+          .removeEntry(clinicId, waitlistEntry.id);
+      if (mounted) setState(() => _pendingWaitlistEntry = null);
     }
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Booking created')),
+    );
   }
 
   Future<void> _updateAppointment({
@@ -2320,11 +2285,16 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
 
   static int _defaultViewToDays(String defaultView) {
     switch (defaultView) {
-      case 'day': return 1;
-      case '3days': return 3;
-      case 'week': return 7;
-      case 'month': return 30;
-      default: return 7;
+      case 'day':
+        return 1;
+      case '3days':
+        return 3;
+      case 'week':
+        return 7;
+      case 'month':
+        return 30;
+      default:
+        return 7;
     }
   }
 
@@ -2333,7 +2303,20 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
   /// Format week-start for toolbar: "Mon 23 Feb 2026"
   static String _fmtWeekStart(DateTime d) {
     const weekdays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const months = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec'
+    ];
     final w = weekdays[(d.weekday - 1) % 7];
     final m = months[d.month - 1];
     return '$w ${d.day} $m ${d.year}';
@@ -2341,7 +2324,20 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
 
   /// Format for month view toolbar: "February 2026"
   static String _fmtMonthStart(DateTime d) {
-    const months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+    const months = [
+      'January',
+      'February',
+      'March',
+      'April',
+      'May',
+      'June',
+      'July',
+      'August',
+      'September',
+      'October',
+      'November',
+      'December'
+    ];
     return '${months[d.month - 1]} ${d.year}';
   }
 
@@ -2514,10 +2510,12 @@ class _MonthCalendarGrid extends StatelessWidget {
     const int cols = 7;
 
     int countFor(DateTime date) {
-      return appts.where((a) =>
-          a.start.year == date.year &&
-          a.start.month == date.month &&
-          a.start.day == date.day).length;
+      return appts
+          .where((a) =>
+              a.start.year == date.year &&
+              a.start.month == date.month &&
+              a.start.day == date.day)
+          .length;
     }
 
     return Padding(
@@ -2527,17 +2525,19 @@ class _MonthCalendarGrid extends StatelessWidget {
         children: [
           // Weekday headers
           Row(
-            children: List.generate(cols, (c) => Expanded(
-              child: Center(
-                child: Text(
-                  weekdays[c],
-                  style: theme.textTheme.labelMedium?.copyWith(
-                    color: scheme.onSurfaceVariant,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
-            )),
+            children: List.generate(
+                cols,
+                (c) => Expanded(
+                      child: Center(
+                        child: Text(
+                          weekdays[c],
+                          style: theme.textTheme.labelMedium?.copyWith(
+                            color: scheme.onSurfaceVariant,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    )),
           ),
           const SizedBox(height: 8),
           // Grid of days
@@ -2553,7 +2553,8 @@ class _MonthCalendarGrid extends StatelessWidget {
               itemBuilder: (context, index) {
                 final dayOffset = index;
                 final date = firstCell.add(Duration(days: dayOffset));
-                final isCurrentMonth = date.month == monthStart.month && date.year == monthStart.year;
+                final isCurrentMonth = date.month == monthStart.month &&
+                    date.year == monthStart.year;
                 final count = countFor(date);
                 final isToday = _isToday(date);
 
@@ -2567,10 +2568,15 @@ class _MonthCalendarGrid extends StatelessWidget {
                     child: Container(
                       decoration: BoxDecoration(
                         color: isCurrentMonth
-                            ? (isToday ? scheme.primaryContainer.withValues(alpha: 0.5) : scheme.surfaceContainerHighest.withValues(alpha: 0.4))
+                            ? (isToday
+                                ? scheme.primaryContainer.withValues(alpha: 0.5)
+                                : scheme.surfaceContainerHighest
+                                    .withValues(alpha: 0.4))
                             : scheme.surface.withValues(alpha: 0.5),
                         borderRadius: BorderRadius.circular(8),
-                        border: isToday ? Border.all(color: scheme.primary, width: 1.5) : null,
+                        border: isToday
+                            ? Border.all(color: scheme.primary, width: 1.5)
+                            : null,
                       ),
                       padding: const EdgeInsets.all(6),
                       child: Column(
@@ -2579,14 +2585,18 @@ class _MonthCalendarGrid extends StatelessWidget {
                           Text(
                             '${date.day}',
                             style: theme.textTheme.titleSmall?.copyWith(
-                              color: isCurrentMonth ? scheme.onSurface : scheme.onSurface.withValues(alpha: 0.5),
-                              fontWeight: isToday ? FontWeight.bold : FontWeight.w500,
+                              color: isCurrentMonth
+                                  ? scheme.onSurface
+                                  : scheme.onSurface.withValues(alpha: 0.5),
+                              fontWeight:
+                                  isToday ? FontWeight.bold : FontWeight.w500,
                             ),
                           ),
                           if (count > 0) ...[
                             const SizedBox(height: 2),
                             Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 6, vertical: 2),
                               decoration: BoxDecoration(
                                 color: scheme.primary.withValues(alpha: 0.2),
                                 borderRadius: BorderRadius.circular(10),
@@ -2708,7 +2718,8 @@ class _RightCluster extends StatelessWidget {
   Widget build(BuildContext context) {
     Widget viewControl;
     if (collapseToDropdown) {
-      final effective = _segmentValues.contains(viewModeDays) ? viewModeDays : 7;
+      final effective =
+          _segmentValues.contains(viewModeDays) ? viewModeDays : 7;
       viewControl = _ViewModeDropdown(
         value: effective,
         onChanged: onViewModeChanged,
@@ -2752,7 +2763,8 @@ class _RightCluster extends StatelessWidget {
                   onTap: onPickDate,
                   borderRadius: BorderRadius.circular(4),
                   child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
                     child: Text(
                       weekStartLabel,
                       style: theme.textTheme.bodyLarge?.copyWith(
@@ -2907,9 +2919,7 @@ class _Segment extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = theme.colorScheme;
     return Material(
-      color: selected
-          ? scheme.surface
-          : Colors.transparent,
+      color: selected ? scheme.surface : Colors.transparent,
       borderRadius: BorderRadius.circular(6),
       child: InkWell(
         onTap: onTap,
@@ -2967,6 +2977,7 @@ class _ViewModeDropdown extends StatelessWidget {
   final int value;
   final ValueChanged<int> onChanged;
   final ThemeData theme;
+
   /// When true, show 1 Day | 7 Days | Month (for header collapsed mode).
   final bool headerSegments;
 
@@ -2993,7 +3004,8 @@ class _ViewModeDropdown extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final labels = headerSegments ? _headerLabels : _labels;
-    final safeValue = labels.containsKey(value) ? value : (headerSegments ? 7 : 7);
+    final safeValue =
+        labels.containsKey(value) ? value : (headerSegments ? 7 : 7);
     return DropdownButton<int>(
       value: safeValue,
       style: theme.textTheme.bodyMedium?.copyWith(
@@ -3022,6 +3034,7 @@ class _PractitionerInlineDropdown extends StatelessWidget {
   final ValueChanged<String?> onChanged;
   final bool compact;
   final ThemeData theme;
+
   /// When true, use 32px height and outlined style for header Zone A.
   final bool headerStyle;
   final List<String> visiblePractitionerIds;
@@ -3092,9 +3105,21 @@ class _PractitionerInlineDropdown extends StatelessWidget {
           if (visiblePractitionerIds.isNotEmpty) {
             final visibleSet = visiblePractitionerIds.toSet();
             practitioners.removeWhere((d) => !visibleSet.contains(d.id));
+            if (practitioners.isEmpty && docs.isNotEmpty) {
+              practitioners.clear();
+              final added = <String>{};
+              for (final d in docs) {
+                if (!_isActiveLike(d.data())) continue;
+                if (!added.add(d.id)) continue;
+                practitioners.add(d);
+              }
+            }
           }
           if (orderPractitionerIds.isNotEmpty) {
-            final orderIndex = {for (var i = 0; i < orderPractitionerIds.length; i++) orderPractitionerIds[i]: i};
+            final orderIndex = {
+              for (var i = 0; i < orderPractitionerIds.length; i++)
+                orderPractitionerIds[i]: i
+            };
             practitioners.sort((a, b) {
               final ai = orderIndex[a.id] ?? 9999;
               final bi = orderIndex[b.id] ?? 9999;
@@ -3599,9 +3624,12 @@ class _ClinicClosure {
     if (v is Map) {
       final sec = v['seconds'] ?? v['_seconds'];
       if (sec != null) {
-        final ms = (sec is int ? sec : int.tryParse(sec.toString()) ?? 0) * 1000;
+        final ms =
+            (sec is int ? sec : int.tryParse(sec.toString()) ?? 0) * 1000;
         final nano = v['nanoseconds'] ?? v['_nanoseconds'] ?? 0;
-        final nanoMs = (nano is int ? nano : int.tryParse(nano.toString()) ?? 0) ~/ 1000000;
+        final nanoMs =
+            (nano is int ? nano : int.tryParse(nano.toString()) ?? 0) ~/
+                1000000;
         return DateTime.fromMillisecondsSinceEpoch(ms + nanoMs).toUtc();
       }
     }
@@ -3773,11 +3801,13 @@ class _EditBookingResult {
   final DateTime end;
   final String kind; // 'new' | 'followup'
   final String? serviceId;
+  final String? locationId;
   const _EditBookingResult({
     required this.start,
     required this.end,
     required this.kind,
     this.serviceId,
+    this.locationId,
   });
 }
 
@@ -3785,11 +3815,13 @@ class _EditBookingDialog extends StatefulWidget {
   final String clinicId;
   final Appointment appt;
   final ServicesRepository servicesRepo;
+  final LocationsRepository locationsRepo;
 
   const _EditBookingDialog({
     required this.clinicId,
     required this.appt,
     required this.servicesRepo,
+    required this.locationsRepo,
   });
 
   @override
@@ -3801,6 +3833,7 @@ class _EditBookingDialogState extends State<_EditBookingDialog> {
   late int _minutes;
   late String _kind;
   String? _serviceId;
+  String? _locationId;
 
   @override
   void initState() {
@@ -3811,6 +3844,8 @@ class _EditBookingDialogState extends State<_EditBookingDialog> {
     _kind = (widget.appt.kind.toLowerCase() == 'new') ? 'new' : 'followup';
     _serviceId =
         widget.appt.serviceId.trim().isEmpty ? null : widget.appt.serviceId;
+    final loc = widget.appt.locationId?.trim();
+    _locationId = (loc == null || loc.isEmpty) ? null : loc;
   }
 
   DateTime get _end => _start.add(Duration(minutes: _minutes));
@@ -3824,7 +3859,8 @@ class _EditBookingDialogState extends State<_EditBookingDialog> {
     );
     if (date == null || !mounted) return;
     setState(() {
-      _start = DateTime(date.year, date.month, date.day, _start.hour, _start.minute);
+      _start =
+          DateTime(date.year, date.month, date.day, _start.hour, _start.minute);
     });
   }
 
@@ -3868,6 +3904,39 @@ class _EditBookingDialogState extends State<_EditBookingDialog> {
               ],
               onChanged: (v) => setState(() => _kind = v ?? 'followup'),
               decoration: const InputDecoration(labelText: 'Appointment type'),
+            ),
+            const SizedBox(height: 16),
+            StreamBuilder<List<ClinicLocation>>(
+              stream: widget.locationsRepo
+                  .watchLocations(widget.clinicId)
+                  .map((list) => list.where((l) => l.active).toList()),
+              builder: (context, snap) {
+                final locations = snap.data ?? [];
+                final allowedIds = locations.map((l) => l.id).toSet();
+                final safeValue = (_locationId != null &&
+                        allowedIds.contains(_locationId))
+                    ? _locationId
+                    : null;
+                return DropdownButtonFormField<String?>(
+                  value: safeValue,
+                  decoration: const InputDecoration(
+                    labelText: 'Location',
+                    hintText: 'No location',
+                  ),
+                  items: [
+                    const DropdownMenuItem<String?>(
+                      value: null,
+                      child: Text('No location'),
+                    ),
+                    for (final loc in locations)
+                      DropdownMenuItem<String?>(
+                        value: loc.id,
+                        child: Text(loc.name),
+                      ),
+                  ],
+                  onChanged: (v) => setState(() => _locationId = v),
+                );
+              },
             ),
             const SizedBox(height: 16),
             ListTile(
@@ -3935,6 +4004,7 @@ class _EditBookingDialogState extends State<_EditBookingDialog> {
               end: _end,
               kind: _kind,
               serviceId: _serviceId,
+              locationId: _locationId,
             ),
           ),
           child: const Text('Save'),
@@ -4054,15 +4124,18 @@ class _CurrentTimeIndicatorState extends State<_CurrentTimeIndicator> {
   @override
   Widget build(BuildContext context) {
     final now = _now;
-    final todayIndex = widget.days.indexWhere((d) => DateUtils.isSameDay(d, now));
+    final todayIndex =
+        widget.days.indexWhere((d) => DateUtils.isSameDay(d, now));
     if (todayIndex < 0) return const SizedBox.shrink();
 
     final startMins = widget.displayStartHour * 60;
     final endMins = widget.displayEndHour * 60;
     final nowMins = now.hour * 60 + now.minute;
-    if (nowMins < startMins || nowMins >= endMins) return const SizedBox.shrink();
+    if (nowMins < startMins || nowMins >= endMins)
+      return const SizedBox.shrink();
 
-    final top = widget.headerHeight + (nowMins - startMins) * widget.pxPerMinute;
+    final top =
+        widget.headerHeight + (nowMins - startMins) * widget.pxPerMinute;
     final left = todayIndex * widget.dayWidth;
 
     return Positioned(
@@ -4146,7 +4219,8 @@ class _WeekGrid extends StatelessWidget {
                                   ),
                         ),
                       ),
-                      if (showClosedDayLabel && !weeklyHours.isOpen(_WeeklyHours.dayKeyFromDate(d)))
+                      if (showClosedDayLabel &&
+                          !weeklyHours.isOpen(_WeeklyHours.dayKeyFromDate(d)))
                         Text(
                           'Closed',
                           style:
@@ -4293,9 +4367,8 @@ class _ServicePickerDialog extends StatelessWidget {
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                 ),
-          trailing: s.defaultMinutes > 0
-              ? Text('${s.defaultMinutes} min')
-              : null,
+          trailing:
+              s.defaultMinutes > 0 ? Text('${s.defaultMinutes} min') : null,
           onTap: () => Navigator.pop(
             context,
             _PickedService(
@@ -4374,8 +4447,7 @@ class _PractitionerPickerDialog extends StatelessWidget {
 
   static List<MemberDocSnapshot> _activeMembersSorted(
       List<MemberDocSnapshot> docs) {
-    final active =
-        docs.where((d) => d.data()['active'] == true).toList();
+    final active = docs.where((d) => d.data()['active'] == true).toList();
     active.sort((a, b) {
       final aCan = _canScheduleWrite(a.data());
       final bCan = _canScheduleWrite(b.data());
@@ -4887,7 +4959,8 @@ class _PatientFinderDialogState extends State<_PatientFinderDialog> {
   Object? _loadError;
   bool _loading = true;
 
-  static final _functions = FirebaseFunctions.instanceFor(region: 'europe-west3');
+  static final _functions =
+      FirebaseFunctions.instanceFor(region: 'europe-west3');
 
   @override
   void initState() {
@@ -5022,7 +5095,7 @@ class _PatientFinderDialogState extends State<_PatientFinderDialog> {
       final message = isPermissionDenied
           ? 'You don\'t have permission to search patients. '
               'Please ask an admin to grant patients.read.'
-          : 'Failed to load patients:\n$e';
+          : messageForCallableError(e, fallback: 'Failed to load patients. Please try again.');
       return Center(
         child: Padding(
           padding: const EdgeInsets.all(16),
@@ -5233,7 +5306,8 @@ class _ConfirmBookingDialog extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(typeLabel, style: const TextStyle(fontWeight: FontWeight.w700)),
+            Text(typeLabel,
+                style: const TextStyle(fontWeight: FontWeight.w700)),
             const SizedBox(height: 8),
             Text('When: $date • $time'),
             const SizedBox(height: 8),
@@ -5284,7 +5358,8 @@ class _WaitlistMatchesDialog extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final slotStr = '${freedSlotStart.day}/${freedSlotStart.month}/${freedSlotStart.year} ${_timeStr(freedSlotStart)}–${_timeStr(freedSlotEnd)}';
+    final slotStr =
+        '${freedSlotStart.day}/${freedSlotStart.month}/${freedSlotStart.year} ${_timeStr(freedSlotStart)}–${_timeStr(freedSlotEnd)}';
 
     return AlertDialog(
       title: const Text('Waitlist matches'),
@@ -5301,60 +5376,70 @@ class _WaitlistMatchesDialog extends StatelessWidget {
             ),
             const SizedBox(height: 12),
             ...matches.map((e) => Card(
-              margin: const EdgeInsets.only(bottom: 8),
-              child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      e.displayLabel,
-                      style: theme.textTheme.titleSmall?.copyWith(
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    if (e.priority != 0 || (e.notes?.trim().isNotEmpty == true))
-                      Padding(
-                        padding: const EdgeInsets.only(top: 4),
-                        child: Text(
-                          [
-                            if (e.priority != 0) 'Priority ${e.priority}',
-                            if (e.notes?.trim().isNotEmpty == true) e.notes!.trim(),
-                          ].join(' · '),
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: theme.colorScheme.onSurfaceVariant,
+                  margin: const EdgeInsets.only(bottom: 8),
+                  child: Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          e.displayLabel,
+                          style: theme.textTheme.titleSmall?.copyWith(
+                            fontWeight: FontWeight.w600,
                           ),
                         ),
-                      ),
-                    const SizedBox(height: 8),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.end,
-                      children: [
-                        TextButton(
-                          onPressed: () async {
-                            await onRemove(e);
-                            if (context.mounted) Navigator.pop(context, _WaitlistMatchResult(action: 'dismiss', entry: null));
-                          },
-                          child: const Text('Remove from waitlist'),
-                        ),
-                        const SizedBox(width: 8),
-                        FilledButton(
-                          onPressed: () => Navigator.pop(context, _WaitlistMatchResult(action: 'book', entry: e)),
-                          child: const Text('Book into slot'),
+                        if (e.priority != 0 ||
+                            (e.notes?.trim().isNotEmpty == true))
+                          Padding(
+                            padding: const EdgeInsets.only(top: 4),
+                            child: Text(
+                              [
+                                if (e.priority != 0) 'Priority ${e.priority}',
+                                if (e.notes?.trim().isNotEmpty == true)
+                                  e.notes!.trim(),
+                              ].join(' · '),
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: theme.colorScheme.onSurfaceVariant,
+                              ),
+                            ),
+                          ),
+                        const SizedBox(height: 8),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.end,
+                          children: [
+                            TextButton(
+                              onPressed: () async {
+                                await onRemove(e);
+                                if (context.mounted)
+                                  Navigator.pop(
+                                      context,
+                                      _WaitlistMatchResult(
+                                          action: 'dismiss', entry: null));
+                              },
+                              child: const Text('Remove from waitlist'),
+                            ),
+                            const SizedBox(width: 8),
+                            FilledButton(
+                              onPressed: () => Navigator.pop(
+                                  context,
+                                  _WaitlistMatchResult(
+                                      action: 'book', entry: e)),
+                              child: const Text('Book into slot'),
+                            ),
+                          ],
                         ),
                       ],
                     ),
-                  ],
-                ),
-              ),
-            )),
+                  ),
+                )),
           ],
         ),
       ),
       actions: [
         TextButton(
-          onPressed: () => Navigator.pop(context, _WaitlistMatchResult(action: 'dismiss', entry: null)),
+          onPressed: () => Navigator.pop(
+              context, _WaitlistMatchResult(action: 'dismiss', entry: null)),
           child: const Text('Close'),
         ),
       ],

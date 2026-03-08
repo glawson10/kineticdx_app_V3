@@ -3,10 +3,11 @@ import 'dart:async';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
-import 'package:video_player/video_player.dart';
+import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../../app/app_routes.dart';
+import '../../../data/repositories/public_booking_mirror_repository.dart';
 
 /// ----------------------------------------------------------------------------
 /// Clinic branding model (UI-only)
@@ -14,11 +15,9 @@ import '../../../app/app_routes.dart';
 class ClinicBranding {
   final String? clinicLogoAsset; // e.g. assets/fundamental_recovery.png
   final String poweredByText;
-  final String? poweredByLogoAsset; // e.g. assets/kineticdx_logo.png
+  final String? poweredByLogoAsset; // e.g. assets/kineticdx_logo2.png
   final String sloganText;
   final String brandBodyText;
-  final String bookButtonAsset; // assets/book_online.png
-  final String priceButtonAsset; // assets/Price_List.png
   final Color navy;
 
   const ClinicBranding({
@@ -28,19 +27,15 @@ class ClinicBranding {
     this.sloganText = 'Where Insight Meets Recovery',
     this.brandBodyText =
         'Begin the work. Build better movement.\nOne session at a time.\nThis will only take a few minutes.',
-    this.bookButtonAsset = 'assets/book_online.png',
-    this.priceButtonAsset = 'assets/Price_List.png',
     this.navy = const Color(0xFF0B1B3B),
   });
 
   static const ClinicBranding defaults = ClinicBranding(
     clinicLogoAsset: 'assets/fundamental_recovery.png',
-    poweredByLogoAsset: 'assets/kineticdx_logo.png',
+    poweredByLogoAsset: 'assets/kineticdx_logo2.png',
     sloganText: 'Where Insight Meets Recovery',
     brandBodyText:
         'Begin the work. Build better movement.\nOne session at a time.\nThis will only take a few minutes.',
-    bookButtonAsset: 'assets/book_online.png',
-    priceButtonAsset: 'assets/Price_List.png',
     navy: Color(0xFF0B1B3B),
   );
 
@@ -52,24 +47,19 @@ class ClinicBranding {
       poweredByLogoAsset: other.poweredByLogoAsset ?? poweredByLogoAsset,
       sloganText: other.sloganText,
       brandBodyText: other.brandBodyText,
-      bookButtonAsset: other.bookButtonAsset,
-      priceButtonAsset: other.priceButtonAsset,
       navy: other.navy,
     );
   }
 }
 
 /// ----------------------------------------------------------------------------
-/// Intro timeline:
-/// 1) Video plays 6.5s
-/// 2) Fade out video
-/// 3) Message fades in, holds 3.0s, fades out
-/// 4) Navigate to /public/home (BrandIntro)
+/// Intro timeline (no video):
+/// 1) Message fades in, holds 3.0s, fades out
+/// 2) Navigate to /public/home (BrandIntro)
 ///
 /// IMPORTANT:
 /// - Navigation MUST preserve clinicId (and corp) via query OR args.
-/// - /public/home MUST be routed to PublicHomeScreen (NOT IntroScreen),
-///   otherwise you'll loop the video.
+/// - /public/home MUST be routed to PublicHomeScreen (NOT IntroScreen).
 /// ----------------------------------------------------------------------------
 class IntroScreen extends StatefulWidget {
   static const String routeName = AppRoutes.publicIntro;
@@ -99,12 +89,10 @@ class _IntroScreenState extends State<IntroScreen> {
   String? _resolveError;
 
   // Opacity controls
-  double _videoOpacity = 1.0;
   double _messageOpacity = 0.0;
 
   // Timing constants
   static const Duration _fade = Duration(milliseconds: 800);
-  static const Duration _videoDuration = Duration(milliseconds: 6500);
   static const Duration _messageHold = Duration(milliseconds: 3000);
   static const Duration _smallGap = Duration(milliseconds: 120);
 
@@ -195,13 +183,6 @@ class _IntroScreenState extends State<IntroScreen> {
         runId == _timelineRunId &&
         (ModalRoute.of(context)?.isCurrent ?? true);
 
-    await Future.delayed(_videoDuration);
-    if (!stillActive()) return;
-
-    setState(() => _videoOpacity = 0.0);
-    await Future.delayed(_fade + _smallGap);
-    if (!stillActive()) return;
-
     setState(() => _messageOpacity = 1.0);
     await Future.delayed(_fade);
     if (!stillActive()) return;
@@ -282,18 +263,6 @@ class _IntroScreenState extends State<IntroScreen> {
       body: Stack(
         fit: StackFit.expand,
         children: [
-          AnimatedOpacity(
-            opacity: _videoOpacity,
-            duration: _fade,
-            child: _IntroVideo(
-              assetPath: 'assets/intro_h264.mp4',
-              onInitFailed: () {
-                if (!mounted) return;
-                setState(() => _videoOpacity = 0.0);
-                _goToPublicHome();
-              },
-            ),
-          ),
           IgnorePointer(
             ignoring: _messageOpacity == 0.0,
             child: AnimatedOpacity(
@@ -325,80 +294,6 @@ class _IntroScreenState extends State<IntroScreen> {
             ),
           ),
         ],
-      ),
-    );
-  }
-}
-
-/// ----------------------------------------------------------------------------
-/// Intro video widget (asset) — autoplay-safe for mobile browsers
-/// ----------------------------------------------------------------------------
-class _IntroVideo extends StatefulWidget {
-  final String assetPath;
-  final VoidCallback onInitFailed;
-
-  const _IntroVideo({
-    required this.assetPath,
-    required this.onInitFailed,
-  });
-
-  @override
-  State<_IntroVideo> createState() => _IntroVideoState();
-}
-
-class _IntroVideoState extends State<_IntroVideo> {
-  VideoPlayerController? _controller;
-
-  @override
-  void initState() {
-    super.initState();
-    _init();
-  }
-
-  Future<void> _init() async {
-    final c = VideoPlayerController.asset(widget.assetPath);
-    _controller = c;
-
-    try {
-      await c.initialize();
-      await c.setLooping(false);
-      await c.setVolume(0.0); // muted autoplay
-      await c.play();
-
-      if (!mounted) return;
-      setState(() {});
-    } catch (_) {
-      if (!mounted) return;
-      widget.onInitFailed();
-      setState(() {});
-    }
-  }
-
-  @override
-  void dispose() {
-    _controller?.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final c = _controller;
-
-    if (c == null || !c.value.isInitialized) {
-      return const ColoredBox(color: Colors.white);
-    }
-
-    return ColoredBox(
-      color: Colors.white,
-      child: Center(
-        child: FittedBox(
-          fit: BoxFit.cover,
-          child: SizedBox(
-            width: c.value.size.width,
-            height: c.value.size.height,
-            child: VideoPlayer(c),
-          ),
-        ),
       ),
     );
   }
@@ -577,28 +472,23 @@ class _BrandIntroScreenState extends State<BrandIntroScreen>
     return _buildClinicLogoAsset(height);
   }
 
-  DocumentReference<Map<String, dynamic>> _publicConfigDoc() {
-    return FirebaseFirestore.instance
-        .collection('clinics')
-        .doc(widget.clinicId)
-        .collection('public')
-        .doc('config')
-        .collection('publicBooking')
-        .doc('publicBooking');
-  }
-
   String _s(dynamic v) => (v ?? '').toString().trim();
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final b = widget.branding;
+    // ignore: unnecessary_null_comparison -- clinicId is String?; guard for null
+    final clinicId = (widget.clinicId ?? '').trim();
+    final stream = clinicId.isEmpty
+        ? Stream<DocumentSnapshot<Map<String, dynamic>>>.empty()
+        : context.read<PublicBookingMirrorRepository>().streamFullMirrorDoc(clinicId);
 
     return Scaffold(
       backgroundColor: Colors.white,
       body: SafeArea(
         child: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-          stream: _publicConfigDoc().snapshots(),
+          stream: stream,
           builder: (context, snap) {
             final data = snap.data?.data() ?? const <String, dynamic>{};
 
@@ -682,18 +572,18 @@ class _BrandIntroScreenState extends State<BrandIntroScreen>
                                       spacing: gap,
                                       runSpacing: 18,
                                       children: [
-                                        _CircleImageButton(
+                                        _CircleIconButton(
                                           key:
                                               const ValueKey('book_online_btn'),
                                           diameter: diameter,
-                                          imageAsset: b.bookButtonAsset,
+                                          icon: Icons.calendar_today_rounded,
                                           semanticLabel: 'Book Online',
                                           onTap: _goToBooking,
                                         ),
-                                        _CircleImageButton(
+                                        _CircleIconButton(
                                           key: const ValueKey('price_list_btn'),
                                           diameter: diameter,
-                                          imageAsset: b.priceButtonAsset,
+                                          icon: Icons.list_alt_rounded,
                                           semanticLabel: 'Price list',
                                           onTap: _goToPriceList,
                                         ),
@@ -886,17 +776,17 @@ class _PublicActionIcons extends StatelessWidget {
   }
 }
 
-/// Circular image button component
-class _CircleImageButton extends StatelessWidget {
+/// Circular icon button (replaces old image-based buttons; no asset dependency)
+class _CircleIconButton extends StatelessWidget {
   final double diameter;
-  final String imageAsset;
+  final IconData icon;
   final String semanticLabel;
   final VoidCallback onTap;
 
-  const _CircleImageButton({
+  const _CircleIconButton({
     super.key,
     required this.diameter,
-    required this.imageAsset,
+    required this.icon,
     required this.semanticLabel,
     required this.onTap,
   });
@@ -904,6 +794,7 @@ class _CircleImageButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final double padding = diameter * 0.12;
+    final theme = Theme.of(context);
 
     return Semantics(
       button: true,
@@ -931,16 +822,10 @@ class _CircleImageButton extends StatelessWidget {
             ),
             padding: EdgeInsets.all(padding),
             alignment: Alignment.center,
-            child: SizedBox.square(
-              dimension: diameter - (padding * 2),
-              child: FittedBox(
-                fit: BoxFit.contain,
-                child: Image.asset(
-                  imageAsset,
-                  errorBuilder: (context, _, __) =>
-                      const Icon(Icons.image_not_supported),
-                ),
-              ),
+            child: Icon(
+              icon,
+              size: diameter - (padding * 2),
+              color: theme.colorScheme.primary,
             ),
           ),
         ),

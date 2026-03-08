@@ -2,7 +2,10 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../../../app/app_routes.dart';
 import '../../../../data/repositories/clinic_repository.dart';
+import '../../../../data/repositories/locations_repository.dart';
+import '../../../../models/clinic_location.dart';
 
 class ClinicOpeningHoursScreen extends StatefulWidget {
   const ClinicOpeningHoursScreen({super.key, required this.clinicId});
@@ -29,13 +32,13 @@ class _ClinicOpeningHoursScreenState extends State<ClinicOpeningHoursScreen> {
   ];
 
   static const _labels = <String, String>{
-    'mon': 'Mon',
-    'tue': 'Tue',
-    'wed': 'Wed',
-    'thu': 'Thu',
-    'fri': 'Fri',
-    'sat': 'Sat',
-    'sun': 'Sun',
+    'mon': 'Monday',
+    'tue': 'Tuesday',
+    'wed': 'Wednesday',
+    'thu': 'Thursday',
+    'fri': 'Friday',
+    'sat': 'Saturday',
+    'sun': 'Sunday',
   };
 
   // Local editable model:
@@ -216,18 +219,14 @@ class _ClinicOpeningHoursScreenState extends State<ClinicOpeningHoursScreen> {
       await repo.updateClinicWeeklyHours(
         clinicId: widget.clinicId,
         weeklyHours: _toWeeklyHoursPayload(),
-        // meta optional – not editing in this scaffold:
-        // weeklyHoursMeta: ...
       );
 
       if (!mounted) return;
       setState(() => _dirty = false);
 
-      // Sync to public config so clinician calendar and public booking see same hours.
       try {
         await repo.rebuildPublicBookingConfig(widget.clinicId);
       } catch (_) {
-        // Trigger may still update; don't fail the save.
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
@@ -252,9 +251,47 @@ class _ClinicOpeningHoursScreenState extends State<ClinicOpeningHoursScreen> {
     }
   }
 
+  /// Format intervals for display, e.g. "9:00 – 17:00" or "9:00–12:00, 13:00–17:00".
+  String _formatIntervals(List<Map<String, String>> intervals) {
+    if (intervals.isEmpty) return '';
+    return intervals
+        .map((it) => '${it['start']} – ${it['end']}')
+        .join(', ');
+  }
+
+  Future<void> _openDayEditor(String day) async {
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => _DayEditDialog(
+        dayLabel: _labels[day] ?? day,
+        intervals: List<Map<String, String>>.from(
+          _weekly[day]!.map((e) => Map<String, String>.from(e))),
+        onAdd: () {
+          _addInterval(day);
+          Navigator.of(dialogContext).pop();
+          _openDayEditor(day);
+        },
+        onEdit: (i) async {
+          Navigator.of(dialogContext).pop();
+          await _editInterval(day: day, index: i);
+          if (!mounted) return;
+          _openDayEditor(day);
+        },
+        onRemove: (i) {
+          _removeInterval(day, i);
+          Navigator.of(dialogContext).pop();
+          _openDayEditor(day);
+        },
+      ),
+    );
+    setState(() {});
+  }
+
   @override
   Widget build(BuildContext context) {
     final repo = context.read<ClinicRepository>();
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
 
     return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
       stream: repo.watchPublicBookingSettings(widget.clinicId),
@@ -273,7 +310,6 @@ class _ClinicOpeningHoursScreenState extends State<ClinicOpeningHoursScreen> {
 
         final data = snap.data!.data() ?? <String, dynamic>{};
 
-        // Load once when not dirty/saving
         if (!_dirty && !_saving) {
           _loadFromDoc(data);
         }
@@ -296,32 +332,64 @@ class _ClinicOpeningHoursScreenState extends State<ClinicOpeningHoursScreen> {
             ],
           ),
           body: ListView(
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.all(20),
             children: [
-              const Text(
-                'Set opening hours for each day. Multiple windows per day are supported.',
-                style: TextStyle(fontSize: 12),
-              ),
-              const SizedBox(height: 12),
-              for (final d in _days) ...[
-                _DayCard(
-                  label: _labels[d] ?? d,
-                  intervals: _weekly[d]!,
-                  valid: _intervalsValid(_weekly[d]!),
-                  onAdd: () => _addInterval(d),
-                  onEdit: (i) => _editInterval(day: d, index: i),
-                  onRemove: (i) => _removeInterval(d, i),
+              Text(
+                'These hours apply to all locations for public booking and the clinician calendar. Multiple time windows per day are supported.',
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: colorScheme.onSurfaceVariant,
                 ),
-                const SizedBox(height: 10),
-              ],
-              if (!_allValid)
-                const Padding(
-                  padding: EdgeInsets.only(top: 8),
-                  child: Text(
-                    'One or more days have invalid or overlapping intervals.',
-                    style: TextStyle(color: Colors.red),
+              ),
+              const SizedBox(height: 20),
+              Card(
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: Column(
+                    children: [
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 16, vertical: 12),
+                        color: colorScheme.surfaceContainerHighest,
+                        child: Text(
+                          'Weekly hours',
+                          style: theme.textTheme.titleMedium?.copyWith(
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                      for (final d in _days) ...[
+                        _WeekRow(
+                          dayLabel: _labels[d]!,
+                          isOpen: _weekly[d]!.isNotEmpty,
+                          intervalsText: _formatIntervals(_weekly[d]!),
+                          valid: _intervalsValid(_weekly[d]!),
+                          onEdit: () => _openDayEditor(d),
+                        ),
+                        if (d != _days.last)
+                          Divider(
+                            height: 1,
+                            indent: 16,
+                            endIndent: 16,
+                            color: colorScheme.outlineVariant,
+                          ),
+                      ],
+                    ],
                   ),
                 ),
+              ),
+              if (!_allValid)
+                Padding(
+                  padding: const EdgeInsets.only(top: 12),
+                  child: Text(
+                    'One or more days have invalid or overlapping intervals.',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: colorScheme.error,
+                    ),
+                  ),
+                ),
+              const SizedBox(height: 28),
+              _LocationsSummaryWidget(clinicId: widget.clinicId),
             ],
           ),
         );
@@ -330,77 +398,252 @@ class _ClinicOpeningHoursScreenState extends State<ClinicOpeningHoursScreen> {
   }
 }
 
-class _DayCard extends StatelessWidget {
-  const _DayCard({
-    required this.label,
-    required this.intervals,
+/// Single row in the week-at-a-glance table: day | status | times | Edit.
+class _WeekRow extends StatelessWidget {
+  const _WeekRow({
+    required this.dayLabel,
+    required this.isOpen,
+    required this.intervalsText,
     required this.valid,
+    required this.onEdit,
+  });
+
+  final String dayLabel;
+  final bool isOpen;
+  final String intervalsText;
+  final bool valid;
+  final VoidCallback onEdit;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onEdit,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          child: Row(
+            children: [
+              SizedBox(
+                width: 100,
+                child: Text(
+                  dayLabel,
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
+              if (!valid)
+                Icon(
+                  Icons.error_outline,
+                  size: 18,
+                  color: colorScheme.error,
+                ),
+              if (!valid) const SizedBox(width: 8),
+              Expanded(
+                child: isOpen
+                    ? Text(
+                        intervalsText,
+                        style: theme.textTheme.bodyMedium,
+                      )
+                    : Text(
+                        'Closed',
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          color: colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+              ),
+              TextButton(
+                onPressed: onEdit,
+                child: const Text('Edit'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Dialog to edit a single day's intervals (add/remove/edit times).
+class _DayEditDialog extends StatelessWidget {
+  const _DayEditDialog({
+    required this.dayLabel,
+    required this.intervals,
     required this.onAdd,
     required this.onEdit,
     required this.onRemove,
   });
 
-  final String label;
+  final String dayLabel;
   final List<Map<String, String>> intervals;
-  final bool valid;
-
   final VoidCallback onAdd;
   final void Function(int index) onEdit;
   final void Function(int index) onRemove;
 
   @override
   Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(12),
+    final theme = Theme.of(context);
+    return AlertDialog(
+      title: Text('$dayLabel – opening hours'),
+      content: SingleChildScrollView(
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    label,
-                    style: const TextStyle(fontWeight: FontWeight.w700),
-                  ),
-                ),
-                Icon(
-                  Icons.circle,
-                  size: 10,
-                  color: valid ? Colors.green : Colors.red,
-                ),
-                const SizedBox(width: 8),
-                TextButton.icon(
-                  onPressed: onAdd,
-                  icon: const Icon(Icons.add),
-                  label: const Text('Add'),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
             if (intervals.isEmpty)
-              const Text('Closed', style: TextStyle(color: Colors.black54))
+              Text(
+                'Closed',
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              )
             else
-              Column(
-                children: [
-                  for (int i = 0; i < intervals.length; i++)
-                    ListTile(
-                      contentPadding: EdgeInsets.zero,
-                      title: Text(
-                          '${intervals[i]['start']} → ${intervals[i]['end']}'),
-                      leading: const Icon(Icons.schedule),
-                      onTap: () => onEdit(i),
-                      trailing: IconButton(
-                        tooltip: 'Remove',
-                        icon: const Icon(Icons.delete_outline),
-                        onPressed: () => onRemove(i),
-                      ),
-                    ),
-                ],
-              ),
+              ...List.generate(intervals.length, (i) {
+                final it = intervals[i];
+                return ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: Text('${it['start']} – ${it['end']}'),
+                  leading: const Icon(Icons.schedule_outlined, size: 20),
+                  onTap: () => onEdit(i),
+                  trailing: IconButton(
+                    tooltip: 'Remove',
+                    icon: const Icon(Icons.delete_outline, size: 20),
+                    onPressed: () => onRemove(i),
+                  ),
+                );
+              }),
+            const SizedBox(height: 8),
+            TextButton.icon(
+              onPressed: onAdd,
+              icon: const Icon(Icons.add, size: 20),
+              label: const Text('Add time window'),
+            ),
           ],
         ),
       ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Done'),
+        ),
+      ],
+    );
+  }
+}
+
+/// Locations section: list of locations + link to Manage locations (Settings).
+class _LocationsSummaryWidget extends StatelessWidget {
+  const _LocationsSummaryWidget({required this.clinicId});
+
+  final String clinicId;
+
+  void _openManageLocations(BuildContext context) {
+    Navigator.of(context).pushNamed(
+      AppRoutes.settingsSection(clinicId, AppRoutes.settingsLocations),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final repo = context.read<LocationsRepository>();
+
+    return StreamBuilder<List<ClinicLocation>>(
+      stream: repo.watchLocations(clinicId),
+      builder: (context, snap) {
+        final locations = snap.data ?? [];
+        final activeLocations =
+            locations.where((l) => l.active).toList();
+
+        return Card(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(
+                      Icons.location_on_outlined,
+                      size: 20,
+                      color: colorScheme.primary,
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Locations',
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Opening hours above apply to all locations. Manage locations and their visibility in online booking below.',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                if (activeLocations.isEmpty)
+                  Text(
+                    'No locations set. Add locations in Settings → Locations to use them in booking.',
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: colorScheme.onSurfaceVariant,
+                    ),
+                  )
+                else
+                  ...activeLocations.map(
+                    (loc) => Padding(
+                      padding: const EdgeInsets.only(bottom: 6),
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.place_outlined,
+                            size: 16,
+                            color: colorScheme.onSurfaceVariant,
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  loc.name,
+                                  style: theme.textTheme.bodyMedium,
+                                ),
+                                if (loc.addressText.trim().isNotEmpty)
+                                  Text(
+                                    loc.addressText,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: theme.textTheme.bodySmall?.copyWith(
+                                      color: colorScheme.onSurfaceVariant,
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                const SizedBox(height: 12),
+                TextButton.icon(
+                  onPressed: () => _openManageLocations(context),
+                  icon: const Icon(Icons.settings_outlined, size: 18),
+                  label: const Text('Manage locations'),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 }

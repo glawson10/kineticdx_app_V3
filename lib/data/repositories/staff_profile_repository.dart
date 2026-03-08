@@ -1,6 +1,9 @@
 // lib/data/repositories/staff_profile_repository.dart
+import 'dart:typed_data';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
+import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/foundation.dart';
 
 /// Staff profile (HR-ish) data:
@@ -15,11 +18,14 @@ class StaffProfileRepository {
   StaffProfileRepository({
     FirebaseFirestore? firestore,
     FirebaseFunctions? functions,
+    FirebaseStorage? storage,
   })  : _db = firestore ?? FirebaseFirestore.instance,
-        _fn = functions ?? FirebaseFunctions.instanceFor(region: 'europe-west3');
+        _fn = functions ?? FirebaseFunctions.instanceFor(region: 'europe-west3'),
+        _storage = storage ?? FirebaseStorage.instance;
 
   final FirebaseFirestore _db;
   final FirebaseFunctions _fn;
+  final FirebaseStorage _storage;
 
   static const String _staffProfilesCol = 'staffProfiles';
 
@@ -70,6 +76,50 @@ class StaffProfileRepository {
     if (data is Map && data['ok'] == true) return;
 
     throw StateError('upsertStaffProfileFn returned unexpected payload: $data');
+  }
+
+  /// Upload profile photo to Storage and set photoUrl on the staff profile.
+  /// Path: clinics/{clinicId}/staffProfiles/{uid}/photo.{ext}
+  /// Returns the download URL.
+  Future<String> uploadProfilePhoto({
+    required String clinicId,
+    required String uid,
+    required Uint8List bytes,
+    required String fileExtension,
+  }) async {
+    final c = clinicId.trim();
+    final u = uid.trim();
+    if (c.isEmpty || u.isEmpty) {
+      throw ArgumentError('clinicId and uid are required');
+    }
+    final ext = _safePhotoExt(fileExtension);
+    final path = 'clinics/$c/staffProfiles/$u/photo.$ext';
+    final ref = _storage.ref(path);
+    final contentType = ext == 'png'
+        ? 'image/png'
+        : ext == 'webp'
+            ? 'image/webp'
+            : 'image/jpeg';
+    final meta = SettableMetadata(
+      contentType: contentType,
+      cacheControl: 'public,max-age=3600',
+    );
+    await ref.putData(bytes, meta);
+    final url = await ref.getDownloadURL();
+    await upsertStaffProfile(
+      clinicId: c,
+      uid: u,
+      patch: <String, dynamic>{'photoUrl': url},
+    );
+    return url;
+  }
+
+  static String _safePhotoExt(String raw) {
+    final ext = (raw.trim().toLowerCase()).replaceAll(RegExp(r'[^a-z]'), '');
+    if (ext == 'jpg' || ext == 'jpeg' || ext == 'png' || ext == 'webp') {
+      return ext == 'jpeg' ? 'jpg' : ext;
+    }
+    return 'jpg';
   }
 
   /// --- Availability (opening hours) ---

@@ -56,7 +56,7 @@ exports.onPublicBookingSettingsWrite = (0, firestore_1.onDocumentWritten)({
     region: "europe-west3",
     document: "clinics/{clinicId}/settings/publicBooking",
 }, async (event) => {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _j;
     const clinicId = safeStr(event.params.clinicId);
     if (!clinicId)
         return;
@@ -80,16 +80,22 @@ exports.onPublicBookingSettingsWrite = (0, firestore_1.onDocumentWritten)({
         safeStr(clinicDoc === null || clinicDoc === void 0 ? void 0 : clinicDoc.logoUrl) ||
         safeStr((_f = clinicDoc === null || clinicDoc === void 0 ? void 0 : clinicDoc.branding) === null || _f === void 0 ? void 0 : _f.logoUrl) ||
         "";
-    const [servicesSnap, practitionersSnap, membershipsSnap] = await Promise.all([
+    const [servicesSnap, practitionersSnap, membersSnap, membershipsSnap, locationsSnap, typesSnap] = await Promise.all([
         db.collection(`clinics/${clinicId}/services`).get(),
         db.collection(`clinics/${clinicId}/practitioners`).get(),
+        db.collection(`clinics/${clinicId}/members`).get(),
         db.collection(`clinics/${clinicId}/memberships`).get(),
+        db.collection(`clinics/${clinicId}/locations`).get(),
+        db.collection(`clinics/${clinicId}/appointmentTypes`).get(),
     ]);
     logger_1.logger.info("collection counts", {
         clinicId,
         services: servicesSnap.size,
         practitioners: practitionersSnap.size,
+        members: membersSnap.size,
         memberships: membershipsSnap.size,
+        locations: locationsSnap.size,
+        appointmentTypes: typesSnap.size,
     });
     const services = servicesSnap.docs.map((d) => { var _a; return ({ id: d.id, data: ((_a = d.data()) !== null && _a !== void 0 ? _a : {}) }); });
     const practitioners = practitionersSnap.docs.map((d) => {
@@ -99,13 +105,17 @@ exports.onPublicBookingSettingsWrite = (0, firestore_1.onDocumentWritten)({
             data: ((_a = d.data()) !== null && _a !== void 0 ? _a : {}),
         });
     });
-    const memberships = membershipsSnap.docs.map((d) => {
-        var _a;
-        return ({
-            id: d.id,
-            data: ((_a = d.data()) !== null && _a !== void 0 ? _a : {}),
-        });
-    });
+    // Merge members (canonical) + memberships (legacy) so projection has membership data for all; prefer members.
+    const memberById = new Map();
+    for (const d of membersSnap.docs) {
+        memberById.set(d.id, { id: d.id, data: ((_g = d.data()) !== null && _g !== void 0 ? _g : {}) });
+    }
+    for (const d of membershipsSnap.docs) {
+        if (!memberById.has(d.id)) {
+            memberById.set(d.id, { id: d.id, data: ((_h = d.data()) !== null && _h !== void 0 ? _h : {}) });
+        }
+    }
+    const memberships = Array.from(memberById.values());
     const projection = (0, publicProjection_1.buildPublicBookingProjection)({
         clinicId,
         clinicName,
@@ -116,16 +126,57 @@ exports.onPublicBookingSettingsWrite = (0, firestore_1.onDocumentWritten)({
         practitioners,
         memberships,
     });
+    // Curated lists for public booking: locations and appointmentTypes (active + showInOnlineBooking)
+    const locationsList = locationsSnap.docs
+        .filter((d) => {
+        const dta = d.data();
+        return (dta === null || dta === void 0 ? void 0 : dta.active) === true && (dta === null || dta === void 0 ? void 0 : dta.showInOnlineBooking) === true;
+    })
+        .map((d) => {
+        const dta = d.data();
+        return { id: d.id, name: safeStr(dta === null || dta === void 0 ? void 0 : dta.name) || d.id };
+    });
+    const appointmentTypesList = typesSnap.docs
+        .filter((d) => {
+        const dta = d.data();
+        return (dta === null || dta === void 0 ? void 0 : dta.active) === true && (dta === null || dta === void 0 ? void 0 : dta.showInOnlineBooking) === true;
+    })
+        .map((d) => {
+        const dta = d.data();
+        const durationMinutes = typeof (dta === null || dta === void 0 ? void 0 : dta.durationMinutes) === "number" ? dta.durationMinutes : 30;
+        return {
+            id: d.id,
+            name: safeStr(dta === null || dta === void 0 ? void 0 : dta.name) || d.id,
+            defaultDurationMinutes: durationMinutes,
+            description: safeStr(dta === null || dta === void 0 ? void 0 : dta.description) || undefined,
+            defaultPrice: typeof (dta === null || dta === void 0 ? void 0 : dta.defaultPrice) === "number" ? dta.defaultPrice : undefined,
+            colorHex: safeStr(dta === null || dta === void 0 ? void 0 : dta.colorHex) || undefined,
+        };
+    });
+    // Practitioners in mirror must include allowedLocationIds for location filtering
+    const practitionersList = ((_j = projection.practitioners) !== null && _j !== void 0 ? _j : []).map((p) => {
+        var _a;
+        return ({
+            id: p.id,
+            displayName: (_a = p.displayName) !== null && _a !== void 0 ? _a : p.id,
+            ...(Array.isArray(p.allowedLocationIds) && p.allowedLocationIds.length > 0
+                ? { allowedLocationIds: p.allowedLocationIds }
+                : {}),
+        });
+    });
     logger_1.logger.info("projection practitioners", {
         clinicId,
-        count: (_h = (_g = projection.practitioners) === null || _g === void 0 ? void 0 : _g.length) !== null && _h !== void 0 ? _h : 0,
-        sample: (_k = (_j = projection.practitioners) === null || _j === void 0 ? void 0 : _j[0]) !== null && _k !== void 0 ? _k : null,
+        count: practitionersList.length,
+        locationsCount: locationsList.length,
     });
     await publicDocRef.set({
         ...projection,
+        locations: locationsList,
+        practitioners: practitionersList,
+        appointmentTypes: appointmentTypesList,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         updatedBy: "onPublicBookingSettingsWrite-gen2",
     }, { merge: true });
-    logger_1.logger.info("wrote public mirror", { path: publicDocRef.path });
+    logger_1.logger.info("wrote public mirror", { path: publicDocRef.path, locations: locationsList.length });
 });
 //# sourceMappingURL=onPublicBookingSettingsWrite.js.map

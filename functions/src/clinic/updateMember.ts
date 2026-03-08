@@ -111,18 +111,29 @@ export async function updateMember(req: CallableRequest<Input>) {
   batch.set(canonRef, updates, { merge: true });
   batch.set(legacyRef, updates, { merge: true });
 
-  await batch.commit();
+  try {
+    await batch.commit();
+  } catch (err: any) {
+    const msg = err?.message ?? String(err);
+    throw new HttpsError("internal", `Failed to update member: ${msg}`);
+  }
 
   const auditRef = db.collection(`clinics/${clinicId}/audit`).doc();
-  await auditRef.set({
-    type: "membership.updated",
-    clinicId,
-    actor: { uid: actorUid },
-    subject: { uid: memberUid },
-    patch: { role: patch.role, permissionsKeys: patch.permissions ? Object.keys(patch.permissions) : [] },
-    at: now,
-    schemaVersion: 1,
-  });
+  try {
+    await auditRef.set({
+      type: "membership.updated",
+      clinicId,
+      actor: { uid: actorUid },
+      subject: { uid: memberUid },
+      patch: { role: patch.role, permissionsKeys: patch.permissions ? Object.keys(patch.permissions) : [] },
+      at: now,
+      schemaVersion: 1,
+    });
+  } catch (err: any) {
+    // Audit write failure is non-fatal; member was updated
+    const msg = err?.message ?? String(err);
+    throw new HttpsError("internal", `Member updated but audit failed: ${msg}`);
+  }
 
   return { ok: true };
 }

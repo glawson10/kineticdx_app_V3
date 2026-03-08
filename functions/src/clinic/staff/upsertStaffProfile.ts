@@ -140,6 +140,28 @@ function sanitizeStaffProfilePatch(raw: Record<string, any>): Record<string, any
     out.professional = patch.professional;
   }
 
+  if ("contact" in patch && typeof patch.contact === "object") {
+    const c = patch.contact as Record<string, unknown>;
+    out.contact = {
+      phone: safeStr(c?.phone).slice(0, 60),
+      email: safeStr(c?.email).slice(0, 120),
+    };
+  }
+
+  if ("experienceLevel" in patch) {
+    out.experienceLevel = safeStr(patch.experienceLevel).slice(0, 80);
+  }
+
+  if ("bio" in patch) {
+    out.bio = safeStr(patch.bio).slice(0, 2000);
+  }
+
+  // Profile photo URL (e.g. from Storage after upload)
+  if ("photoUrl" in patch) {
+    const url = safeStr(patch.photoUrl);
+    out.photoUrl = url.length > 0 ? url.slice(0, 500) : null;
+  }
+
   return out;
 }
 
@@ -165,64 +187,84 @@ export async function upsertStaffProfile(
     );
   }
 
-  // ── Authorize actor
-  const actorMembership = await getMembershipWithFallback({
-    clinicId,
-    uid: actorUid,
-  });
+  try {
+    // ── Authorize actor: members.manage can edit any profile; otherwise only own
+    const isSelf = actorUid === targetUid;
+    const actorMembership = await getMembershipWithFallback({
+      clinicId,
+      uid: actorUid,
+    });
 
-  if (!actorMembership || !isMemberActiveLike(actorMembership)) {
-    throw new HttpsError("permission-denied", "Not permitted.");
-  }
+    if (!actorMembership || !isMemberActiveLike(actorMembership)) {
+      throw new HttpsError("permission-denied", "Not permitted.");
+    }
 
-  const perms = getPermissionsMap(actorMembership);
-  if (perms["members.manage"] !== true) {
-    throw new HttpsError("permission-denied", "Insufficient permissions.");
-  }
+    const perms = getPermissionsMap(actorMembership);
+    if (!isSelf && perms["members.manage"] !== true) {
+      throw new HttpsError("permission-denied", "Insufficient permissions.");
+    }
 
-  // ── Ensure target exists in clinic
-  const targetMembership = await getMembershipWithFallback({
-    clinicId,
-    uid: targetUid,
-  });
+    // ── Ensure target exists in clinic
+    const targetMembership = await getMembershipWithFallback({
+      clinicId,
+      uid: targetUid,
+    });
 
-  if (!targetMembership) {
-    throw new HttpsError(
-      "not-found",
-      "Target staff member not in clinic."
-    );
-  }
+    if (!targetMembership) {
+      throw new HttpsError(
+        "not-found",
+        "Target staff member not in clinic."
+      );
+    }
 
-  // ── Sanitize patch
-  const patch = sanitizeStaffProfilePatch(req.data?.patch ?? {});
+    // ── Sanitize patch (allowlist only)
+    const patch = sanitizeStaffProfilePatch(req.data?.patch ?? {});
 
-  const ref = db
-    .collection("clinics")
-    .doc(clinicId)
-    .collection("staffProfiles")
-    .doc(targetUid);
+    const ref = db
+      .collection("clinics")
+      .doc(clinicId)
+      .collection("staffProfiles")
+      .doc(targetUid);
 
-  const snap = await ref.get();
-  const now = admin.firestore.FieldValue.serverTimestamp();
+    const snap = await ref.get();
+    const now = admin.firestore.FieldValue.serverTimestamp();
 
-  await ref.set(
-    {
-      ...patch,
+    // Build write payload without undefined (Firestore rejects undefined)
+    const writeData: Record<string, unknown> = {
+      ...Object.fromEntries(
+        Object.entries(patch).filter(([, v]) => v !== undefined)
+      ),
       updatedAt: now,
       updatedByUid: actorUid,
-      ...(snap.exists
-        ? {}
-        : { createdAt: now, createdByUid: actorUid }),
-    },
-    { merge: true } // ✅ SAFE: profile-only, never availability
-  );
+    };
+    if (!snap.exists) {
+      writeData.createdAt = now;
+      writeData.createdByUid = actorUid;
+    }
 
-  logger.info("upsertStaffProfile: ok", {
-    clinicId,
-    actorUid,
-    targetUid,
-    keys: Object.keys(patch),
-  });
+    await ref.set(writeData, { merge: true });
 
-  return { ok: true, uid: targetUid };
+    logger.info("upsertStaffProfile: ok", {
+      clinicId,
+      actorUid,
+      targetUid,
+      keys: Object.keys(patch),
+    });
+
+    return { ok: true, uid: targetUid };
+  } catch (err: any) {
+    if (err instanceof HttpsError) throw err;
+    const raw = err?.message ?? err?.toString?.() ?? "";
+    const message = (typeof raw === "string" && raw.trim().length > 0 && raw !== "internal")
+      ? raw.trim()
+      : "Unexpected server error (see function logs).";
+    const stack = err?.stack;
+    logger.error("upsertStaffProfile failed", {
+      error: String(raw),
+      clinicId,
+      targetUid,
+      stack: stack ? String(stack).slice(0, 800) : undefined,
+    });
+    throw new HttpsError("internal", `Profile update failed: ${message}`);
+  }
 }

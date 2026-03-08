@@ -328,6 +328,14 @@ function normalizeSortOrder(pract) {
         NaN;
     return Number.isFinite(n) ? n : undefined;
 }
+function normalizeAllowedLocationIds(pract) {
+    var _a;
+    const raw = (_a = pract.allowedLocationIds) !== null && _a !== void 0 ? _a : pract.locationIds;
+    if (!Array.isArray(raw))
+        return undefined;
+    const cleaned = raw.map((x) => safeStr(x)).filter((x) => !!x);
+    return cleaned.length ? cleaned : undefined;
+}
 function isPractitionerActiveForBooking(pract) {
     const v = boolish(pract.activeForBooking);
     if (v === null)
@@ -345,31 +353,56 @@ function isPractitionerActive(pract) {
  * - If membership exists and is NOT active -> exclude
  * - If membership does not exist -> still include (so public booking works)
  */
+function isPractitionerPublicVisible(pract) {
+    const v = boolish(pract.showInPublicBooking);
+    if (v === null)
+        return false;
+    return v === true;
+}
 function buildPublicPractitioners(args) {
-    var _a, _b;
+    var _a, _b, _c, _d, _e, _f, _g;
     const memberById = new Map();
     for (const m of (_a = args.memberships) !== null && _a !== void 0 ? _a : []) {
         if (!m || !safeStr(m.id))
             continue;
         memberById.set(safeStr(m.id), isObj(m.data) ? m.data : {});
     }
+    const profileById = new Map();
+    for (const sp of (_b = args.staffProfiles) !== null && _b !== void 0 ? _b : []) {
+        if (!sp || !safeStr(sp.id))
+            continue;
+        profileById.set(safeStr(sp.id), isObj(sp.data) ? sp.data : {});
+    }
     const out = [];
-    for (const p of (_b = args.practitioners) !== null && _b !== void 0 ? _b : []) {
+    for (const p of (_c = args.practitioners) !== null && _c !== void 0 ? _c : []) {
         const uid = safeStr(p === null || p === void 0 ? void 0 : p.id);
         if (!uid)
             continue;
         const pData = isObj(p.data) ? p.data : {};
-        const mem = memberById.get(uid); // may be undefined
+        const mem = memberById.get(uid);
+        const profile = profileById.get(uid);
         if (mem && !isActiveMembership(mem))
             continue;
         if (!isPractitionerActive(pData))
             continue;
         if (!isPractitionerActiveForBooking(pData))
             continue;
+        if (!isPractitionerPublicVisible(pData))
+            continue;
         const proj = {
             id: uid,
             displayName: normalizePractitionerDisplayName(pData, mem),
         };
+        // Public-safe profile fields from staffProfiles
+        const title = safeStr((_d = profile === null || profile === void 0 ? void 0 : profile.title) !== null && _d !== void 0 ? _d : pData.title);
+        if (title)
+            proj.title = title;
+        const photoUrl = safeStr((_e = profile === null || profile === void 0 ? void 0 : profile.photoUrl) !== null && _e !== void 0 ? _e : pData.photoUrl);
+        if (photoUrl)
+            proj.photoUrl = photoUrl;
+        const bio = safeStr((_g = (_f = profile === null || profile === void 0 ? void 0 : profile.bio) !== null && _f !== void 0 ? _f : profile === null || profile === void 0 ? void 0 : profile.about) !== null && _g !== void 0 ? _g : pData.bio);
+        if (bio)
+            proj.bio = bio;
         const serviceIdsAllowed = normalizeServiceIdsAllowed(pData);
         if (serviceIdsAllowed && serviceIdsAllowed.length) {
             proj.serviceIdsAllowed = serviceIdsAllowed;
@@ -377,6 +410,10 @@ function buildPublicPractitioners(args) {
         const sortOrder = normalizeSortOrder(pData);
         if (typeof sortOrder === "number" && Number.isFinite(sortOrder)) {
             proj.sortOrder = sortOrder;
+        }
+        const allowedLocationIds = normalizeAllowedLocationIds(pData);
+        if (allowedLocationIds && allowedLocationIds.length > 0) {
+            proj.allowedLocationIds = allowedLocationIds;
         }
         out.push(proj);
     }
@@ -443,6 +480,7 @@ function buildPublicBookingProjection(args) {
     const practitioners = buildPublicPractitioners({
         practitioners: (_b = args.practitioners) !== null && _b !== void 0 ? _b : [],
         memberships: (_c = args.memberships) !== null && _c !== void 0 ? _c : [],
+        staffProfiles: args.staffProfiles,
     });
     const clinicDoc = isObj(args.clinicDoc) ? args.clinicDoc : {};
     const c = readClinicProfileLike(clinicDoc);

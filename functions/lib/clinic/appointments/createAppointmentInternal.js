@@ -66,8 +66,26 @@ function getNested(obj, path) {
 function buildFullName(first, last) {
     return [safeString(first), safeString(last)].filter(Boolean).join(" ").trim();
 }
+/** Safely get milliseconds from a Firestore Timestamp (or legacy { _seconds, _nanoseconds }). */
+function toMillisSafe(ts) {
+    var _a, _b, _c;
+    if (ts == null)
+        return null;
+    if (typeof ts.toMillis === "function")
+        return ts.toMillis();
+    const sec = (_a = ts._seconds) !== null && _a !== void 0 ? _a : ts.seconds;
+    const nan = (_c = (_b = ts._nanoseconds) !== null && _b !== void 0 ? _b : ts.nanoseconds) !== null && _c !== void 0 ? _c : 0;
+    if (typeof sec === "number" && Number.isFinite(sec))
+        return sec * 1000 + nan / 1e6;
+    return null;
+}
 async function assertNoClosureOverlap(params) {
+    var _a, _b, _c, _d;
     const { db, clinicId, startAt, endAt } = params;
+    const startMs = (_b = (_a = startAt.toMillis) === null || _a === void 0 ? void 0 : _a.call(startAt)) !== null && _b !== void 0 ? _b : null;
+    const endMs = (_d = (_c = endAt.toMillis) === null || _c === void 0 ? void 0 : _c.call(endAt)) !== null && _d !== void 0 ? _d : null;
+    if (startMs == null || endMs == null)
+        return;
     const snap = await db
         .collection(`clinics/${clinicId}/closures`)
         .where("active", "==", true)
@@ -77,9 +95,11 @@ async function assertNoClosureOverlap(params) {
         const data = doc.data();
         const fromAt = data === null || data === void 0 ? void 0 : data.fromAt;
         const toAt = data === null || data === void 0 ? void 0 : data.toAt;
-        if (!fromAt || !toAt)
+        const fromMs = toMillisSafe(fromAt);
+        const toMs = toMillisSafe(toAt);
+        if (fromMs == null || toMs == null)
             continue;
-        const overlaps = startAt.toMillis() < toAt.toMillis() && endAt.toMillis() > fromAt.toMillis();
+        const overlaps = startMs < toMs && endMs > fromMs;
         if (overlaps) {
             throw new https_1.HttpsError("failed-precondition", "Appointment overlaps a clinic closure.", {
                 closureId: doc.id,
@@ -88,24 +108,36 @@ async function assertNoClosureOverlap(params) {
     }
 }
 async function readPractitionerDoc(db, clinicId, practitionerId) {
-    var _a;
+    var _a, _b;
     const candidates = [
-        `clinics/${clinicId}/memberships/${practitionerId}`, // ✅ canonical first
-        `clinics/${clinicId}/members/${practitionerId}`, // legacy fallback
+        `clinics/${clinicId}/memberships/${practitionerId}`,
+        `clinics/${clinicId}/members/${practitionerId}`,
         `clinics/${clinicId}/practitioners/${practitionerId}`,
         `clinics/${clinicId}/staff/${practitionerId}`,
     ];
+    let memberData = null;
+    let active = false;
     for (const path of candidates) {
         const snap = await db.doc(path).get();
         if (!snap.exists)
             continue;
         const d = ((_a = snap.data()) !== null && _a !== void 0 ? _a : {});
-        const active = d.active === true ||
-            d.status === "active" ||
-            getNested(d, "status.active") === true;
-        return { data: d, active };
+        active =
+            d.active === true ||
+                d.status === "active" ||
+                getNested(d, "status.active") === true;
+        memberData = d;
+        break;
     }
-    return { data: null, active: false };
+    // Also read the practitioners doc for booking metadata
+    let bookingMeta = null;
+    const pracSnap = await db
+        .doc(`clinics/${clinicId}/practitioners/${practitionerId}`)
+        .get();
+    if (pracSnap.exists) {
+        bookingMeta = ((_b = pracSnap.data()) !== null && _b !== void 0 ? _b : {});
+    }
+    return { data: memberData, active, bookingMeta };
 }
 /**
  * Returns { name, source } where source is useful for debugging.
@@ -126,24 +158,56 @@ function resolvePatientName(patientDoc) {
         return { name: fullName, source: "fullName" };
     return { name: "", source: "none" };
 }
+function toDateSafe(v) {
+    if (v instanceof Date && !Number.isNaN(v.getTime()))
+        return v;
+    if (v && typeof v.toDate === "function")
+        return v.toDate();
+    if (v != null && typeof v === "object" && "seconds" in v) {
+        const s = v.seconds;
+        if (typeof s === "number" && Number.isFinite(s))
+            return new Date(s * 1000);
+    }
+    if (typeof v === "number" && Number.isFinite(v))
+        return new Date(v);
+    return null;
+}
 async function createAppointmentInternal(db, input) {
-    var _a, _b, _c;
+    var _a;
+    try {
+        return await createAppointmentInternalImpl(db, input);
+    }
+    catch (err) {
+        if (err instanceof https_1.HttpsError)
+            throw err;
+        const msg = (_a = err === null || err === void 0 ? void 0 : err.message) !== null && _a !== void 0 ? _a : String(err);
+        logger_1.logger.error("createAppointmentInternal unexpected error", {
+            kind: input.kind,
+            err: msg,
+            stack: err === null || err === void 0 ? void 0 : err.stack,
+        });
+        throw new https_1.HttpsError("internal", msg || "Create appointment failed.", {
+            original: msg,
+        });
+    }
+}
+async function createAppointmentInternalImpl(db, input) {
+    var _a, _b, _c, _d, _e;
     const clinicId = input.clinicId.trim();
     const kind = input.kind;
     const actorUid = input.actorUid;
     if (!clinicId)
         throw new https_1.HttpsError("invalid-argument", "clinicId is required.");
-    if (!(input.startDt instanceof Date) || Number.isNaN(input.startDt.getTime())) {
-        throw new https_1.HttpsError("invalid-argument", "Invalid start time.");
+    const startDt = toDateSafe(input.startDt);
+    const endDt = toDateSafe(input.endDt);
+    if (!startDt || !endDt) {
+        throw new https_1.HttpsError("invalid-argument", "Invalid start or end time.");
     }
-    if (!(input.endDt instanceof Date) || Number.isNaN(input.endDt.getTime())) {
-        throw new https_1.HttpsError("invalid-argument", "Invalid end time.");
-    }
-    if (input.endDt <= input.startDt) {
+    if (endDt <= startDt) {
         throw new https_1.HttpsError("invalid-argument", "Invalid start/end (end must be after start).");
     }
-    const startTs = admin.firestore.Timestamp.fromDate(input.startDt);
-    const endTs = admin.firestore.Timestamp.fromDate(input.endDt);
+    const startTs = admin.firestore.Timestamp.fromDate(startDt);
+    const endTs = admin.firestore.Timestamp.fromDate(endDt);
     if (input.allowClosedOverride !== true) {
         await assertNoClosureOverlap({ db, clinicId, startAt: startTs, endAt: endTs });
     }
@@ -167,6 +231,26 @@ async function createAppointmentInternal(db, input) {
         const pracResult = await readPractitionerDoc(db, clinicId, practitionerId);
         if (!pracResult.data || pracResult.active !== true) {
             throw new https_1.HttpsError("failed-precondition", "Selected practitioner is not an active clinic member.");
+        }
+        // Booking eligibility checks (from practitioners/{uid} doc)
+        const bmeta = pracResult.bookingMeta;
+        if (bmeta) {
+            if (bmeta.activeForBooking === false) {
+                throw new https_1.HttpsError("failed-precondition", "Selected practitioner is not available for booking.");
+            }
+            const allowedServices = Array.isArray(bmeta.serviceIdsAllowed)
+                ? bmeta.serviceIdsAllowed.filter((x) => typeof x === "string" && x.trim())
+                : [];
+            if (allowedServices.length > 0 && !allowedServices.includes(serviceId)) {
+                throw new https_1.HttpsError("failed-precondition", "Selected practitioner cannot provide this appointment type.");
+            }
+            const allowedLocations = Array.isArray(bmeta.allowedLocationIds)
+                ? bmeta.allowedLocationIds.filter((x) => typeof x === "string" && x.trim())
+                : [];
+            const locId = safeString(input.locationId);
+            if (allowedLocations.length > 0 && locId && !allowedLocations.includes(locId)) {
+                throw new https_1.HttpsError("failed-precondition", "Selected practitioner does not work at this location.");
+            }
         }
         // ✅ Patient must exist (do not silently proceed)
         const patientRef = db
@@ -230,12 +314,15 @@ async function createAppointmentInternal(db, input) {
     }
     const apptRef = db.collection("clinics").doc(clinicId).collection("appointments").doc();
     const resourceIds = uniqStrings(input.resourceIds);
-    await apptRef.set({
+    const payload = {
         clinicId,
         kind,
         patientId: kind === "admin" ? "" : patientId,
         serviceId: kind === "admin" ? "" : serviceId,
         practitionerId: kind === "admin" ? "" : practitionerId,
+        ...(input.locationId && input.locationId.trim()
+            ? { locationId: input.locationId.trim() }
+            : {}),
         patientName: kind === "admin" ? "" : patientName,
         patientNameSource: kind === "admin" ? "" : patientNameSource, // helpful while debugging
         serviceName: kind === "admin" ? "" : serviceName,
@@ -251,7 +338,19 @@ async function createAppointmentInternal(db, input) {
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         updatedByUid: actorUid,
-    });
+    };
+    try {
+        await apptRef.set(payload);
+    }
+    catch (err) {
+        logger_1.logger.error("createAppointmentInternal: apptRef.set failed", {
+            clinicId,
+            kind,
+            err: (_d = err === null || err === void 0 ? void 0 : err.message) !== null && _d !== void 0 ? _d : String(err),
+            stack: err === null || err === void 0 ? void 0 : err.stack,
+        });
+        throw new https_1.HttpsError("internal", (_e = err === null || err === void 0 ? void 0 : err.message) !== null && _e !== void 0 ? _e : "Failed to write appointment.", { original: err === null || err === void 0 ? void 0 : err.message });
+    }
     return { success: true, appointmentId: apptRef.id };
 }
 //# sourceMappingURL=createAppointmentInternal.js.map

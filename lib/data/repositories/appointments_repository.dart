@@ -298,6 +298,7 @@ class AppointmentsRepository {
     String? patientId,
     String? serviceId,
     String? practitionerId,
+    String? locationId,
     required DateTime start,
     required DateTime end,
   }) async {
@@ -308,6 +309,7 @@ class AppointmentsRepository {
       if (patientId != null) 'patientId': patientId,
       if (serviceId != null) 'serviceId': serviceId,
       if (practitionerId != null) 'practitionerId': practitionerId,
+      if (locationId != null && locationId.trim().isNotEmpty) 'locationId': locationId.trim(),
       'startMs': start.toUtc().millisecondsSinceEpoch,
       'endMs': end.toUtc().millisecondsSinceEpoch,
     });
@@ -467,6 +469,7 @@ class AppointmentsRepository {
     String? kind,
     String? serviceId,
     String? practitionerId, // optional if you later allow reassignment
+    String? locationId, // BOOKING_DATA_CONTRACT; pass null to clear
     bool? allowClosedOverride, // optional if TS supports it here too
   }) async {
     final payload = <String, dynamic>{
@@ -486,6 +489,13 @@ class AppointmentsRepository {
     if (practitionerId != null) {
       final pid = practitionerId.trim();
       if (pid.isNotEmpty) payload['practitionerId'] = pid;
+    }
+
+    // When locationId is provided (including null), send it so backend can update or clear
+    if (locationId != null) {
+      payload['locationId'] = locationId.trim().isEmpty ? null : locationId.trim();
+    } else {
+      payload['locationId'] = null;
     }
 
     if (allowClosedOverride != null) {

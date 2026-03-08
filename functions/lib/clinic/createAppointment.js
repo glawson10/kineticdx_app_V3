@@ -49,10 +49,11 @@ function requirePerm(perms, keys, message) {
 function parseMillis(label, ms) {
     if (ms == null)
         return null;
-    if (typeof ms !== "number" || !Number.isFinite(ms) || ms <= 0) {
+    const n = typeof ms === "number" ? ms : Number(ms);
+    if (!Number.isFinite(n) || n <= 0) {
         throw new https_1.HttpsError("invalid-argument", `Invalid ${label}Ms.`);
     }
-    return new Date(ms);
+    return new Date(n);
 }
 function parseIso(label, value) {
     if (!value)
@@ -86,7 +87,7 @@ function isActiveMember(data) {
     return data.active === true;
 }
 async function createAppointment(req) {
-    var _a, _b, _c, _d, _e;
+    var _a, _b, _c, _d;
     try {
         if (!req.auth)
             throw new https_1.HttpsError("unauthenticated", "Sign in required.");
@@ -139,16 +140,21 @@ async function createAppointment(req) {
             throw new https_1.HttpsError("permission-denied", "Not an active clinic member.");
         }
         const perms = (_c = member.permissions) !== null && _c !== void 0 ? _c : {};
+        const roleId = typeof member.roleId === "string" ? member.roleId.trim() : "";
+        const isOwner = roleId === "owner";
         const allowClosedOverride = data.allowClosedOverride === true;
-        if (allowClosedOverride) {
-            requirePerm(perms, ["settings.write"], "No permission to override clinic closures (settings.write required).");
-        }
-        else {
-            requirePerm(perms, ["schedule.read"], "No schedule access (schedule.read required).");
-            requirePerm(perms, ["schedule.write", "schedule.manage"], "No scheduling permission (schedule.write required).");
-        }
-        if (kind !== "admin") {
-            requirePerm(perms, ["patients.read"], "No patient access (patients.read required).");
+        // Owners always pass (full access even if permissions map is incomplete)
+        if (!isOwner) {
+            if (allowClosedOverride) {
+                requirePerm(perms, ["settings.write"], "No permission to override clinic closures (settings.write required).");
+            }
+            else {
+                requirePerm(perms, ["schedule.read"], "No schedule access (schedule.read required).");
+                requirePerm(perms, ["schedule.write", "schedule.manage"], "No scheduling permission (schedule.write required).");
+            }
+            if (kind !== "admin") {
+                requirePerm(perms, ["patients.read"], "No patient access (patients.read required).");
+            }
         }
         return await (0, createAppointmentInternal_1.createAppointmentInternal)(db, {
             clinicId,
@@ -156,6 +162,7 @@ async function createAppointment(req) {
             patientId: data.patientId,
             serviceId: data.serviceId,
             practitionerId: data.practitionerId,
+            locationId: data.locationId,
             startDt,
             endDt,
             resourceIds: data.resourceIds,
@@ -164,16 +171,17 @@ async function createAppointment(req) {
         });
     }
     catch (err) {
+        const msg = (_d = err === null || err === void 0 ? void 0 : err.message) !== null && _d !== void 0 ? _d : String(err);
         firebase_functions_1.logger.error("createAppointment failed", {
-            err: (_d = err === null || err === void 0 ? void 0 : err.message) !== null && _d !== void 0 ? _d : String(err),
+            err: msg,
             stack: err === null || err === void 0 ? void 0 : err.stack,
             code: err === null || err === void 0 ? void 0 : err.code,
             details: err === null || err === void 0 ? void 0 : err.details,
         });
         if (err instanceof https_1.HttpsError)
             throw err;
-        throw new https_1.HttpsError("internal", "createAppointment crashed. Check function logs.", {
-            original: (_e = err === null || err === void 0 ? void 0 : err.message) !== null && _e !== void 0 ? _e : String(err),
+        throw new https_1.HttpsError("internal", msg || "createAppointment failed.", {
+            original: msg,
         });
     }
 }

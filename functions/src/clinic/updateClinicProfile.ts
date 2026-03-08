@@ -13,7 +13,9 @@ import {
   validateTimezone,
   validateEmail,
   validateSessionTimeoutMinutes,
+  looksLikeUrl,
 } from "./generalSettingsValidation";
+import { runPublicBookingMirrorForClinic } from "../public/mirrorPublicBooking";
 
 export type GeneralSettingsPatch = {
   name?: string | null;
@@ -28,6 +30,15 @@ export type GeneralSettingsPatch = {
   sessionTimeoutMinutes?: number | null;
   require2FA?: boolean | null;
   _testAudit?: boolean;
+  // Branding and public contact (mirrored to public booking doc)
+  logoUrl?: string | null;
+  address?: string | null;
+  phone?: string | null;
+  email?: string | null;
+  landingUrl?: string | null;
+  websiteUrl?: string | null;
+  whatsapp?: string | null;
+  defaultLanguage?: string | null;
 };
 
 const db = admin.firestore();
@@ -198,6 +209,68 @@ function cleanAndValidatePatch(input: unknown): GeneralSettingsPatch {
     else throw new HttpsError("invalid-argument", "require2FA must be a boolean.");
   }
 
+  // Branding and public contact (profile.*; logoUrl also mirrored to root for public mirror)
+  if (raw.hasOwnProperty("logoUrl")) {
+    const v = (raw as any).logoUrl;
+    if (v === null) patch.logoUrl = null;
+    else if (typeof v === "string") patch.logoUrl = trimStr(v, 2048) || null;
+  }
+  if (raw.hasOwnProperty("address")) {
+    const v = (raw as any).address;
+    if (v === null) patch.address = null;
+    else if (typeof v === "string") patch.address = trimStr(v, 1024) || null;
+  }
+  if (raw.hasOwnProperty("phone")) {
+    const v = (raw as any).phone;
+    if (v === null) patch.phone = null;
+    else if (typeof v === "string") patch.phone = trimStr(v, 64) || null;
+  }
+  if (raw.hasOwnProperty("email")) {
+    const v = (raw as any).email;
+    if (v === null) patch.email = null;
+    else if (typeof v === "string") {
+      const s = v.trim();
+      if (s.length > 0) {
+        if (!validateEmail(s.toLowerCase()) || s.length > 254) {
+          throw new HttpsError("invalid-argument", "Email must be a valid email address (max 254 chars).");
+        }
+        patch.email = s.toLowerCase();
+      } else patch.email = null;
+    }
+  }
+  if (raw.hasOwnProperty("landingUrl")) {
+    const v = (raw as any).landingUrl;
+    if (v === null) patch.landingUrl = null;
+    else if (typeof v === "string") {
+      const s = trimStr(v, 2048);
+      if (s.length > 0 && !looksLikeUrl(s)) {
+        throw new HttpsError("invalid-argument", "Landing page URL must be a valid URL.");
+      }
+      patch.landingUrl = s || null;
+    }
+  }
+  if (raw.hasOwnProperty("websiteUrl")) {
+    const v = (raw as any).websiteUrl;
+    if (v === null) patch.websiteUrl = null;
+    else if (typeof v === "string") {
+      const s = trimStr(v, 2048);
+      if (s.length > 0 && !looksLikeUrl(s)) {
+        throw new HttpsError("invalid-argument", "Website URL must be a valid URL.");
+      }
+      patch.websiteUrl = s || null;
+    }
+  }
+  if (raw.hasOwnProperty("whatsapp")) {
+    const v = (raw as any).whatsapp;
+    if (v === null) patch.whatsapp = null;
+    else if (typeof v === "string") patch.whatsapp = trimStr(v, 256) || null;
+  }
+  if (raw.hasOwnProperty("defaultLanguage")) {
+    const v = (raw as any).defaultLanguage;
+    if (v === null) patch.defaultLanguage = null;
+    else if (typeof v === "string") patch.defaultLanguage = trimStr(v, 16) || null;
+  }
+
   if ((raw as any)?._testAudit === true) patch._testAudit = true;
 
   validateAdminContact(patch);
@@ -345,6 +418,14 @@ export async function updateClinicProfile(request: any) {
   applyProfileUpdate(updateData, "currency", patch.currency);
   applyProfileUpdate(updateData, "terminology", patch.terminology);
   applyProfileUpdate(updateData, "replyToEmail", patch.replyToEmail);
+  applyProfileUpdate(updateData, "logoUrl", patch.logoUrl);
+  applyProfileUpdate(updateData, "address", patch.address);
+  applyProfileUpdate(updateData, "phone", patch.phone);
+  applyProfileUpdate(updateData, "email", patch.email);
+  applyProfileUpdate(updateData, "landingUrl", patch.landingUrl);
+  applyProfileUpdate(updateData, "websiteUrl", patch.websiteUrl);
+  applyProfileUpdate(updateData, "whatsapp", patch.whatsapp);
+  applyProfileUpdate(updateData, "defaultLanguage", patch.defaultLanguage);
 
   if (patch.sessionTimeoutMinutes !== undefined) {
     applyProfileOnly(
@@ -382,6 +463,9 @@ export async function updateClinicProfile(request: any) {
       createdAt: now,
     });
   });
+
+  // Refresh public booking mirror so public portal shows updated contact and logo.
+  await runPublicBookingMirrorForClinic(clinicId);
 
   return { ok: true };
 }

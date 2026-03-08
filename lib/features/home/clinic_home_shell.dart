@@ -15,6 +15,7 @@ import '../billing/ui/invoices_list_screen.dart';
 import '../booking/ui/booking_calendar_screen.dart';
 import '../patients/patient_finder_screen.dart';
 import '../payments/ui/payment_qr_screen.dart';
+import '../../shared/ui/perm_gate.dart';
 import '../settings/home/settings_home_screen.dart';
 import '../shell/clinician_shell.dart';
 import 'package:kineticdx_app_v3/preassessment/clinician/preassessments_list_screen.dart';
@@ -252,7 +253,11 @@ Widget _childForTab(ClinicianTab t, String clinicId, String? settingsSection) {
     case ClinicianTab.calendar:
       return const BookingCalendarScreen();
     case ClinicianTab.patients:
-      return const PatientFinderScreen();
+      return PermGate(
+        requiredPerm: 'patients.read',
+        message: 'Ask an admin to grant you "Patients read" (patients.read) for this clinic.',
+        child: const PatientFinderScreen(),
+      );
     case ClinicianTab.preassess:
       return const PreAssessmentsListScreen();
     case ClinicianTab.exercises:

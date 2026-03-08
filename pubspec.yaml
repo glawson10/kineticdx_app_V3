@@ -18,7 +18,6 @@ dependencies:
   provider: ^6.1.2
   qr_flutter: ^4.1.0
   cupertino_icons: ^1.0.8
-  video_player: ^2.9.1
   flutter_lints: ^5.0.0
   shared_preferences: ^2.2.3
   http: ^1.2.2
@@ -39,11 +38,9 @@ flutter:
   uses-material-design: true
 
   assets:
-    - assets/kineticdx_logo.png
-    - assets/Price_List.png
-    - assets/book_online.png
+    - assets/kineticdx_logo2.png
+    - assets/icons/
     - assets/fundamental_recovery.png
-    - assets/intro_h264.mp4
     - assets/body_map_person.png
     - assets/body_front.png
     - assets/body_back.png

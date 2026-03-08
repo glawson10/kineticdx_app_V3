@@ -9,6 +9,14 @@ type PublicPractitioner = {
   practitionerId: string;
   displayName: string;
   active: boolean;
+  activeForBooking: boolean;
+  showInPublicBooking: boolean;
+  sortOrder?: number;
+  title?: string;
+  photoUrl?: string;
+  bio?: string;
+  serviceIdsAllowed?: string[];
+  allowedLocationIds?: string[];
 };
 
 async function rebuildPublicPractitionerMirrors(clinicId: string) {
@@ -20,11 +28,20 @@ async function rebuildPublicPractitionerMirrors(clinicId: string) {
 
   const list: PublicPractitioner[] = dirSnap.docs.map((d) => {
     const data = d.data() ?? {};
-    return {
+    const entry: PublicPractitioner = {
       practitionerId: String(data.practitionerId ?? d.id),
       displayName: String(data.displayName ?? "").trim(),
       active: Boolean(data.active ?? false),
+      activeForBooking: data.activeForBooking !== false,
+      showInPublicBooking: data.showInPublicBooking === true,
     };
+    if (typeof data.sortOrder === "number") entry.sortOrder = data.sortOrder;
+    if (data.title) entry.title = String(data.title).trim();
+    if (data.photoUrl) entry.photoUrl = String(data.photoUrl).trim();
+    if (data.bio) entry.bio = String(data.bio).trim();
+    if (Array.isArray(data.serviceIdsAllowed)) entry.serviceIdsAllowed = data.serviceIdsAllowed;
+    if (Array.isArray(data.allowedLocationIds)) entry.allowedLocationIds = data.allowedLocationIds;
+    return entry;
   });
 
   const payload = {
@@ -83,13 +100,21 @@ export const mirrorPractitionerToPublic = onDocumentWritten(
 
       const data = afterSnap.data() ?? {};
 
-      const dirPayload = {
+      const dirPayload: Record<string, any> = {
         practitionerId,
         displayName: String(data.displayName ?? "").trim(),
         active: Boolean(data.active ?? false),
+        activeForBooking: data.activeForBooking !== false,
+        showInPublicBooking: data.showInPublicBooking === true,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         updatedBy: "mirrorPractitionerToPublic",
       };
+      if (typeof data.sortOrder === "number") dirPayload.sortOrder = data.sortOrder;
+      if (data.title) dirPayload.title = String(data.title).trim();
+      if (data.photoUrl) dirPayload.photoUrl = String(data.photoUrl).trim();
+      if (data.bio) dirPayload.bio = String(data.bio).trim();
+      if (Array.isArray(data.serviceIdsAllowed)) dirPayload.serviceIdsAllowed = data.serviceIdsAllowed;
+      if (Array.isArray(data.allowedLocationIds)) dirPayload.allowedLocationIds = data.allowedLocationIds;
 
       console.log("writing directory doc", { path: publicDirRef.path, dirPayload });
       await publicDirRef.set(dirPayload, { merge: true });
