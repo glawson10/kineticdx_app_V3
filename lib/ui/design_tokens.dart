@@ -37,6 +37,60 @@ abstract class AppColors {
   static const Color subtleBorder = Color(0xFFE8E8E8);
 }
 
+/// Public booking / landing page palette (live aesthetic: light grey bg, purple CTA).
+abstract class PublicBookingColors {
+  static const Color background = Color(0xFFF5F5F7);
+  static const Color primaryButton = Color(0xFF7A4F9F);
+  static const Color cardSurface = Color(0xFFFFFFFF);
+}
+
+/// Unified theme for the public booking flow (intro, booking grid, details, confirmation).
+/// Use in PublicApp and when building public routes in the main app so shell, app bar,
+/// and cards feel like one product.
+abstract class PublicTheme {
+  static ThemeData get data {
+    const seed = PublicBookingColors.primaryButton;
+    final scheme = ColorScheme.fromSeed(
+      seedColor: seed,
+      brightness: Brightness.light,
+      primary: seed,
+      surface: PublicBookingColors.background,
+    );
+    return ThemeData(
+      useMaterial3: true,
+      fontFamily: 'OpenSans',
+      colorScheme: scheme.copyWith(
+        surface: PublicBookingColors.cardSurface,
+        surfaceContainerHighest: PublicBookingColors.background,
+      ),
+      scaffoldBackgroundColor: PublicBookingColors.background,
+      appBarTheme: const AppBarTheme(
+        backgroundColor: PublicBookingColors.cardSurface,
+        foregroundColor: Color(0xFF1C1B1F),
+        elevation: 0,
+        scrolledUnderElevation: 1,
+      ),
+      cardTheme: CardThemeData(
+        color: PublicBookingColors.cardSurface,
+        elevation: 0,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppRadius.card),
+        ),
+      ),
+      filledButtonTheme: FilledButtonThemeData(
+        style: FilledButton.styleFrom(
+          backgroundColor: PublicBookingColors.primaryButton,
+          foregroundColor: Colors.white,
+          padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 24),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(AppRadius.element),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 abstract class AppRadius {
   static const double xs = 4;
   static const double sm = 8;
@@ -94,4 +148,6 @@ abstract class AppSizes {
   static const double maxContentWidth = 720;
   static const double welcomeMaxWidth = 480;
   static const double settingsFormMaxWidth = 680;
+  /// General clinic settings form column (premium narrow layout).
+  static const double generalSettingsMaxWidth = 640;
 }

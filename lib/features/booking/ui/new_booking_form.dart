@@ -3,7 +3,6 @@
 // Single cohesive booking form: Location → Type & duration → Clinician →
 // Date & time → Patient → Confirm. Replaces the multi-dialog create flow.
 
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -15,8 +14,8 @@ import '../../../data/repositories/locations_repository.dart';
 import '../../../data/repositories/staff_repository.dart';
 import '../../../models/appointment_type.dart';
 import '../../../models/clinic_location.dart';
-import '../../../models/practitioner_booking_meta.dart';
 import '../../../models/waitlist_entry.dart';
+import '../data/bookable_clinician_resolver.dart';
 
 /// Result of picking or creating a patient (returned by callbacks from calendar screen).
 class BookingPatientResult {
@@ -486,7 +485,10 @@ class _NewBookingFormState extends State<NewBookingForm> {
 /// Dropdown that filters clinicians by schedule permission and booking metadata
 /// (activeForBooking, allowed locations/types). Availability rules (recurring or overrides)
 /// do NOT filter this list — they only affect which slots are bookable.
-class _CompatibleClinicianDropdown extends StatelessWidget {
+///
+/// Uses the shared [resolveBookableClinicians] policy so eligibility is
+/// consistent with the calendar header dropdown and server-side validation.
+class _CompatibleClinicianDropdown extends StatefulWidget {
   final String clinicId;
   final String? selectedServiceId;
   final String? selectedLocationId;
@@ -501,118 +503,91 @@ class _CompatibleClinicianDropdown extends StatelessWidget {
     required this.onChanged,
   });
 
-  /// Must have Schedule read or Schedule write to appear in the clinician list.
-  static bool _hasScheduleAccess(Map<String, dynamic> data) {
-    final permsRaw = data['permissions'];
-    if (permsRaw is! Map) return false;
-    final perms = Map<String, dynamic>.from(permsRaw);
-    final write = perms['schedule.write'];
-    final read = perms['schedule.read'];
-    return write == true ||
-        read == true ||
-        write?.toString() == 'true' ||
-        read?.toString() == 'true';
-  }
+  @override
+  State<_CompatibleClinicianDropdown> createState() =>
+      _CompatibleClinicianDropdownState();
+}
 
-  static String _label(Map<String, dynamic> memberData, Map<String, dynamic>? metaData) {
-    final metaName = (metaData?['displayName'] ?? '').toString().trim();
-    if (metaName.isNotEmpty) return metaName;
-    final name = (memberData['displayName'] ?? '').toString().trim();
-    if (name.isNotEmpty) return name;
-    final email = (memberData['invitedEmail'] ?? memberData['email'] ?? '').toString().trim();
-    if (email.isNotEmpty) return email;
-    return 'Member';
+class _CompatibleClinicianDropdownState
+    extends State<_CompatibleClinicianDropdown> {
+  Stream<ResolvedClinicianList>? _stream;
+  String? _cacheKey;
+
+  Stream<ResolvedClinicianList> _getStream() {
+    final key =
+        '${widget.clinicId}|${widget.selectedServiceId}|${widget.selectedLocationId}';
+    if (key == _cacheKey && _stream != null) return _stream!;
+    final staffRepo = context.read<StaffRepository>();
+    _stream = watchBookableClinicians(
+      staffRepo: staffRepo,
+      clinicId: widget.clinicId,
+      serviceId: widget.selectedServiceId,
+      locationId: widget.selectedLocationId,
+    );
+    _cacheKey = key;
+    return _stream!;
   }
 
   @override
   Widget build(BuildContext context) {
-    final staffRepo = context.read<StaffRepository>();
+    return StreamBuilder<ResolvedClinicianList>(
+      stream: _getStream(),
+      builder: (context, snap) {
+        if (snap.hasError) {
+          debugPrint('[_CompatibleClinicianDropdown] stream error: ${snap.error}');
+        }
+        final resolved = snap.data;
+        if (resolved == null) {
+          return const SizedBox.shrink();
+        }
 
-    return StreamBuilder<List<MemberDocSnapshot>>(
-      stream: staffRepo.watchMembershipsWithFallback(clinicId),
-      builder: (context, memberSnap) {
-        return StreamBuilder<List<QueryDocumentSnapshot<Map<String, dynamic>>>>(
-          stream: staffRepo.watchPractitionerBookingMetas(clinicId),
-          builder: (context, metaSnap) {
-            final members = memberSnap.data ?? [];
-            final metas = metaSnap.data ?? [];
+        final toShow = resolved.effectiveBookingList;
+        if (toShow.isEmpty) {
+          return Text(
+            'No clinicians available for this combination. Each clinician needs: '
+            '(1) Schedule read or Schedule write permission, '
+            '(2) Booking visibility → Active for internal booking ON, '
+            '(3) Allowed locations/types that include your selection (or leave empty for all).',
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
+          );
+        }
 
-            final metaById = <String, Map<String, dynamic>>{};
-            for (final m in metas) {
-              metaById[m.id] = m.data();
-            }
+        final allowedIds = toShow.map((c) => c.uid).toSet();
+        final safeValue = (widget.selectedPractitionerId != null &&
+                allowedIds.contains(widget.selectedPractitionerId))
+            ? widget.selectedPractitionerId
+            : null;
 
-            final eligible = <MemberDocSnapshot>[];
-            final fallback = <MemberDocSnapshot>[];
-            for (final member in members) {
-              final metaData = metaById[member.id];
-              final hasScheduleAccess = _hasScheduleAccess(member.data());
-
-              if (metaData != null) {
-                final meta = PractitionerBookingMeta.fromMap(member.id, metaData);
-                final canShow = hasScheduleAccess || meta.activeForBooking;
-                if (canShow) fallback.add(member);
-                if (!meta.isEligibleFor(
-                  serviceId: selectedServiceId,
-                  locationId: selectedLocationId,
-                )) continue;
-                if (canShow) eligible.add(member);
-              } else {
-                if (hasScheduleAccess) {
-                  fallback.add(member);
-                  eligible.add(member);
-                }
-              }
-            }
-
-            final toShow = eligible.isNotEmpty ? eligible : fallback;
-            if (toShow.isEmpty) {
-              return Text(
-                'No clinicians available for this combination. Each clinician needs: '
-                '(1) Schedule read or Schedule write permission, '
-                '(2) Booking visibility → Active for internal booking ON, '
-                '(3) Allowed locations/types that include your selection (or leave empty for all).',
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                ),
-              );
-            }
-
-            final allowedIds = toShow.map((d) => d.id).toSet();
-            final safeValue = (selectedPractitionerId != null && allowedIds.contains(selectedPractitionerId))
-                ? selectedPractitionerId
-                : null;
-
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                DropdownButtonFormField<String>(
-                  value: safeValue,
-                  decoration: const InputDecoration(border: OutlineInputBorder()),
-                  items: [
-                    for (final d in toShow)
-                      DropdownMenuItem<String>(
-                        value: d.id,
-                        child: Text(_label(d.data(), metaById[d.id])),
-                      ),
-                  ],
-                  onChanged: onChanged,
-                ),
-                if (eligible.isEmpty && fallback.isNotEmpty)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 6),
-                    child: Text(
-                      'No clinician matches this location/type; showing all with booking visibility. '
-                      'Update Booking visibility if someone is missing.',
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: Theme.of(context).colorScheme.onSurfaceVariant,
-                      ),
-                    ),
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            DropdownButtonFormField<String>(
+              value: safeValue,
+              decoration: const InputDecoration(border: OutlineInputBorder()),
+              items: [
+                for (final c in toShow)
+                  DropdownMenuItem<String>(
+                    value: c.uid,
+                    child: Text(c.displayName),
                   ),
               ],
-            );
-          },
+              onChanged: widget.onChanged,
+            ),
+            if (resolved.isFallback)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Text(
+                  'No clinician matches this location/type; showing all with booking visibility. '
+                  'Update Booking visibility if someone is missing.',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+          ],
         );
       },
     );

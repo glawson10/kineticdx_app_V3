@@ -5,6 +5,7 @@
  */
 
 import * as admin from "firebase-admin";
+import type { Firestore } from "firebase-admin/firestore";
 import { HttpsError } from "firebase-functions/v2/https";
 import { requireClinicPermission } from "../permissions";
 import { writeSettingsAuditEvent } from "../audit/audit";
@@ -156,6 +157,24 @@ export async function upsertPractitionerAvailability(request: {
   const uid = request.auth.uid;
   await requireClinicPermission(db, clinicId, uid, "settings.write");
 
+  try {
+    return await upsertPractitionerAvailabilityImpl(db, clinicId, practitionerId, uid, availabilityId, isCreate, validated);
+  } catch (e) {
+    if (e instanceof HttpsError) throw e;
+    const message = e instanceof Error ? e.message : String(e);
+    throw new HttpsError("internal", message || "Failed to save availability rule.");
+  }
+}
+
+async function upsertPractitionerAvailabilityImpl(
+  db: Firestore,
+  clinicId: string,
+  practitionerId: string,
+  uid: string,
+  availabilityId: string | null,
+  isCreate: boolean,
+  validated: ReturnType<typeof validatePatch>
+): Promise<{ ok: boolean; availabilityId: string }> {
   const colRef = db
     .collection("clinics")
     .doc(clinicId)
@@ -225,15 +244,13 @@ export async function upsertPractitionerAvailability(request: {
     const eventType = validated.active
       ? "settings.availability.activated"
       : "settings.availability.deactivated";
-    await writeSettingsAuditEvent(db, clinicId, eventType, uid, entityPath, availabilityId, {
+    await writeSettingsAuditEvent(db, clinicId, eventType, uid, entityPath, availabilityId!, {
       active: { before: beforeActive, after: validated.active },
     });
   } else {
-    await writeSettingsAuditEvent(db, clinicId, "settings.availability.updated", uid, entityPath, availabilityId, {
-      ...updateData,
-      updatedAt: undefined,
-    });
+    const { updatedAt: _unused, ...changesForAudit } = updateData;
+    await writeSettingsAuditEvent(db, clinicId, "settings.availability.updated", uid, entityPath, availabilityId!, changesForAudit);
   }
   await mirrorPractitionerAvailabilityToLegacy(clinicId, practitionerId);
-  return { ok: true, availabilityId };
+  return { ok: true, availabilityId: availabilityId! };
 }

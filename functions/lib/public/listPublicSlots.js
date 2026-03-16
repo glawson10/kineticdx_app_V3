@@ -34,6 +34,9 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.getPublicBookingDiagnosticsFn = exports.getPublicBookingAppointmentTypesFn = exports.getPublicBookingLocationsFn = exports.getPublicBookingPractitionersFn = exports.getPublicMonthAvailabilityFn = exports.listPublicSlotsFn = void 0;
+exports.invalidateSlotCacheForBooking = invalidateSlotCacheForBooking;
+exports.intersectWeeklyHours = intersectWeeklyHours;
+exports.computeEffectiveWeeklyHours = computeEffectiveWeeklyHours;
 // functions/src/public/listPublicSlots.ts
 const https_1 = require("firebase-functions/v2/https");
 const admin = __importStar(require("firebase-admin"));
@@ -41,9 +44,43 @@ const logger_1 = require("firebase-functions/logger");
 const rateLimit_1 = require("./rateLimit");
 const permissions_1 = require("../clinic/permissions");
 // Commit 17: Availability reads only from public/config/publicBooking/config (no writePublicBookingMirror / private settings).
+// Commit 51: In-memory slot cache (TTL 45s, key: clinicId|locationId|practitionerId|appointmentTypeId|date in clinic TZ).
+const bookingConfig_1 = require("./bookingConfig");
 if (!admin.apps.length)
     admin.initializeApp();
 const db = admin.firestore();
+const SLOT_CACHE_TTL_MS = 45 * 1000;
+const SLOT_CACHE_MAX_KEYS = 500;
+const slotCache = new Map();
+function evictSlotCacheIfNeeded() {
+    if (slotCache.size <= SLOT_CACHE_MAX_KEYS)
+        return;
+    const entries = Array.from(slotCache.entries()).sort((a, b) => a[1].cachedAt - b[1].cachedAt);
+    const toDelete = entries.length - SLOT_CACHE_MAX_KEYS;
+    for (let i = 0; i < toDelete; i++) {
+        slotCache.delete(entries[i][0]);
+    }
+}
+/** Commit 51: Invalidate slot cache for a given clinic/practitioner/date after successful booking. */
+function invalidateSlotCacheForBooking(clinicId, practitionerId, dateYmd) {
+    const toDelete = [];
+    for (const key of slotCache.keys()) {
+        const parts = key.split("|");
+        if (parts[0] === clinicId && parts[2] === practitionerId && parts[4] === dateYmd) {
+            toDelete.push(key);
+        }
+    }
+    for (const k of toDelete)
+        slotCache.delete(k);
+    if (toDelete.length > 0) {
+        logger_1.logger.info("Slot cache invalidated after booking", {
+            clinicId,
+            practitionerId,
+            dateYmd,
+            keysRemoved: toDelete.length,
+        });
+    }
+}
 function safeStr(v) {
     return typeof v === "string" ? v.trim() : "";
 }
@@ -276,6 +313,52 @@ async function loadAppointmentsAsBlocks(clinicId, practitionerId, rangeStart, ra
     }
     return out;
 }
+/**
+ * Load practitioner overrides that overlap [rangeStart, rangeEnd].
+ * When locationId is set, only include overrides whose locationId is null (global) or matches.
+ * Used so public slots respect "unavailable" (time off) and "extra available" (one-off hours).
+ */
+async function loadPractitionerOverrides(clinicId, practitionerId, rangeStart, rangeEnd, locationId) {
+    const pid = safeStr(practitionerId);
+    if (!pid)
+        return { unavailable: [], available: [] };
+    const col = db
+        .collection("clinics")
+        .doc(clinicId)
+        .collection("practitioners")
+        .doc(pid)
+        .collection("overrides");
+    const snap = await col.where("toAt", ">", rangeStart).get();
+    const rangeStartMs = rangeStart.toMillis();
+    const rangeEndMs = rangeEnd.toMillis();
+    const locId = safeStr(locationId);
+    const unavailable = [];
+    const available = [];
+    for (const doc of snap.docs) {
+        const d = doc.data();
+        const fromAt = d === null || d === void 0 ? void 0 : d.fromAt;
+        const toAt = d === null || d === void 0 ? void 0 : d.toAt;
+        if (!fromAt || !toAt)
+            continue;
+        const fromMs = fromAt.toMillis();
+        const toMs = toAt.toMillis();
+        if (fromMs >= rangeEndMs)
+            continue;
+        const overrideLocId = (d === null || d === void 0 ? void 0 : d.locationId) == null || (d === null || d === void 0 ? void 0 : d.locationId) === "" ? null : safeStr(d.locationId);
+        if (locId.length > 0 && overrideLocId != null && overrideLocId !== locId)
+            continue;
+        const isAvailable = (d === null || d === void 0 ? void 0 : d.isAvailable) === true;
+        const block = { startMs: fromMs, endMs: toMs };
+        if (isAvailable)
+            available.push(block);
+        else
+            unavailable.push(block);
+    }
+    return { unavailable, available };
+}
+function slotContainedInRanges(startMs, endMs, ranges) {
+    return ranges.some((r) => startMs >= r.startMs && endMs <= r.endMs);
+}
 function overlapsAny(startMs, endMs, blocks) {
     return blocks.some((b) => startMs < b.endMs && endMs > b.startMs);
 }
@@ -393,6 +476,77 @@ async function loadStaffWeeklyAvailability(params) {
     const timezone = safeStr(data === null || data === void 0 ? void 0 : data.timezone) || undefined;
     return { timezone, weekly: out };
 }
+const AVAIL_DAY_KEYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+/** dayOfWeek 1 = Monday → mon, 7 = Sunday → sun (canonical availability blocks). */
+const DOW_TO_DAY = {
+    1: "mon",
+    2: "tue",
+    3: "wed",
+    4: "thu",
+    5: "fri",
+    6: "sat",
+    7: "sun",
+};
+/**
+ * Load practitioner availability from practitioners/{id}/availability filtered by locationId.
+ * Used when the request is location-scoped so slots/calendar only show availability for that location.
+ * See docs/AVAILABILITY_SOURCES.md.
+ */
+async function loadStaffWeeklyAvailabilityForLocation(params) {
+    const clinicId = safeStr(params.clinicId);
+    const pid = safeStr(params.practitionerId);
+    const locationId = safeStr(params.locationId);
+    if (!clinicId || !pid || !locationId)
+        return null;
+    const availCol = db
+        .collection("clinics")
+        .doc(clinicId)
+        .collection("practitioners")
+        .doc(pid)
+        .collection("availability");
+    const snap = await availCol.get();
+    const perDay = Object.fromEntries(AVAIL_DAY_KEYS.map((k) => [k, []]));
+    for (const doc of snap.docs) {
+        const data = doc.data();
+        if ((data === null || data === void 0 ? void 0 : data.active) === false)
+            continue;
+        if (safeStr(data === null || data === void 0 ? void 0 : data.locationId) !== locationId)
+            continue;
+        const blocks = Array.isArray(data === null || data === void 0 ? void 0 : data.blocks) ? data.blocks : [];
+        for (const b of blocks) {
+            if (!b || typeof b !== "object")
+                continue;
+            const bookableOnline = b.bookableOnline !== false;
+            if (!bookableOnline)
+                continue;
+            const dayOfWeek = Number(b.dayOfWeek);
+            const dayKey = DOW_TO_DAY[dayOfWeek];
+            if (!dayKey)
+                continue;
+            const startM = hmToMinutes(safeStr(b.startTime));
+            const endM = hmToMinutes(safeStr(b.endTime));
+            if (startM == null || endM == null || endM <= startM)
+                continue;
+            perDay[dayKey].push({ a: startM, b: endM });
+        }
+    }
+    const weekly = Object.fromEntries(AVAIL_DAY_KEYS.map((k) => [
+        k,
+        mergeIntervals(perDay[k]).map(({ a, b }) => ({
+            start: minutesToHHmm(a),
+            end: minutesToHHmm(b),
+        })),
+    ]));
+    const hasAny = Object.values(weekly).some((arr) => arr.length > 0);
+    if (!hasAny)
+        return null;
+    return { timezone: undefined, weekly };
+}
+function minutesToHHmm(m) {
+    const hh = Math.floor(m / 60);
+    const mm = m % 60;
+    return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
+}
 function mergeIntervals(list) {
     const sorted = [...list].sort((x, y) => x.a - y.a);
     const out = [];
@@ -449,6 +603,7 @@ function minsToWeekly(weeklyMins) {
     }
     return out;
 }
+/** Exported for unit tests (multi-location slot resolution). */
 function intersectWeeklyHours(clinicWeekly, staffWeekly) {
     const keys = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
     const a = normalizeToMinutes(clinicWeekly);
@@ -476,6 +631,20 @@ function intersectWeeklyHours(clinicWeekly, staffWeekly) {
     }
     return minsToWeekly(outMins);
 }
+/**
+ * Compute effective weekly hours for slot resolution: clinic ∩ (location if present) ∩ (practitioner if present).
+ * Exported for unit tests (multi-location slot resolution).
+ */
+function computeEffectiveWeeklyHours(clinicWeekly, locationWeekly, practitionerWeekly) {
+    let afterClinic = clinicWeekly;
+    if (locationWeekly && Object.values(locationWeekly).some((arr) => Array.isArray(arr) && arr.length > 0)) {
+        afterClinic = intersectWeeklyHours(clinicWeekly, locationWeekly);
+    }
+    if (practitionerWeekly && Object.values(practitionerWeekly).some((arr) => Array.isArray(arr) && arr.length > 0)) {
+        return intersectWeeklyHours(afterClinic, practitionerWeekly);
+    }
+    return afterClinic;
+}
 // Commit 17: Availability engine reads only from public mirror (config doc). No private settings reads.
 const CONFIG_DOC_PATH = (clinicId) => `clinics/${clinicId}/public/config/publicBooking/config`;
 const FULL_MIRROR_PATH = (clinicId) => `clinics/${clinicId}/public/config/publicBooking/publicBooking`;
@@ -483,7 +652,23 @@ const DAY_KEYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
 function defaultWeeklyHours() {
     return Object.fromEntries(DAY_KEYS.map((k) => [k, []]));
 }
-/** Load booking rules + weeklyHours from mirror config doc only. Uses defaults if missing. */
+/** Normalize one location's weekly hours from mirror (same shape as clinic weeklyHours). */
+function normalizeLocationWeeklyHoursFromMirror(raw) {
+    const out = defaultWeeklyHours();
+    if (!raw || typeof raw !== "object" || Array.isArray(raw))
+        return out;
+    const obj = raw;
+    for (const day of DAY_KEYS) {
+        const v = obj[day];
+        if (!Array.isArray(v))
+            continue;
+        out[day] = v
+            .filter((it) => it && typeof it === "object" && safeStr(it.start) && safeStr(it.end))
+            .map((it) => ({ start: safeStr(it.start), end: safeStr(it.end) }));
+    }
+    return out;
+}
+/** Load booking rules + weeklyHours + locationOpeningHours from mirror config doc only. Uses defaults if missing. */
 async function loadPublicConfigFromMirror(clinicId) {
     const configRef = db.doc(CONFIG_DOC_PATH(clinicId));
     const configSnap = await configRef.get();
@@ -497,22 +682,21 @@ async function loadPublicConfigFromMirror(clinicId) {
             minNoticeMinutes: 0,
             maxAdvanceDays: 90,
             weeklyHours: defaultWeeklyHours(),
+            locationOpeningHours: {},
+            onlineBookingEnabled: true,
         };
     }
     const d = configSnap.data();
-    const jurisdiction = (d === null || d === void 0 ? void 0 : d.jurisdiction) && typeof d.jurisdiction === "object" ? d.jurisdiction : {};
-    const rules = (d === null || d === void 0 ? void 0 : d.bookingRules) && typeof d.bookingRules === "object" ? d.bookingRules : {};
+    const rules = (0, bookingConfig_1.normalizeBookingRulesFromConfigDoc)(d);
+    const rulesRaw = (d === null || d === void 0 ? void 0 : d.bookingRules) && typeof d.bookingRules === "object" ? d.bookingRules : {};
     const wh = (d === null || d === void 0 ? void 0 : d.weeklyHours) && typeof d.weeklyHours === "object" ? d.weeklyHours : {};
-    const timezone = safeStr(jurisdiction.timezone) || "UTC";
-    const slotStepMinutes = typeof rules.slotStepMinutes === "number" && [5, 10, 15, 20, 30].includes(rules.slotStepMinutes)
-        ? rules.slotStepMinutes
+    const locHoursRaw = (d === null || d === void 0 ? void 0 : d.locationOpeningHours) && typeof d.locationOpeningHours === "object" ? d.locationOpeningHours : {};
+    const timezone = rules.timezone || "UTC";
+    const slotStepMinutes = typeof rulesRaw.slotStepMinutes === "number" && [5, 10, 15, 20, 30].includes(rulesRaw.slotStepMinutes)
+        ? rulesRaw.slotStepMinutes
         : 15;
-    const minNoticeMinutes = typeof rules.minNoticeMinutes === "number" && rules.minNoticeMinutes >= 0
-        ? rules.minNoticeMinutes
-        : 0;
-    const maxAdvanceDays = typeof rules.maxAdvanceDays === "number" && rules.maxAdvanceDays >= 7 && rules.maxAdvanceDays <= 365
-        ? rules.maxAdvanceDays
-        : 90;
+    const minNoticeMinutes = rules.minNoticeMinutes;
+    const maxAdvanceDays = rules.maxAdvanceDays;
     const weeklyHours = defaultWeeklyHours();
     for (const day of DAY_KEYS) {
         const v = wh[day];
@@ -522,12 +706,24 @@ async function loadPublicConfigFromMirror(clinicId) {
                 .map((it) => ({ start: safeStr(it.start), end: safeStr(it.end) }));
         }
     }
+    const locationOpeningHours = {};
+    for (const [locId, raw] of Object.entries(locHoursRaw)) {
+        if (typeof locId !== "string" || !locId.trim())
+            continue;
+        const normalized = normalizeLocationWeeklyHoursFromMirror(raw);
+        const hasAny = DAY_KEYS.some((day) => { var _a, _b; return ((_b = (_a = normalized[day]) === null || _a === void 0 ? void 0 : _a.length) !== null && _b !== void 0 ? _b : 0) > 0; });
+        if (hasAny)
+            locationOpeningHours[locId.trim()] = normalized;
+    }
+    const onlineBookingEnabled = rulesRaw.onlineBookingEnabled !== false;
     return {
         timezone,
         slotStepMinutes,
         minNoticeMinutes,
         maxAdvanceDays,
         weeklyHours,
+        locationOpeningHours,
+        onlineBookingEnabled,
     };
 }
 /** Load practitioners + corporatePrograms from full mirror (for allowlist). Does not read private settings. */
@@ -549,13 +745,23 @@ async function loadFullMirrorExtras(clinicId) {
                 const allowedLocationIds = Array.isArray(item.allowedLocationIds)
                     ? item.allowedLocationIds.filter((x) => typeof x === "string" && x.trim())
                     : undefined;
-                practitioners.push({
+                const entry = {
                     id,
                     displayName: safeStr(item.displayName),
                     serviceIdsAllowed: item.serviceIdsAllowed,
                     sortOrder: item.sortOrder,
                     allowedLocationIds,
-                });
+                };
+                const title = safeStr(item.title);
+                if (title)
+                    entry.title = title;
+                const photoUrl = safeStr(item.photoUrl);
+                if (photoUrl)
+                    entry.photoUrl = photoUrl;
+                const bio = safeStr(item.bio);
+                if (bio)
+                    entry.bio = bio;
+                practitioners.push(entry);
             }
         }
     }
@@ -564,6 +770,7 @@ async function loadFullMirrorExtras(clinicId) {
 }
 /** Commit 17: Load settings for availability from mirror config only. No private settings fallback. */
 async function loadPublicSettingsFromMirror(clinicId) {
+    var _a;
     const [config, extras] = await Promise.all([
         loadPublicConfigFromMirror(clinicId),
         loadFullMirrorExtras(clinicId),
@@ -574,12 +781,14 @@ async function loadPublicSettingsFromMirror(clinicId) {
         minNoticeMinutes: config.minNoticeMinutes,
         maxAdvanceDays: config.maxAdvanceDays,
         weeklyHours: config.weeklyHours,
+        locationOpeningHours: (_a = config.locationOpeningHours) !== null && _a !== void 0 ? _a : {},
+        onlineBookingEnabled: config.onlineBookingEnabled,
         practitioners: extras.practitioners,
         corporatePrograms: extras.corporatePrograms,
     };
 }
 exports.listPublicSlotsFn = (0, https_1.onCall)({ region: "europe-west3", cors: true }, async (request) => {
-    var _a, _b;
+    var _a, _b, _c;
     try {
         const data = ((_a = request.data) !== null && _a !== void 0 ? _a : {});
         const clinicId = safeStr(data.clinicId);
@@ -626,9 +835,12 @@ exports.listPublicSlotsFn = (0, https_1.onCall)({ region: "europe-west3", cors: 
         }
         // ✅ Commit 17: Read only from mirror config (no private settings)
         const settings = await loadPublicSettingsFromMirror(clinicId);
+        const isOpeningWindows = purpose === "openingWindows";
+        if (!isOpeningWindows && settings.onlineBookingEnabled === false) {
+            throw new https_1.HttpsError("failed-precondition", "Booking is temporarily unavailable.");
+        }
         // Validate practitionerId against allowlist (only if practitionerId provided AND not openingWindows)
         // For openingWindows (internal calendar), we allow any practitioner - they just need to exist in the clinic
-        const isOpeningWindows = purpose === "openingWindows";
         if (practitionerId) {
             if (isOpeningWindows) {
                 // ✅ For internal calendar, verify practitioner exists in clinic (but don't check public allowlist)
@@ -655,6 +867,19 @@ exports.listPublicSlotsFn = (0, https_1.onCall)({ region: "europe-west3", cors: 
         const step = typeof settings.slotStepMinutes === "number"
             ? settings.slotStepMinutes
             : 15;
+        if (!isOpeningWindows) {
+            const cacheKey = [
+                clinicId,
+                locationId !== null && locationId !== void 0 ? locationId : "",
+                practitionerId !== null && practitionerId !== void 0 ? practitionerId : "",
+                appointmentTypeId !== null && appointmentTypeId !== void 0 ? appointmentTypeId : "",
+                ymdFromDateInTz(rangeStartDt, clinicTz),
+            ].join("|");
+            const cached = slotCache.get(cacheKey);
+            if (cached && Date.now() - cached.cachedAt < SLOT_CACHE_TTL_MS) {
+                return { ...cached.result, cached: true };
+            }
+        }
         const minNotice = typeof settings.minNoticeMinutes === "number"
             ? settings.minNoticeMinutes
             : 0;
@@ -672,18 +897,27 @@ exports.listPublicSlotsFn = (0, https_1.onCall)({ region: "europe-west3", cors: 
         const apptPromise = !openingOnly && practitionerId
             ? loadAppointmentsAsBlocks(clinicId, practitionerId, rangeStartTs, rangeEndTs)
             : Promise.resolve([]);
-        const staffAvailPromise = practitionerId
-            ? loadStaffWeeklyAvailability({ clinicId, practitionerId })
-            : Promise.resolve(null);
-        const [closures, busy, apptBlocks, staffAvail] = await Promise.all([
+        const staffAvailPromise = practitionerId && locationId
+            ? loadStaffWeeklyAvailabilityForLocation({
+                clinicId,
+                practitionerId,
+                locationId,
+            })
+            : practitionerId
+                ? loadStaffWeeklyAvailability({ clinicId, practitionerId })
+                : Promise.resolve(null);
+        const overridesPromise = practitionerId
+            ? loadPractitionerOverrides(clinicId, practitionerId, rangeStartTs, rangeEndTs, locationId)
+            : Promise.resolve({ unavailable: [], available: [] });
+        const [closures, busy, apptBlocks, staffAvail, overrides] = await Promise.all([
             closuresPromise,
             busyPromise,
             apptPromise,
             staffAvailPromise,
+            overridesPromise,
         ]);
-        const tzOverride = safeStr(data.tz);
-        const tz = tzOverride ||
-            safeStr(staffAvail === null || staffAvail === void 0 ? void 0 : staffAvail.timezone) ||
+        // Commit 52: Use only clinic timezone for slot/day logic; client tz is for display only.
+        const tz = safeStr(staffAvail === null || staffAvail === void 0 ? void 0 : staffAvail.timezone) ||
             safeStr(settings.timezone) ||
             clinicTz ||
             "Europe/Prague";
@@ -691,11 +925,13 @@ exports.listPublicSlotsFn = (0, https_1.onCall)({ region: "europe-west3", cors: 
             ...closures.map((c) => ({ startMs: c.fromMs, endMs: c.toMs })),
             ...busy.map((b) => ({ startMs: b.startMs, endMs: b.endMs })),
             ...apptBlocks.map((a) => ({ startMs: a.startMs, endMs: a.endMs })),
+            ...overrides.unavailable,
         ];
         const clinicWeekly = normalizeWeeklyHours(settings);
-        const weekly = practitionerId && (staffAvail === null || staffAvail === void 0 ? void 0 : staffAvail.weekly)
-            ? intersectWeeklyHours(clinicWeekly, staffAvail.weekly)
-            : clinicWeekly;
+        const locHours = locationId && ((_b = settings.locationOpeningHours) === null || _b === void 0 ? void 0 : _b[locationId])
+            ? settings.locationOpeningHours[locationId]
+            : null;
+        const weekly = computeEffectiveWeeklyHours(clinicWeekly, locHours, practitionerId && (staffAvail === null || staffAvail === void 0 ? void 0 : staffAvail.weekly) ? staffAvail.weekly : null);
         const hasAnyHours = Object.values(weekly).some((arr) => Array.isArray(arr) && arr.length > 0);
         const corpSlug = safeStr(data.corpSlug) || undefined;
         const corpCode = safeStr(data.corpCode) || undefined;
@@ -754,7 +990,7 @@ exports.listPublicSlotsFn = (0, https_1.onCall)({ region: "europe-west3", cors: 
             }
         }
         if (!hasAnyHours) {
-            return {
+            const result = {
                 ok: true,
                 clinicId,
                 serviceId,
@@ -773,6 +1009,18 @@ exports.listPublicSlotsFn = (0, https_1.onCall)({ region: "europe-west3", cors: 
                 staffAvailabilityApplied: Boolean(practitionerId && (staffAvail === null || staffAvail === void 0 ? void 0 : staffAvail.weekly)),
                 appointmentsApplied: Boolean(!openingOnly && practitionerId),
             };
+            if (!isOpeningWindows) {
+                const cacheKey = [
+                    clinicId,
+                    locationId !== null && locationId !== void 0 ? locationId : "",
+                    practitionerId !== null && practitionerId !== void 0 ? practitionerId : "",
+                    appointmentTypeId !== null && appointmentTypeId !== void 0 ? appointmentTypeId : "",
+                    ymdFromDateInTz(rangeStartDt, clinicTz),
+                ].join("|");
+                slotCache.set(cacheKey, { result, cachedAt: Date.now() });
+                evictSlotCacheIfNeeded();
+            }
+            return result;
         }
         const slots = [];
         for (let t = rangeStartDt.getTime(); t + step * 60000 <= rangeEndDt.getTime(); t += step * 60000) {
@@ -817,20 +1065,21 @@ exports.listPublicSlotsFn = (0, https_1.onCall)({ region: "europe-west3", cors: 
             const eMin = hmToMinutes(endHm);
             if (!Number.isFinite(sMin) || !Number.isFinite(eMin))
                 continue;
-            const within = intervals.some((it) => {
+            const withinWeekly = intervals.some((it) => {
                 const a = hmToMinutes(safeStr(it.start));
                 const b = hmToMinutes(safeStr(it.end));
                 if (!Number.isFinite(a) || !Number.isFinite(b) || b <= a)
                     return false;
                 return sMin >= a && eMin <= b;
             });
-            if (!within)
+            const withinOverride = slotContainedInRanges(startMs, endMs, overrides.available);
+            if (!withinWeekly && !withinOverride)
                 continue;
             if (overlapsAny(startMs, endMs, blocked))
                 continue;
             slots.push({ startMs, endMs });
         }
-        return {
+        const result = {
             ok: true,
             clinicId,
             serviceId,
@@ -849,10 +1098,22 @@ exports.listPublicSlotsFn = (0, https_1.onCall)({ region: "europe-west3", cors: 
             staffAvailabilityApplied: Boolean(practitionerId && (staffAvail === null || staffAvail === void 0 ? void 0 : staffAvail.weekly)),
             appointmentsApplied: Boolean(!openingOnly && practitionerId),
         };
+        if (!isOpeningWindows) {
+            const cacheKey = [
+                clinicId,
+                locationId !== null && locationId !== void 0 ? locationId : "",
+                practitionerId !== null && practitionerId !== void 0 ? practitionerId : "",
+                appointmentTypeId !== null && appointmentTypeId !== void 0 ? appointmentTypeId : "",
+                ymdFromDateInTz(rangeStartDt, clinicTz),
+            ].join("|");
+            slotCache.set(cacheKey, { result, cachedAt: Date.now() });
+            evictSlotCacheIfNeeded();
+        }
+        return result;
     }
     catch (err) {
         logger_1.logger.error("listPublicSlots failed", {
-            err: (_b = err === null || err === void 0 ? void 0 : err.message) !== null && _b !== void 0 ? _b : String(err),
+            err: (_c = err === null || err === void 0 ? void 0 : err.message) !== null && _c !== void 0 ? _c : String(err),
             stack: err === null || err === void 0 ? void 0 : err.stack,
             code: err === null || err === void 0 ? void 0 : err.code,
         });
@@ -868,6 +1129,7 @@ exports.getPublicMonthAvailabilityFn = (0, https_1.onCall)({ region: "europe-wes
         const data = ((_a = request.data) !== null && _a !== void 0 ? _a : {});
         const clinicId = safeStr(data.clinicId);
         const practitionerId = safeStr(data.practitionerId);
+        const locationId = safeStr(data.locationId) || undefined;
         const serviceId = safeStr(data.serviceId) || "default";
         if (!clinicId || !practitionerId) {
             throw new https_1.HttpsError("invalid-argument", "clinicId and practitionerId are required.");
@@ -908,16 +1170,28 @@ exports.getPublicMonthAvailabilityFn = (0, https_1.onCall)({ region: "europe-wes
                 ? { corporateOnly: true, mode: "LINK_ONLY" }
                 : { corporateOnly: false, mode: null };
         }
-        const [closures, busy, apptBlocks, staffAvail] = await Promise.all([
+        const staffAvailPromise = practitionerId && locationId
+            ? loadStaffWeeklyAvailabilityForLocation({
+                clinicId,
+                practitionerId,
+                locationId,
+            })
+            : practitionerId
+                ? loadStaffWeeklyAvailability({ clinicId, practitionerId })
+                : Promise.resolve(null);
+        const overridesPromiseMonth = loadPractitionerOverrides(clinicId, practitionerId, rangeStartTs, rangeEndTs, locationId);
+        const [closures, busy, apptBlocks, staffAvail, overridesMonth] = await Promise.all([
             loadClosures(clinicId, rangeStartTs, rangeEndTs),
             loadBusyBlocks(clinicId, practitionerId, rangeStartTs, rangeEndTs),
             loadAppointmentsAsBlocks(clinicId, practitionerId, rangeStartTs, rangeEndTs),
-            loadStaffWeeklyAvailability({ clinicId, practitionerId }),
+            staffAvailPromise,
+            overridesPromiseMonth,
         ]);
         const blocked = [
             ...closures.map((c) => ({ startMs: c.fromMs, endMs: c.toMs })),
             ...busy.map((b) => ({ startMs: b.startMs, endMs: b.endMs })),
             ...apptBlocks.map((a) => ({ startMs: a.startMs, endMs: a.endMs })),
+            ...overridesMonth.unavailable,
         ];
         const clinicWeekly = normalizeWeeklyHours(settings);
         const weekly = (staffAvail === null || staffAvail === void 0 ? void 0 : staffAvail.weekly)
@@ -964,14 +1238,15 @@ exports.getPublicMonthAvailabilityFn = (0, https_1.onCall)({ region: "europe-wes
             const eMin = hmToMinutes(endHm);
             if (!Number.isFinite(sMin) || !Number.isFinite(eMin))
                 continue;
-            const within = intervals.some((it) => {
+            const withinWeekly = intervals.some((it) => {
                 const a = hmToMinutes(safeStr(it.start));
                 const b = hmToMinutes(safeStr(it.end));
                 if (!Number.isFinite(a) || !Number.isFinite(b) || b <= a)
                     return false;
                 return sMin >= a && eMin <= b;
             });
-            if (!within)
+            const withinOverride = slotContainedInRanges(startMs, endMs, overridesMonth.available);
+            if (!withinWeekly && !withinOverride)
                 continue;
             if (overlapsAny(startMs, endMs, blocked))
                 continue;
@@ -1000,33 +1275,56 @@ exports.getPublicMonthAvailabilityFn = (0, https_1.onCall)({ region: "europe-wes
  * Returns the public booking practitioner list from the full mirror (server-side read).
  * Use this from the public booking UI instead of reading Firestore directly to avoid
  * client-side "Unexpected state" / assertion errors in the Firestore web SDK.
- * When locationId is provided, returns only practitioners eligible at that location
- * (allowedLocationIds empty/undefined = all locations, else must include locationId).
+ *
+ * Filters:
+ * - locationId: returns only practitioners eligible at that location
+ *   (allowedLocationIds empty/undefined = all locations, else must include locationId).
+ * - serviceId / appointmentTypeId: returns only practitioners eligible for that service
+ *   (serviceIdsAllowed empty/undefined = all services, else must include serviceId).
+ *
+ * Returns full public-safe projected fields so the UI can display rich practitioner info.
  */
 exports.getPublicBookingPractitionersFn = (0, https_1.onCall)({ region: "europe-west3", cors: true }, async (request) => {
-    var _a, _b, _c, _d;
+    var _a, _b, _c, _d, _e, _f;
     try {
         const clinicId = safeStr((_a = request.data) === null || _a === void 0 ? void 0 : _a.clinicId);
         if (!clinicId) {
             throw new https_1.HttpsError("invalid-argument", "clinicId is required.");
         }
         const locationId = safeStr((_b = request.data) === null || _b === void 0 ? void 0 : _b.locationId) || undefined;
+        const serviceId = safeStr((_c = request.data) === null || _c === void 0 ? void 0 : _c.serviceId) ||
+            safeStr((_d = request.data) === null || _d === void 0 ? void 0 : _d.appointmentTypeId) ||
+            undefined;
         const { practitioners } = await loadFullMirrorExtras(clinicId);
         let list = practitioners;
         if (locationId) {
-            list = practitioners.filter((p) => {
+            list = list.filter((p) => {
                 const ids = p.allowedLocationIds;
                 if (!ids || ids.length === 0)
                     return true;
                 return ids.includes(locationId);
             });
         }
+        if (serviceId) {
+            list = list.filter((p) => {
+                const ids = p.serviceIdsAllowed;
+                if (!ids || ids.length === 0)
+                    return true;
+                return ids.includes(serviceId);
+            });
+        }
         return {
             practitioners: list.map((p) => {
-                var _a;
+                var _a, _b, _c, _d, _e, _f, _g;
                 return ({
                     id: p.id,
                     displayName: (_a = p.displayName) !== null && _a !== void 0 ? _a : "",
+                    title: (_b = p.title) !== null && _b !== void 0 ? _b : null,
+                    photoUrl: (_c = p.photoUrl) !== null && _c !== void 0 ? _c : null,
+                    bio: (_d = p.bio) !== null && _d !== void 0 ? _d : null,
+                    sortOrder: (_e = p.sortOrder) !== null && _e !== void 0 ? _e : 0,
+                    allowedLocationIds: (_f = p.allowedLocationIds) !== null && _f !== void 0 ? _f : [],
+                    serviceIdsAllowed: (_g = p.serviceIdsAllowed) !== null && _g !== void 0 ? _g : [],
                 });
             }),
         };
@@ -1034,13 +1332,12 @@ exports.getPublicBookingPractitionersFn = (0, https_1.onCall)({ region: "europe-
     catch (err) {
         if (err instanceof https_1.HttpsError)
             throw err;
-        const msg = (_c = err === null || err === void 0 ? void 0 : err.message) !== null && _c !== void 0 ? _c : String(err);
+        const msg = (_e = err === null || err === void 0 ? void 0 : err.message) !== null && _e !== void 0 ? _e : String(err);
         logger_1.logger.error("getPublicBookingPractitionersFn failed", {
-            clinicId: (_d = request.data) === null || _d === void 0 ? void 0 : _d.clinicId,
+            clinicId: (_f = request.data) === null || _f === void 0 ? void 0 : _f.clinicId,
             error: msg,
             code: err === null || err === void 0 ? void 0 : err.code,
         });
-        // Return empty list so UI shows "No practitioners" + hint instead of "[internal] internal"
         return { practitioners: [] };
     }
 });
@@ -1173,32 +1470,32 @@ exports.getPublicBookingDiagnosticsFn = (0, https_1.onCall)({ region: "europe-we
         const membershipActive = membershipStatus === "none" || membershipStatus === "active";
         return {
             id: d.id,
-            showInOnlineBooking: (data === null || data === void 0 ? void 0 : data.showInOnlineBooking) === true,
+            showInPublicBooking: (data === null || data === void 0 ? void 0 : data.showInPublicBooking) === true,
             active: (data === null || data === void 0 ? void 0 : data.active) !== false,
             activeForBooking: (data === null || data === void 0 ? void 0 : data.activeForBooking) !== false,
             membershipStatus,
             membershipActive,
         };
     });
-    const withVisibility = practitionersInClinic.filter((p) => p.showInOnlineBooking).length;
-    const withVisibilityButInactiveMembership = practitionersInClinic.filter((p) => p.showInOnlineBooking && !p.membershipActive).length;
+    const withVisibility = practitionersInClinic.filter((p) => p.showInPublicBooking).length;
+    const withVisibilityButInactiveMembership = practitionersInClinic.filter((p) => p.showInPublicBooking && !p.membershipActive).length;
     let hint;
     if (practitionerCountInMirror === 0 && withVisibility > 0) {
         hint =
             withVisibilityButInactiveMembership > 0
-                ? `${withVisibilityButInactiveMembership} practitioner(s) have showInOnlineBooking but inactive/suspended membership. Set membership to Active in Settings → Team, then re-save Online booking.`
-                : "Mirror has 0 practitioners but some have showInOnlineBooking. Re-save Settings → Public booking or Online booking to rebuild the mirror.";
+                ? `${withVisibilityButInactiveMembership} practitioner(s) have showInPublicBooking but inactive/suspended membership. Set membership to Active in Settings → Team, then re-save Public booking.`
+                : "Mirror has 0 practitioners but some have showInPublicBooking. Re-save Settings → Public booking to rebuild the mirror.";
     }
     else if (practitionerCountInMirror === 0 && withVisibility === 0) {
         hint =
-            "No practitioners have showInOnlineBooking: true. Turn ON in Settings → Online booking and Save.";
+            "No practitioners have showInPublicBooking: true. Turn ON in Settings → Public booking and Save.";
     }
     return {
         mirrorExists,
         practitionerCountInMirror,
         locationCountInMirror,
         practitionersInClinicCount: practitionersInClinic.length,
-        practitionersWithShowInOnlineBooking: withVisibility,
+        practitionersWithPublicVisibility: withVisibility,
         practitioners: practitionersInClinic,
         hint,
     };

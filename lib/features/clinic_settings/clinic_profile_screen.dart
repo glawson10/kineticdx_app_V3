@@ -54,6 +54,11 @@ class ClinicProfileScreen extends StatelessWidget {
 
     final session = clinicCtx.session;
     final canWriteSettings = session.permissions.has('settings.write');
+    final canBillingAccess = canWriteSettings ||
+        session.permissions.has('manageBilling') ||
+        session.permissions.has('billing.manage') ||
+        session.permissions.has('billing.read') ||
+        session.permissions.has('viewFinancialReports');
     final canAudit = session.permissions.has('audit.read');
     final canViewNotes = session.permissions.viewClinical;
     final canManageNotes = session.permissions.settingsWrite;
@@ -196,11 +201,11 @@ class ClinicProfileScreen extends StatelessWidget {
             leading: const Icon(Icons.request_quote_outlined),
             title: const Text('Billing'),
             subtitle: Text(
-              canWriteSettings || session.permissions.has('manageBilling')
+              canBillingAccess
                   ? 'Invoice settings, supplier profile, payment methods'
-                  : 'No permission (manageBilling or settings.write required)',
+                  : 'No permission (billing access or settings.write required)',
             ),
-            enabled: canWriteSettings || session.permissions.has('manageBilling'),
+            enabled: canBillingAccess,
             onTap: () => Navigator.of(context).push(
               MaterialPageRoute(
                 builder: (_) => BillingSettingsScreen(),

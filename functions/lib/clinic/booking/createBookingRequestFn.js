@@ -149,6 +149,12 @@ exports.createBookingRequestFn = (0, https_1.onCall)({ region: "europe-west3" },
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         source: "publicBookingCallable",
     };
+    const appointmentTypeId = safeStr(input.appointmentTypeId);
+    if (appointmentTypeId)
+        requestDoc.appointmentTypeId = appointmentTypeId;
+    const locationId = safeStr(input.locationId);
+    if (locationId)
+        requestDoc.locationId = locationId;
     const ref = db.collection(`clinics/${clinicId}/bookingRequests`).doc();
     await ref.set(requestDoc);
     logger_1.logger.info("BookingRequest created via callable", {

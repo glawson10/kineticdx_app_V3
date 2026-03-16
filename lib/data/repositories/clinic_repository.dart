@@ -171,7 +171,8 @@ class ClinicRepository {
         .snapshots();
   }
 
-  /// Update weekly opening hours via callable.
+  /// Update weekly opening hours via settings.updatePublicBookingConfig.
+  /// Writes only to clinics/{clinicId}/settings/publicBooking; mirror triggers update public config.
   ///
   /// Expects `weeklyHours` shape:
   /// {
@@ -179,18 +180,21 @@ class ClinicRepository {
   ///   ...
   /// }
   ///
-  /// Optionally also writes `weeklyHoursMeta`.
+  /// Optionally also sends `weeklyHoursMeta`.
   Future<void> updateClinicWeeklyHours({
     required String clinicId,
     required Map<String, dynamic> weeklyHours,
     Map<String, dynamic>? weeklyHoursMeta,
   }) async {
-    final callable = _functions.httpsCallable('updateClinicWeeklyHoursFn');
+    final callable = _functions.httpsCallable('settingsUpdatePublicBookingConfig');
 
-    final payload = <String, dynamic>{
-      'clinicId': clinicId,
+    final patch = <String, dynamic>{
       'weeklyHours': weeklyHours,
       if (weeklyHoursMeta != null) 'weeklyHoursMeta': weeklyHoursMeta,
+    };
+    final payload = <String, dynamic>{
+      'clinicId': clinicId,
+      'patch': patch,
     };
 
     try {
@@ -200,11 +204,11 @@ class ClinicRepository {
       if (data is Map && data['ok'] == true) return;
 
       throw StateError(
-        'updateClinicWeeklyHoursFn returned unexpected payload: $data',
+        'settingsUpdatePublicBookingConfig returned unexpected payload: $data',
       );
     } on FirebaseFunctionsException catch (e) {
       final msg = (e.message ?? e.code).trim();
-      throw StateError('updateClinicWeeklyHoursFn failed: $msg');
+      throw StateError('settingsUpdatePublicBookingConfig failed: $msg');
     }
   }
 

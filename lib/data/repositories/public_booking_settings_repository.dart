@@ -19,7 +19,8 @@ class PublicBookingSettingsRepository {
   }
 
   Future<void> updateSettings(String clinicId, Map<String, dynamic> patch) async {
-    final fn = FirebaseFunctions.instance.httpsCallable('settingsUpdatePublicBookingConfig');
-    await fn.call({'clinicId': clinicId, ...patch});
+    final fn = FirebaseFunctions.instanceFor(region: 'europe-west3')
+        .httpsCallable('settingsUpdatePublicBookingConfig');
+    await fn.call({'clinicId': clinicId, 'patch': patch});
   }
 }

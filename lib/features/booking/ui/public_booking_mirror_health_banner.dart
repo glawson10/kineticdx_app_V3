@@ -87,10 +87,11 @@ class PublicBookingMirrorHealthBanner extends StatelessWidget {
     if (c.isEmpty) return;
     try {
       final fn = FirebaseFunctions.instanceFor(region: 'europe-west3');
-      await fn.httpsCallable('projectionsRebuildPublicBookingConfig').call({'clinicId': c});
+      // Rebuild full mirror (practitioners, locations, appointment types) so public booking sees clinicians.
+      await fn.httpsCallable('rebuildPublicBookingMirrorFn').call({'clinicId': c});
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Rebuild started. Config may update in a few seconds.')),
+          const SnackBar(content: Text('Rebuild started. Practitioners and availability may update in a few seconds.')),
         );
       }
     } catch (e) {

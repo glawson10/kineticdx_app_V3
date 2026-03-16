@@ -154,7 +154,11 @@ class AppointmentTypesListScreen extends StatelessWidget {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(messageForCallableError(e, fallback: 'Failed to update appointment type')),
+          content: Text(messageForCallableError(
+            e,
+            fallback: 'Failed to update appointment type.',
+            logHint: 'settingsSetAppointmentTypeActive',
+          )),
         ),
       );
     }

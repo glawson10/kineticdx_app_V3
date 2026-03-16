@@ -242,6 +242,23 @@ class _CalendarDisplaySettingsScreenState
     _minutesPerBlockController = TextEditingController(text: _draft.minutesPerBlock.toString());
     _slotHeightController = TextEditingController(text: _draft.slotHeightPx.toString());
     _timePickerIncrementController = TextEditingController(text: _draft.timePickerIncrementMinutes.toString());
+    // When embedded in Settings (no initial), load saved settings so returning to the tab shows them.
+    if (widget.initial == null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _loadSavedSettings());
+    }
+  }
+
+  Future<void> _loadSavedSettings() async {
+    if (!mounted) return;
+    final repo = widget.repo ?? context.read<CalendarDisplaySettingsRepository>();
+    try {
+      final saved = await repo.getSettings(widget.clinicId);
+      if (!mounted) return;
+      setState(() => _draft = saved);
+      _syncControllersFromDraft();
+    } catch (_) {
+      // Keep defaults on error
+    }
   }
 
   @override
@@ -312,7 +329,7 @@ class _CalendarDisplaySettingsScreenState
     setState(() => _saving = true);
     try {
       final repo = widget.repo ?? context.read<CalendarDisplaySettingsRepository>();
-      await repo.updateSettings(widget.clinicId, updated.toMap());
+      await repo.updateSettings(widget.clinicId, updated.toPatchMap());
       if (!mounted) return;
       if (widget.onSaved != null) {
         widget.onSaved!(updated);
@@ -320,7 +337,15 @@ class _CalendarDisplaySettingsScreenState
           const SnackBar(content: Text('Calendar display settings saved.')),
         );
       } else {
-        Navigator.of(context).pop(updated);
+        // Embedded in Settings (no onSaved): stay on screen, show success, refresh draft.
+        setState(() {
+          _saving = false;
+          _draft = updated;
+        });
+        _syncControllersFromDraft();
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Calendar display settings saved.')),
+        );
       }
     } on FirebaseFunctionsException catch (e) {
       if (!mounted) return;

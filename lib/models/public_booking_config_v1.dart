@@ -1,3 +1,5 @@
+import 'questionnaire_flow.dart';
+
 // lib/models/public_booking_config_v1.dart
 //
 // Commit 17: Read-only mirror config from clinics/{clinicId}/public/config/publicBooking/config.
@@ -30,6 +32,8 @@ class PublicBookingConfigV1 {
     required this.requirePhone,
     required this.cancellationPolicyHours,
     required this.weeklyHours,
+    required this.questionnaireFlow,
+    this.onlineBookingEnabled = true,
     this.clinicId,
     this.schemaVersion,
   });
@@ -42,8 +46,10 @@ class PublicBookingConfigV1 {
   final bool requireEmail;
   final bool requirePhone;
   final int cancellationPolicyHours;
+  final bool onlineBookingEnabled;
   /// All 7 days always present: mon..sun -> list of {start, end}.
   final Map<String, List<WeeklyInterval>> weeklyHours;
+  final QuestionnaireFlowPublicConfig questionnaireFlow;
   final String? clinicId;
   final int? schemaVersion;
 
@@ -58,6 +64,8 @@ class PublicBookingConfigV1 {
         requirePhone: false,
         cancellationPolicyHours: 24,
         weeklyHours: _emptyWeeklyHours(),
+        questionnaireFlow: const QuestionnaireFlowPublicConfig(),
+        onlineBookingEnabled: true,
       );
 
   static Map<String, List<WeeklyInterval>> _emptyWeeklyHours() {
@@ -86,6 +94,9 @@ class PublicBookingConfigV1 {
     final requireEmailVal = r['requireEmail'] != false;
     final requirePhoneVal = r['requirePhone'] == true;
     final cancelHours = _int(r['cancellationPolicyHours'], 24, 0, 168 * 24);
+    final questionnaireFlow =
+        QuestionnaireFlowPublicConfig.fromJson(r['questionnaireFlow']);
+    final onlineBookingEnabled = r['onlineBookingEnabled'] != false;
 
     final weeklyHours = _parseWeeklyHours(data['weeklyHours']);
 
@@ -99,6 +110,8 @@ class PublicBookingConfigV1 {
       requirePhone: requirePhoneVal,
       cancellationPolicyHours: cancelHours,
       weeklyHours: weeklyHours,
+      questionnaireFlow: questionnaireFlow,
+      onlineBookingEnabled: onlineBookingEnabled,
       clinicId: data['clinicId'] is String ? data['clinicId'] as String : null,
       schemaVersion: data['schemaVersion'] is int ? data['schemaVersion'] as int : null,
     );

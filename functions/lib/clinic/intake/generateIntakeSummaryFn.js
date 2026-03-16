@@ -5,6 +5,7 @@ exports.generateIntakeSummaryFn = void 0;
 const https_1 = require("firebase-functions/v2/https");
 const firestore_1 = require("firebase-admin/firestore");
 const authz_1 = require("../authz");
+const flowRegistry_1 = require("./flowRegistry");
 // -----------------------------------------------------------------------------
 // Engines
 // -----------------------------------------------------------------------------
@@ -58,7 +59,7 @@ function normalizeAnkleForSummary(raw) {
     };
 }
 exports.generateIntakeSummaryFn = (0, https_1.onCall)({ region: "europe-west3" }, async (req) => {
-    var _a, _b, _c, _d, _e;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o;
     if (!req.auth)
         throw new https_1.HttpsError("unauthenticated", "Sign in required.");
     const clinicId = String((_b = (_a = req.data) === null || _a === void 0 ? void 0 : _a.clinicId) !== null && _b !== void 0 ? _b : "").trim();
@@ -89,8 +90,11 @@ exports.generateIntakeSummaryFn = (0, https_1.onCall)({ region: "europe-west3" }
         });
     }
     const flowId = String((_e = flow.flowId) !== null && _e !== void 0 ? _e : "").trim();
+    const snapshotEngine = String((_f = intake === null || intake === void 0 ? void 0 : intake.summaryEngine) !== null && _f !== void 0 ? _f : "").trim();
+    const legacy = (0, flowRegistry_1.legacyFlowIdToRegistry)(flowId, (_g = intake === null || intake === void 0 ? void 0 : intake.flowVersion) !== null && _g !== void 0 ? _g : flow === null || flow === void 0 ? void 0 : flow.flowVersion);
+    const summaryEngine = snapshotEngine || (legacy === null || legacy === void 0 ? void 0 : legacy.summaryEngine) || flowId;
     let summary;
-    switch (flowId) {
+    switch (summaryEngine) {
         case "ankle": {
             const raw = await computeAnkleResult(answers);
             const rawForSummary = normalizeAnkleForSummary(raw);
@@ -145,9 +149,23 @@ exports.generateIntakeSummaryFn = (0, https_1.onCall)({ region: "europe-west3" }
             summary = (0, buildWristSummary_1.buildWristSummary)(rawResult, answers);
             break;
         }
+        case "generalVisit": {
+            const reason = (_o = (_l = (_k = (_j = (_h = answers === null || answers === void 0 ? void 0 : answers.generalVisit) === null || _h === void 0 ? void 0 : _h.goals) === null || _j === void 0 ? void 0 : _j.reasonForVisit) === null || _k === void 0 ? void 0 : _k.v) !== null && _l !== void 0 ? _l : (_m = answers === null || answers === void 0 ? void 0 : answers["generalVisit.goals.reasonForVisit"]) === null || _m === void 0 ? void 0 : _m.v) !== null && _o !== void 0 ? _o : "";
+            const narrative = typeof reason === "string" && reason.trim()
+                ? `Reason for visit: ${reason.trim()}`
+                : "General visit questionnaire completed. No specific reason for visit captured.";
+            summary = {
+                narrative,
+                triage: { status: "green", reasons: [] },
+                topDifferentials: [],
+                objectiveTests: [],
+            };
+            break;
+        }
         default:
-            throw new https_1.HttpsError("invalid-argument", `Unsupported flowId: ${flowId}`, {
+            throw new https_1.HttpsError("invalid-argument", `Unsupported summaryEngine: ${summaryEngine}`, {
                 flowId,
+                summaryEngine,
             });
     }
     return { ok: true, flowId, summary };

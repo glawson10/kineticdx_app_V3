@@ -176,11 +176,14 @@ export type SettingsAuditEventType =
   | "settings.location.activated"
   | "settings.location.upserted"
   | "settings.location.active_set"
+  | "settings.location.openingHours.updated"
+  | "settings.locationDisplay.updated"
   | "settings.appointmentType.created"
   | "settings.appointmentType.updated"
   | "settings.apptType.upserted"
   | "settings.calendarDisplay.updated"
   | "settings.publicBooking.updated"
+  | "settings.onlineBooking.enablement.updated"
   | "settings.communication.updated";
 
 export type SettingsAuditPayload = {
@@ -203,13 +206,15 @@ export async function writeSettingsAuditEvent(
   changes: Record<string, unknown>
 ): Promise<void> {
   const ref = db.collection("clinics").doc(clinicId).collection("audit").doc();
+  // Firestore does not accept undefined; strip it from nested changes
+  const cleanChanges = removeUndefined((changes ?? {}) as Record<string, any>);
   await ref.set({
     clinicId,
     eventType,
     actorUserId: (actorUserId ?? "").toString().trim(),
     entityPath,
     entityId,
-    changes: changes ?? {},
+    changes: cleanChanges,
     createdAt: admin.firestore.FieldValue.serverTimestamp(),
   });
 }

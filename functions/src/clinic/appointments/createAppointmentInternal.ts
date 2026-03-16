@@ -271,9 +271,20 @@ async function createAppointmentInternalImpl(
       }
 
       const allowedServices: string[] = Array.isArray(bmeta.serviceIdsAllowed)
-        ? bmeta.serviceIdsAllowed.filter((x: any) => typeof x === "string" && x.trim())
+        ? bmeta.serviceIdsAllowed.map((x: any) => (typeof x === "string" ? x.trim() : "")).filter((x: string) => x.length > 0)
         : [];
-      if (allowedServices.length > 0 && !allowedServices.includes(serviceId)) {
+      const serviceIdNorm = safeString(serviceId);
+      if (allowedServices.length > 0 && serviceIdNorm && !allowedServices.includes(serviceIdNorm)) {
+        // #region agent log
+        logger.warn("createAppointmentInternal: practitioner cannot provide appointment type", {
+          hypothesisId: "A",
+          clinicId,
+          practitionerId,
+          serviceIdRaw: serviceId,
+          serviceIdNorm,
+          allowedServices,
+        });
+        // #endregion
         throw new HttpsError(
           "failed-precondition",
           "Selected practitioner cannot provide this appointment type."
@@ -281,7 +292,7 @@ async function createAppointmentInternalImpl(
       }
 
       const allowedLocations: string[] = Array.isArray(bmeta.allowedLocationIds)
-        ? bmeta.allowedLocationIds.filter((x: any) => typeof x === "string" && x.trim())
+        ? bmeta.allowedLocationIds.map((x: any) => (typeof x === "string" ? x.trim() : "")).filter((x: string) => x.length > 0)
         : [];
       const locId = safeString(input.locationId);
       if (allowedLocations.length > 0 && locId && !allowedLocations.includes(locId)) {
@@ -403,20 +414,45 @@ async function createAppointmentInternalImpl(
     updatedByUid: actorUid,
   };
 
-  try {
-    await apptRef.set(payload);
-  } catch (err: any) {
-    logger.error("createAppointmentInternal: apptRef.set failed", {
-      clinicId,
-      kind,
-      err: err?.message ?? String(err),
-      stack: err?.stack,
+  // Commit 47: Overlap check and write in one transaction so two concurrent requests cannot double-book.
+  if (kind !== "admin" && practitionerId) {
+    const col = db.collection(`clinics/${clinicId}/appointments`);
+    await db.runTransaction(async (tx) => {
+      const query = col
+        .where("practitionerId", "==", practitionerId)
+        .where("endAt", ">", startTs);
+      const snap = await tx.get(query);
+      const startMs = startTs.toMillis();
+      const endMs = endTs.toMillis();
+      for (const doc of snap.docs) {
+        const data = doc.data() as any;
+        const status = (data?.status ?? "").toString().toLowerCase();
+        if (status === "cancelled") continue;
+        const sMs = toMillisSafe(data?.startAt ?? data?.start);
+        const eMs = toMillisSafe(data?.endAt ?? data?.end);
+        if (sMs == null || eMs == null) continue;
+        if (sMs < endMs && eMs > startMs) {
+          throw new HttpsError("failed-precondition", "slot_no_longer_available");
+        }
+      }
+      tx.set(apptRef, payload);
     });
-    throw new HttpsError(
-      "internal",
-      err?.message ?? "Failed to write appointment.",
-      { original: err?.message }
-    );
+  } else {
+    try {
+      await apptRef.set(payload);
+    } catch (err: any) {
+      logger.error("createAppointmentInternal: apptRef.set failed", {
+        clinicId,
+        kind,
+        err: err?.message ?? String(err),
+        stack: err?.stack,
+      });
+      throw new HttpsError(
+        "internal",
+        err?.message ?? "Failed to write appointment.",
+        { original: err?.message }
+      );
+    }
   }
 
   return { success: true, appointmentId: apptRef.id };

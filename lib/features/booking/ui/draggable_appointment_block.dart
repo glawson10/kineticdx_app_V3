@@ -15,6 +15,7 @@ class DraggableAppointmentBlock extends StatefulWidget {
     required this.appointment,
     this.serviceIdToColorHex,
     this.showFinancialIndicators = false,
+    this.locationLabel,
     required this.weekStart,
     required this.daysCount,
     required this.dayWidth,
@@ -34,6 +35,8 @@ class DraggableAppointmentBlock extends StatefulWidget {
 
   /// When true, show a financial/billing indicator icon on the block (CalendarDisplaySettings.showFinancialIndicators).
   final bool showFinancialIndicators;
+  /// Optional location name to show on the block (e.g. when filtering by location or multi-location).
+  final String? locationLabel;
   final DateTime weekStart;
   final int daysCount;
   final double dayWidth;
@@ -132,7 +135,8 @@ class _DraggableAppointmentBlockState extends State<DraggableAppointmentBlock> {
       if (!appt.isAdmin) appt.kindLabel,
       if (!appt.isAdmin && appt.serviceName.trim().isNotEmpty) appt.serviceName.trim(),
       if (!appt.isAdmin && appt.practitionerName.trim().isNotEmpty) appt.practitionerName.trim(),
-    ].join(' • ');
+      if (widget.locationLabel != null && widget.locationLabel!.trim().isNotEmpty) widget.locationLabel!.trim(),
+    ].where((s) => s.isNotEmpty).toList().join(' • ');
 
     final timeLine = '${_fmt(_draftStart)}–${_fmt(_draftEnd)}';
 
@@ -180,12 +184,14 @@ class _DraggableAppointmentBlockState extends State<DraggableAppointmentBlock> {
                 ),
               ),
 
-            // Real block
+            // Real block (elevation higher while dragging)
             Material(
-              elevation: 2,
+              elevation: _editing ? 6 : 2,
               borderRadius: BorderRadius.circular(8),
               color: _bgColor(context, appt),
-              child: Stack(
+              child: Opacity(
+                opacity: appt.status.toLowerCase() == 'cancelled' ? 0.82 : 1.0,
+                child: Stack(
                 children: [
                   // Financial indicator (top-left when enabled)
                   if (widget.showFinancialIndicators && !appt.isAdmin)
@@ -250,6 +256,8 @@ class _DraggableAppointmentBlockState extends State<DraggableAppointmentBlock> {
                               details: details,
                               timeLine: timeLine,
                               status: appt.statusLabel,
+                              showRepeating: appt.isSeriesOccurrence,
+                              isCancelled: appt.status.toLowerCase() == 'cancelled',
                             );
                           },
                         ),
@@ -326,6 +334,7 @@ class _DraggableAppointmentBlockState extends State<DraggableAppointmentBlock> {
                 ],
               ),
             ),
+          ),
           ],
         ),
       ),
@@ -601,17 +610,17 @@ class _DraggableAppointmentBlockState extends State<DraggableAppointmentBlock> {
 
   Color _bgColor(BuildContext context, Appointment appt) {
     final scheme = Theme.of(context).colorScheme;
-    if (appt.isAdmin) return scheme.secondaryContainer;
-
+    if (appt.isAdmin) {
+      return scheme.surfaceContainerHighest.withValues(alpha: 0.9);
+    }
     switch (appt.status.toLowerCase()) {
       case 'attended':
-        return scheme.tertiaryContainer;
+        return scheme.tertiaryContainer.withValues(alpha: 0.85);
       case 'cancelled':
       case 'missed':
-        return scheme.errorContainer;
+        return scheme.surfaceContainerHigh.withValues(alpha: 0.95);
       case 'booked':
       default:
-        // BOOKING_DATA_CONTRACT: use appointment type colorHex when available
         if (!appt.isAdmin &&
             appt.serviceId.trim().isNotEmpty &&
             widget.serviceIdToColorHex != null) {
@@ -621,7 +630,14 @@ class _DraggableAppointmentBlockState extends State<DraggableAppointmentBlock> {
             if (c != null) return c;
           }
         }
-        return scheme.primaryContainer;
+        switch (appt.kind.toLowerCase()) {
+          case 'new':
+            return scheme.primaryContainer.withValues(alpha: 0.9);
+          case 'followup':
+            return scheme.secondaryContainer.withValues(alpha: 0.85);
+          default:
+            return scheme.primaryContainer;
+        }
     }
   }
 
@@ -662,6 +678,8 @@ class _ResponsiveBlockText extends StatelessWidget {
     required this.details,
     required this.timeLine,
     required this.status,
+    this.showRepeating = false,
+    this.isCancelled = false,
   });
 
   final double height;
@@ -669,6 +687,8 @@ class _ResponsiveBlockText extends StatelessWidget {
   final String details;
   final String timeLine;
   final String status;
+  final bool showRepeating;
+  final bool isCancelled;
 
   @override
   Widget build(BuildContext context) {
@@ -709,6 +729,7 @@ class _ResponsiveBlockText extends StatelessWidget {
 
     final showDetails = height >= 46 && details.trim().isNotEmpty;
     final showStatus = height >= 60;
+    final showMetadata = height >= 44 && showRepeating;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -718,31 +739,60 @@ class _ResponsiveBlockText extends StatelessWidget {
           title,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
-          style: t.textTheme.bodyMedium
-              ?.copyWith(fontWeight: FontWeight.w800, fontSize: 12),
+          style: t.textTheme.bodyMedium?.copyWith(
+            fontWeight: FontWeight.w800,
+            fontSize: 12,
+            decoration: isCancelled ? TextDecoration.lineThrough : null,
+            color: isCancelled ? t.colorScheme.onSurfaceVariant : null,
+          ),
         ),
         if (showDetails)
           Text(
             details,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: t.textTheme.bodySmall
-                ?.copyWith(fontWeight: FontWeight.w600, fontSize: 10.5),
+            style: t.textTheme.bodySmall?.copyWith(
+              fontWeight: FontWeight.w600,
+              fontSize: 10.5,
+              decoration: isCancelled ? TextDecoration.lineThrough : null,
+              color: isCancelled ? t.colorScheme.onSurfaceVariant : null,
+            ),
           ),
         Text(
           timeLine,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
-          style: t.textTheme.bodySmall
-              ?.copyWith(fontWeight: FontWeight.w800, fontSize: 10.5),
+          style: t.textTheme.bodySmall?.copyWith(
+            fontWeight: FontWeight.w800,
+            fontSize: 10.5,
+            decoration: isCancelled ? TextDecoration.lineThrough : null,
+            color: isCancelled ? t.colorScheme.onSurfaceVariant : null,
+          ),
         ),
         if (showStatus)
           Text(
             status,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: t.textTheme.bodySmall
-                ?.copyWith(fontWeight: FontWeight.w700, fontSize: 10.0),
+            style: t.textTheme.bodySmall?.copyWith(
+              fontWeight: FontWeight.w700,
+              fontSize: 10.0,
+              color: isCancelled ? t.colorScheme.onSurfaceVariant : null,
+            ),
+          ),
+        if (showMetadata)
+          Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  Icons.repeat,
+                  size: 12,
+                  color: t.colorScheme.onSurface.withValues(alpha: 0.7),
+                ),
+              ],
+            ),
           ),
       ],
     );

@@ -34,6 +34,7 @@ describe("publicBookingProjection", () => {
         settingsUpdatedAt: null,
         clinicDoc: null,
         clinicUpdatedAt: null,
+        questionnaireFlow: {},
       });
 
       expect(out.schemaVersion).toBe(1);
@@ -50,6 +51,7 @@ describe("publicBookingProjection", () => {
       expect(out.weeklyHours).toEqual({
         mon: [], tue: [], wed: [], thu: [], fri: [], sat: [], sun: [],
       });
+      expect(out.locationOpeningHours).toEqual({});
       expect(out.jurisdiction).toEqual({ timezone: "UTC", currencyCode: "EUR" });
       expect(out.source.publicBookingUpdatedAt).toBeNull();
       expect(out.hash).toBeDefined();
@@ -68,6 +70,7 @@ describe("publicBookingProjection", () => {
         settingsUpdatedAt: ts(1000),
         clinicDoc: null,
         clinicUpdatedAt: null,
+        questionnaireFlow: {},
       });
 
       expect(out.bookingRules.slotStepMinutes).toBe(10);
@@ -90,6 +93,7 @@ describe("publicBookingProjection", () => {
         settingsUpdatedAt: null,
         clinicDoc: null,
         clinicUpdatedAt: null,
+        questionnaireFlow: {},
       });
 
       expect(out.weeklyHours.mon).toEqual([{ start: "09:00", end: "17:00" }]);
@@ -109,11 +113,12 @@ describe("publicBookingProjection", () => {
         settingsUpdatedAt: null,
         clinicDoc: null,
         clinicUpdatedAt: null,
+        questionnaireFlow: {},
       });
 
       const keys = Object.keys(out);
       expect(keys.sort()).toEqual([
-        "bookingRules", "clinicId", "hash", "jurisdiction",
+        "bookingRules", "clinicId", "hash", "jurisdiction", "locationOpeningHours",
         "schemaVersion", "source", "updatedAt", "weeklyHours",
       ]);
       expect((out as any).internalNote).toBeUndefined();
@@ -123,7 +128,7 @@ describe("publicBookingProjection", () => {
 
     it("payload contains only whitelisted fields (no PII, Commit 19)", () => {
       const allowedTopLevel = new Set([
-        "bookingRules", "clinicId", "hash", "jurisdiction",
+        "bookingRules", "clinicId", "hash", "jurisdiction", "locationOpeningHours",
         "schemaVersion", "source", "updatedAt", "weeklyHours",
       ]);
       const out = buildPublicBookingConfigV1({
@@ -132,6 +137,7 @@ describe("publicBookingProjection", () => {
         settingsUpdatedAt: null,
         clinicDoc: null,
         clinicUpdatedAt: null,
+        questionnaireFlow: {},
       });
       for (const key of Object.keys(out)) {
         expect(allowedTopLevel.has(key)).toBe(true);
@@ -152,6 +158,7 @@ describe("publicBookingProjection", () => {
         settingsUpdatedAt: null,
         clinicDoc: null,
         clinicUpdatedAt: null,
+        questionnaireFlow: {},
       });
       expect(out.weeklyHours.mon).toEqual(hours.mon);
       expect(out.weeklyHours.sun).toEqual([]);
@@ -167,10 +174,36 @@ describe("publicBookingProjection", () => {
           currencyCode: "CZK",
         },
         clinicUpdatedAt: null,
+        questionnaireFlow: {},
       });
 
       expect(out.jurisdiction.timezone).toBe("Europe/Prague");
       expect(out.jurisdiction.currencyCode).toBe("CZK");
+    });
+
+    it("locationOpeningHours is included when provided", () => {
+      const locHours = {
+        loc1: {
+          mon: [{ start: "09:00", end: "17:00" }],
+          tue: [],
+          wed: [],
+          thu: [],
+          fri: [],
+          sat: [],
+          sun: [],
+        },
+      };
+      const out = buildPublicBookingConfigV1({
+        clinicId: "c1",
+        settingsDoc: { weeklyHours: { mon: [{ start: "08:00", end: "18:00" }] } },
+        settingsUpdatedAt: null,
+        clinicDoc: null,
+        clinicUpdatedAt: null,
+        questionnaireFlow: {},
+        locationOpeningHours: locHours,
+      });
+      expect(out.locationOpeningHours).toEqual(locHours);
+      expect(out.locationOpeningHours.loc1.mon).toEqual([{ start: "09:00", end: "17:00" }]);
     });
   });
 

@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.requireClinicPermission = requireClinicPermission;
+exports.requireAnyClinicPermission = requireAnyClinicPermission;
 const https_1 = require("firebase-functions/v2/https");
 function safeStr(v) {
     return typeof v === "string" ? v.trim() : "";
@@ -70,5 +71,41 @@ async function requireClinicPermission(db, clinicId, uid, permKey) {
     }
     // Returning this is handy for callers like updateNote
     return { active: member.active, permissions: member.permissions };
+}
+/**
+ * Require at least one of the provided permission keys.
+ * Useful for compatibility windows when permission keys are being normalized.
+ */
+async function requireAnyClinicPermission(db, clinicId, uid, permKeys) {
+    const c = safeStr(clinicId);
+    const u = safeStr(uid);
+    const keys = (permKeys !== null && permKeys !== void 0 ? permKeys : []).map((k) => safeStr(k)).filter(Boolean);
+    if (!c || !u || keys.length === 0) {
+        throw new https_1.HttpsError("invalid-argument", "Invalid permission check args.");
+    }
+    const member = await loadMemberDoc(db, c, u);
+    if (!member.exists) {
+        throw new https_1.HttpsError("permission-denied", "No membership doc for uid in clinic.");
+    }
+    if (!member.active) {
+        throw new https_1.HttpsError("permission-denied", "Membership inactive for this clinic.");
+    }
+    if (member.roleId === "owner") {
+        return {
+            active: member.active,
+            permissions: member.permissions,
+            matchedPermission: "owner",
+        };
+    }
+    for (const key of keys) {
+        if (member.permissions[key] === true) {
+            return {
+                active: member.active,
+                permissions: member.permissions,
+                matchedPermission: key,
+            };
+        }
+    }
+    throw new https_1.HttpsError("permission-denied", `Missing one of permissions: ${keys.join(", ")}`);
 }
 //# sourceMappingURL=permissions.js.map

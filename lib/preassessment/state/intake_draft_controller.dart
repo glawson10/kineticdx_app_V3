@@ -271,7 +271,14 @@ class IntakeDraftController extends ChangeNotifier {
       answers: const <String, AnswerValue>{},
       triage: const IntakeTriageBlock(status: 'green', reasons: <String>[]),
       pdfSnapshotPath: null,
+      flowSnapshot: const IntakeFlowSnapshot(),
     );
+  }
+
+  /// PA-P3: Set registry snapshot (from resolveIntakeLinkToken or booking).
+  void setFlowSnapshot(IntakeFlowSnapshot snapshot) {
+    _session = _copyWith(flowSnapshot: snapshot);
+    notifyListeners();
   }
 
   IntakeSession _copyWith({
@@ -290,6 +297,7 @@ class IntakeDraftController extends ChangeNotifier {
     Map<String, AnswerValue>? answers,
     IntakeTriageBlock? triage,
     String? pdfSnapshotPath,
+    IntakeFlowSnapshot? flowSnapshot,
   }) {
     return IntakeSession(
       sessionId: sessionId ?? _session.sessionId,
@@ -307,6 +315,7 @@ class IntakeDraftController extends ChangeNotifier {
       answers: answers ?? _session.answers,
       triage: triage ?? _session.triage,
       pdfSnapshotPath: pdfSnapshotPath ?? _session.pdfSnapshotPath,
+      flowSnapshot: flowSnapshot ?? _session.flowSnapshot,
     );
   }
 }

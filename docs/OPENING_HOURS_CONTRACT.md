@@ -118,7 +118,33 @@ Example:
 
 ---
 
-### 3.3 Timezone (required)
+### 3.3 Availability resolution hierarchy
+
+Slot resolution applies layers in this order (each layer can only restrict, not extend):
+
+1. **Clinic opening hours** – business-wide maximum operating window (from `settings/publicBooking` → public mirror).
+2. **Location opening hours** – per-location window; must be within clinic hours. Stored per location; projected into public mirror as `locationOpeningHours`. Missing or empty for a location means no extra restriction (clinic hours apply).
+3. **Practitioner availability** – when the practitioner is working (per location when location-scoped).
+4. **Overrides** – time off, one-off extra hours; overrides win.
+5. **Closures** – clinic-wide closed dates.
+6. **Appointment conflicts** – existing appointments and busy blocks.
+
+Only the availability engine (e.g. `listPublicSlotsFn`) computes bookable slots; the UI and calendar rendering are display-only.
+
+---
+
+### 3.4 Location opening hours (optional tier)
+
+Locations may define their own `weeklyHours` (same shape as clinic). Rules:
+
+- Stored at `clinics/{clinicId}/locations/{locationId}` (field `weeklyHours`).
+- **Location hours must be within clinic hours** (validated at write time).
+- Projected into public mirror config as `locationOpeningHours: { [locationId]: weeklyHours }`.
+- If a location has no `weeklyHours` or all days empty, that location uses clinic hours only (no extra restriction).
+
+---
+
+### 3.5 Timezone (required)
 
 * Clinic timezone is stored at:
 

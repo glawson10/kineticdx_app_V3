@@ -13,12 +13,42 @@ class CommunicationSettingsScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (clinicId.trim().isEmpty) {
+      return const Center(child: Text('No clinic selected.'));
+    }
     final repo = context.read<CommunicationSettingsRepository>();
     return SingleChildScrollView(
       padding: const EdgeInsets.all(24),
       child: StreamBuilder<CommunicationSettings>(
         stream: repo.streamSettings(clinicId),
         builder: (context, snapshot) {
+          if (snapshot.hasError) {
+            return Center(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      'Could not load communication settings.',
+                      style: Theme.of(context).textTheme.titleMedium,
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      '${snapshot.error}',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                            color: Theme.of(context).colorScheme.onSurfaceVariant,
+                          ),
+                      textAlign: TextAlign.center,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ),
+              ),
+            );
+          }
           if (!snapshot.hasData) {
             return const Center(child: CircularProgressIndicator());
           }

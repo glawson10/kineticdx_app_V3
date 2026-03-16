@@ -42,6 +42,10 @@ const params_1 = require("firebase-functions/params");
 const logger_1 = require("firebase-functions/logger");
 const crypto = __importStar(require("crypto"));
 const createAppointmentInternal_1 = require("./../appointments/createAppointmentInternal");
+const bookingConfig_1 = require("../../public/bookingConfig");
+const listPublicSlots_1 = require("../../public/listPublicSlots");
+const flowRegistry_1 = require("../intake/flowRegistry");
+const questionnaireTemplates_1 = require("../questionnaires/questionnaireTemplates");
 if (!admin.apps.length)
     admin.initializeApp();
 const db = admin.firestore();
@@ -186,11 +190,24 @@ async function createGeneralQuestionnaireLink(params) {
     return { linkId: linkRef.id, rawToken, expiresAt };
 }
 /**
- * ✅ NEW:
- * Create a real intake session immediately when the public booking is approved.
+ * Create a real intake session when the public booking is approved.
+ * PA-P3.1: Template-driven; resolves flowDefinitionId/clinicalProfileId from template.
+ * Legacy fallback only when template has no registry ids (LEGACY_BOOKING_DEFAULT_FLOW_ID).
  */
 async function createIntakeSessionForAppointment(params) {
-    const flowId = safeStr(params.flowId) || "ankle";
+    var _a, _b;
+    const templateId = safeStr(params.templateId) || questionnaireTemplates_1.BUILTIN_PREASSESSMENT_BOOKING_TEMPLATE_ID;
+    const template = await (0, questionnaireTemplates_1.loadQuestionnaireTemplateById)(db, params.clinicId, templateId);
+    const flowDefinitionId = (_a = template === null || template === void 0 ? void 0 : template.flowDefinitionId) !== null && _a !== void 0 ? _a : null;
+    const clinicalProfileId = (_b = template === null || template === void 0 ? void 0 : template.clinicalProfileId) !== null && _b !== void 0 ? _b : null;
+    const hasRegistryIds = flowDefinitionId && clinicalProfileId && flowDefinitionId.trim() !== "" && clinicalProfileId.trim() !== "";
+    const snapshot = hasRegistryIds
+        ? (0, flowRegistry_1.resolveIntakeSnapshot)({ templateId, flowDefinitionId, clinicalProfileId })
+        : (0, flowRegistry_1.resolveIntakeSnapshot)({
+            templateId,
+            flowId: questionnaireTemplates_1.LEGACY_BOOKING_DEFAULT_FLOW_ID,
+            flowVersion: 1,
+        });
     const ref = db.collection(`clinics/${params.clinicId}/intakeSessions`).doc();
     await ref.set({
         schemaVersion: 1,
@@ -199,13 +216,77 @@ async function createIntakeSessionForAppointment(params) {
         patientId: params.patientId,
         practitionerId: params.practitionerId,
         status: "draft",
-        flow: { flowId, version: "v1" },
+        flow: { flowId: snapshot.flowId, flowVersion: snapshot.flowVersion },
+        flowId: snapshot.flowId,
+        flowVersion: snapshot.flowVersion,
+        flowCategory: "region",
+        flowDefinitionId: snapshot.flowDefinitionId,
+        clinicalProfileId: snapshot.clinicalProfileId,
+        templateId,
+        summaryEngine: snapshot.summaryEngine,
+        decisionSupportProfile: snapshot.decisionSupportProfile,
+        supportsDifferentialHypothesis: snapshot.supportsDifferentialHypothesis,
         answers: {},
         createdFrom: "publicBooking",
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
     return ref.id;
+}
+/**
+ * PA-P3.1: Backward compatibility — when true, create both preassessment and general questionnaire links.
+ * When false, link creation is template-driven (launchKind).
+ */
+function shouldCreateDualLinksForBooking(_clinicId, _templateId) {
+    return true;
+}
+/**
+ * PA-P3.1: Legacy path — creates both intake invite (preassessment URL) and general questionnaire link unconditionally.
+ * Use only when shouldCreateDualLinksForBooking is true.
+ */
+async function createLegacyDualBookingLinks(params) {
+    const baseUrl = await readPublicBaseUrl(params.clinicId);
+    const inv = await createIntakeInvite({
+        clinicId: params.clinicId,
+        appointmentId: params.appointmentId,
+        intakeSessionId: params.intakeSessionId,
+        patientId: params.patientId,
+        patientEmailNorm: params.patientEmailNorm,
+        ttlHours: 72,
+    });
+    const preAssessmentUrl = buildIntakeStartUrl({
+        baseUrl,
+        clinicId: params.clinicId,
+        token: inv.rawToken,
+        useHashRouting: true,
+    });
+    let generalQuestionnaireUrl = "";
+    try {
+        const genQLink = await createGeneralQuestionnaireLink({
+            clinicId: params.clinicId,
+            appointmentId: params.appointmentId,
+            patientId: params.patientId,
+            patientEmailNorm: params.patientEmailNorm,
+            ttlDays: 7,
+        });
+        generalQuestionnaireUrl = buildGeneralQuestionnaireUrl({
+            baseUrl,
+            token: genQLink.rawToken,
+            useHashRouting: true,
+        });
+    }
+    catch (genQErr) {
+        logger_1.logger.warn("General questionnaire link creation failed (legacy dual-link)", {
+            clinicId: params.clinicId,
+            err: safeStr(genQErr === null || genQErr === void 0 ? void 0 : genQErr.message) || String(genQErr),
+        });
+    }
+    return {
+        inviteId: inv.inviteId,
+        inviteExpiresAt: inv.expiresAt,
+        preAssessmentUrl,
+        generalQuestionnaireUrl,
+    };
 }
 // ─────────────────────────────────────────────────────────────
 // Timezone helpers + Google Calendar link
@@ -242,6 +323,20 @@ async function readClinicTimezone(dbi, clinicId) {
     const snap = await dbi.doc(`clinics/${clinicId}/settings/publicBooking`).get();
     const d = snap.exists ? snap.data() : {};
     return safeStr(d === null || d === void 0 ? void 0 : d.timezone) || "Europe/Prague";
+}
+/** Format a date as YYYY-MM-DD in the given IANA timezone (for maxAdvanceDays in clinic TZ). */
+function ymdInTz(d, tz) {
+    var _a, _b, _c, _d, _e, _f;
+    const parts = new Intl.DateTimeFormat("en-CA", {
+        timeZone: tz,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+    }).formatToParts(d);
+    const y = (_b = (_a = parts.find((p) => p.type === "year")) === null || _a === void 0 ? void 0 : _a.value) !== null && _b !== void 0 ? _b : "";
+    const m = (_d = (_c = parts.find((p) => p.type === "month")) === null || _c === void 0 ? void 0 : _c.value) !== null && _d !== void 0 ? _d : "";
+    const day = (_f = (_e = parts.find((p) => p.type === "day")) === null || _e === void 0 ? void 0 : _e.value) !== null && _f !== void 0 ? _f : "";
+    return `${y}-${m}-${day}`;
 }
 async function readPublicBookingMirror(clinicId) {
     const snap = await db
@@ -313,9 +408,23 @@ function assertPractitionerAllowedOrThrow(params) {
     if (!practitioners.length) {
         throw new https_1.HttpsError("failed-precondition", "Public booking practitioners are not configured.");
     }
-    const ok = practitioners.some((p) => p.id === practitionerId);
-    if (!ok) {
+    const pract = practitioners.find((p) => p.id === practitionerId);
+    if (!pract) {
         throw new https_1.HttpsError("failed-precondition", "Selected practitioner is not available for public booking.");
+    }
+    const locationId = safeStr(params.locationId);
+    if (locationId) {
+        const allowed = pract.allowedLocationIds;
+        if (Array.isArray(allowed) && allowed.length > 0 && !allowed.includes(locationId)) {
+            throw new https_1.HttpsError("failed-precondition", "Selected practitioner is not available at this location.");
+        }
+    }
+    const appointmentTypeId = safeStr(params.appointmentTypeId);
+    if (appointmentTypeId) {
+        const allowed = pract.serviceIdsAllowed;
+        if (Array.isArray(allowed) && allowed.length > 0 && !allowed.includes(appointmentTypeId)) {
+            throw new https_1.HttpsError("failed-precondition", "Selected practitioner does not offer this appointment type.");
+        }
     }
 }
 function tryGetPractitionerNameFromPublicMirror(params) {
@@ -771,7 +880,7 @@ exports.onBookingRequestCreateV2 = (0, firestore_1.onDocumentCreated)({
     document: "clinics/{clinicId}/bookingRequests/{requestId}",
     secrets: [BREVO_API_KEY],
 }, async (event) => {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p, _q;
     const clinicId = safeStr(event.params.clinicId);
     const requestId = safeStr(event.params.requestId);
     if (!clinicId || !requestId)
@@ -835,10 +944,25 @@ exports.onBookingRequestCreateV2 = (0, firestore_1.onDocumentCreated)({
         }, { merge: true });
         return;
     }
-    if (startDt.getTime() - now.getTime() < 30 * 60 * 1000) {
+    const bookingRules = await (0, bookingConfig_1.loadPublicBookingRules)(db, clinicId);
+    const minNoticeMs = bookingRules.minNoticeMinutes * 60 * 1000;
+    if (startDt.getTime() - now.getTime() < minNoticeMs) {
         await reqRef.set({
             status: "rejected",
-            rejectionReason: "Bookings close 30 minutes before the appointment time.",
+            rejectionReason: "booking_min_notice_violation",
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        }, { merge: true });
+        return;
+    }
+    const slotYmd = ymdInTz(startDt, bookingRules.timezone);
+    const todayYmd = ymdInTz(now, bookingRules.timezone);
+    const slotDayMs = new Date(slotYmd + "T12:00:00Z").getTime();
+    const todayDayMs = new Date(todayYmd + "T12:00:00Z").getTime();
+    const daysAhead = Math.floor((slotDayMs - todayDayMs) / 86400000);
+    if (daysAhead > bookingRules.maxAdvanceDays) {
+        await reqRef.set({
+            status: "rejected",
+            rejectionReason: "booking_max_advance_violation",
             updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         }, { merge: true });
         return;
@@ -867,7 +991,12 @@ exports.onBookingRequestCreateV2 = (0, firestore_1.onDocumentCreated)({
     let publicMirror = {};
     try {
         publicMirror = await readPublicBookingMirror(clinicId);
-        assertPractitionerAllowedOrThrow({ practitionerId, publicMirror });
+        assertPractitionerAllowedOrThrow({
+            practitionerId,
+            publicMirror,
+            locationId: safeStr(data.locationId) || undefined,
+            appointmentTypeId: safeStr(data.appointmentTypeId) || undefined,
+        });
     }
     catch (e) {
         const msg = e instanceof https_1.HttpsError
@@ -885,19 +1014,35 @@ exports.onBookingRequestCreateV2 = (0, firestore_1.onDocumentCreated)({
         practitionerId,
         publicMirror,
     });
+    if (bookingRules.requireEmail && !safeStr(lowerEmail((_d = data.patient) === null || _d === void 0 ? void 0 : _d.email))) {
+        await reqRef.set({
+            status: "rejected",
+            rejectionReason: "booking_email_required",
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        }, { merge: true });
+        return;
+    }
+    if (bookingRules.requirePhone && !safeStr((_e = data.patient) === null || _e === void 0 ? void 0 : _e.phone)) {
+        await reqRef.set({
+            status: "rejected",
+            rejectionReason: "booking_phone_required",
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        }, { merge: true });
+        return;
+    }
     // ─────────────────────────────
     // Find or create patient
     // ─────────────────────────────
     const patientsCol = db.collection(`clinics/${clinicId}/patients`);
-    const pFirst = safeStr((_d = data.patient) === null || _d === void 0 ? void 0 : _d.firstName);
-    const pLast = safeStr((_e = data.patient) === null || _e === void 0 ? void 0 : _e.lastName);
-    const pDob = (_f = data.patient) === null || _f === void 0 ? void 0 : _f.dob;
-    const pEmailRaw = lowerEmail((_g = data.patient) === null || _g === void 0 ? void 0 : _g.email);
-    const pPhoneRaw = safeStr((_h = data.patient) === null || _h === void 0 ? void 0 : _h.phone);
+    const pFirst = safeStr((_f = data.patient) === null || _f === void 0 ? void 0 : _f.firstName);
+    const pLast = safeStr((_g = data.patient) === null || _g === void 0 ? void 0 : _g.lastName);
+    const pDob = (_h = data.patient) === null || _h === void 0 ? void 0 : _h.dob;
+    const pEmailRaw = lowerEmail((_j = data.patient) === null || _j === void 0 ? void 0 : _j.email);
+    const pPhoneRaw = safeStr((_k = data.patient) === null || _k === void 0 ? void 0 : _k.phone);
     const pPhoneNorm = normalizePhone(pPhoneRaw);
     const pEmailNorm = normalizeEmail(pEmailRaw);
-    const pAddress = safeStr((_j = data.patient) === null || _j === void 0 ? void 0 : _j.address);
-    const pConsent = ((_k = data.patient) === null || _k === void 0 ? void 0 : _k.consentToTreatment) === true;
+    const pAddress = safeStr((_l = data.patient) === null || _l === void 0 ? void 0 : _l.address);
+    const pConsent = ((_m = data.patient) === null || _m === void 0 ? void 0 : _m.consentToTreatment) === true;
     if (!pFirst || !pLast || !pDob) {
         await reqRef.set({
             status: "rejected",
@@ -910,6 +1055,7 @@ exports.onBookingRequestCreateV2 = (0, firestore_1.onDocumentCreated)({
     const fullNameLower = requestedPatientName.toLowerCase();
     const searchTokens = buildSearchTokens([pFirst, pLast, pEmailRaw, pPhoneRaw]);
     let patientId = "";
+    let patientWasCreated = false;
     // First pass: try to find by email/phone (as before)
     if (pEmailNorm) {
         patientId = await findPatientByEmailNorm(patientsCol, pEmailNorm);
@@ -921,10 +1067,10 @@ exports.onBookingRequestCreateV2 = (0, firestore_1.onDocumentCreated)({
     if (patientId) {
         try {
             const existingSnap = await patientsCol.doc(patientId).get();
-            const existing = ((_l = existingSnap.data()) !== null && _l !== void 0 ? _l : {});
+            const existing = ((_o = existingSnap.data()) !== null && _o !== void 0 ? _o : {});
             // Prefer canonical nested DOB, fall back to legacy mirrors
-            const nestedDob = (_m = existing.identity) === null || _m === void 0 ? void 0 : _m.dateOfBirth;
-            const flatDob = ((_o = existing.dob) !== null && _o !== void 0 ? _o : existing.dateOfBirth);
+            const nestedDob = (_p = existing.identity) === null || _p === void 0 ? void 0 : _p.dateOfBirth;
+            const flatDob = ((_q = existing.dob) !== null && _q !== void 0 ? _q : existing.dateOfBirth);
             const existingDobTs = nestedDob || flatDob;
             const dobMatches = existingDobTs &&
                 existingDobTs.toMillis() === pDob.toMillis();
@@ -946,6 +1092,7 @@ exports.onBookingRequestCreateV2 = (0, firestore_1.onDocumentCreated)({
         }
     }
     if (!patientId) {
+        patientWasCreated = true;
         const ref = patientsCol.doc();
         patientId = ref.id;
         const doc = buildPatientCreateDoc({
@@ -980,16 +1127,26 @@ exports.onBookingRequestCreateV2 = (0, firestore_1.onDocumentCreated)({
         });
         await patientsCol.doc(patientId).set(patch, { merge: true });
     }
+    if (patientWasCreated && !bookingRules.allowNewPatients) {
+        await reqRef.set({
+            status: "rejected",
+            rejectionReason: "booking_new_patients_not_allowed",
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        }, { merge: true });
+        return;
+    }
     // ─────────────────────────────
     // Create appointment
     // ─────────────────────────────
     const rawKind = safeStr(data.kind).toLowerCase();
     const isFollowUp = rawKind.includes("follow");
     const apptKind = isFollowUp ? "followup" : "new";
-    const serviceId = isFollowUp ? "fu" : "np";
+    const explicitTypeId = safeStr(data.appointmentTypeId);
+    const serviceId = explicitTypeId || (isFollowUp ? "fu" : "np");
     const serviceNameFallback = isFollowUp ? "Follow-up" : "New patient assessment";
     let appointmentId = "";
     try {
+        const reqLocationId = safeStr(data.locationId);
         const result = await (0, createAppointmentInternal_1.createAppointmentInternal)(db, {
             clinicId,
             kind: apptKind,
@@ -1001,6 +1158,7 @@ exports.onBookingRequestCreateV2 = (0, firestore_1.onDocumentCreated)({
             actorUid: safeStr(data.requesterUid),
             allowClosedOverride: false,
             serviceNameFallback,
+            ...(reqLocationId ? { locationId: reqLocationId } : {}),
         });
         appointmentId = safeStr(result === null || result === void 0 ? void 0 : result.appointmentId);
         if (!appointmentId) {
@@ -1040,14 +1198,28 @@ exports.onBookingRequestCreateV2 = (0, firestore_1.onDocumentCreated)({
             practitionerId,
             updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         }, { merge: true });
+        try {
+            const dateYmd = ymdInTz(startDt, bookingRules.timezone);
+            (0, listPublicSlots_1.invalidateSlotCacheForBooking)(clinicId, practitionerId, dateYmd);
+        }
+        catch (invErr) {
+            logger_1.logger.warn("Slot cache invalidation failed (non-fatal)", {
+                clinicId,
+                practitionerId,
+                err: safeStr(invErr === null || invErr === void 0 ? void 0 : invErr.message) || String(invErr),
+            });
+        }
     }
     catch (err) {
         const msg = err instanceof https_1.HttpsError
             ? err.message
             : safeStr(err === null || err === void 0 ? void 0 : err.message) || "Booking failed. Check logs.";
+        const rejectionReason = msg === "slot_no_longer_available"
+            ? "That time is no longer available."
+            : msg;
         await reqRef.set({
             status: "rejected",
-            rejectionReason: msg,
+            rejectionReason,
             updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         }, { merge: true });
         throw err;
@@ -1079,60 +1251,71 @@ exports.onBookingRequestCreateV2 = (0, firestore_1.onDocumentCreated)({
     let inviteExpiresAt = null;
     let generalQuestionnaireUrl = "";
     try {
+        const templateId = questionnaireTemplates_1.BUILTIN_PREASSESSMENT_BOOKING_TEMPLATE_ID;
+        const template = await (0, questionnaireTemplates_1.loadQuestionnaireTemplateById)(db, clinicId, templateId);
         intakeSessionId = await createIntakeSessionForAppointment({
             clinicId,
             appointmentId,
             patientId,
             practitionerId,
-            flowId: "ankle",
+            templateId,
         });
-        const inv = await createIntakeInvite({
-            clinicId,
-            appointmentId,
-            intakeSessionId,
-            patientId,
-            patientEmailNorm: pEmailNorm ? pEmailNorm : undefined,
-            ttlHours: 72,
-        });
-        inviteId = inv.inviteId;
-        inviteExpiresAt = inv.expiresAt;
-        const baseUrl = await readPublicBaseUrl(clinicId);
-        preAssessmentUrl = buildIntakeStartUrl({
-            baseUrl,
-            clinicId,
-            token: inv.rawToken,
-            useHashRouting: true,
-        });
-        // Create general questionnaire link
-        try {
-            const genQLink = await createGeneralQuestionnaireLink({
+        if (shouldCreateDualLinksForBooking(clinicId, templateId)) {
+            const legacy = await createLegacyDualBookingLinks({
                 clinicId,
                 appointmentId,
+                intakeSessionId,
                 patientId,
                 patientEmailNorm: pEmailNorm ? pEmailNorm : undefined,
-                ttlDays: 7,
             });
-            generalQuestionnaireUrl = buildGeneralQuestionnaireUrl({
-                baseUrl,
-                token: genQLink.rawToken,
-                useHashRouting: true,
-            });
-            logger_1.logger.info("General questionnaire link created", {
-                clinicId,
-                requestId,
-                appointmentId,
-                linkId: genQLink.linkId,
-                hasGeneralQuestionnaireUrl: !!generalQuestionnaireUrl,
-            });
+            inviteId = legacy.inviteId;
+            inviteExpiresAt = legacy.inviteExpiresAt;
+            preAssessmentUrl = legacy.preAssessmentUrl;
+            generalQuestionnaireUrl = legacy.generalQuestionnaireUrl;
         }
-        catch (genQErr) {
-            logger_1.logger.error("General questionnaire link creation failed (continuing)", {
-                clinicId,
-                requestId,
-                appointmentId,
-                err: safeStr(genQErr === null || genQErr === void 0 ? void 0 : genQErr.message) || String(genQErr),
-            });
-            generalQuestionnaireUrl = "";
+        else {
+            const baseUrl = await readPublicBaseUrl(clinicId);
+            if ((template === null || template === void 0 ? void 0 : template.launchKind) === questionnaireTemplates_1.QUESTIONNAIRE_LAUNCH_KIND_BOOKING_PREASSESSMENT) {
+                const inv = await createIntakeInvite({
+                    clinicId,
+                    appointmentId,
+                    intakeSessionId,
+                    patientId,
+                    patientEmailNorm: pEmailNorm ? pEmailNorm : undefined,
+                    ttlHours: 72,
+                });
+                inviteId = inv.inviteId;
+                inviteExpiresAt = inv.expiresAt;
+                preAssessmentUrl = buildIntakeStartUrl({
+                    baseUrl,
+                    clinicId,
+                    token: inv.rawToken,
+                    useHashRouting: true,
+                });
+            }
+            if ((template === null || template === void 0 ? void 0 : template.launchKind) === questionnaireTemplates_1.QUESTIONNAIRE_LAUNCH_KIND_INTAKE_LINK) {
+                try {
+                    const genQLink = await createGeneralQuestionnaireLink({
+                        clinicId,
+                        appointmentId,
+                        patientId,
+                        patientEmailNorm: pEmailNorm ? pEmailNorm : undefined,
+                        ttlDays: 7,
+                    });
+                    generalQuestionnaireUrl = buildGeneralQuestionnaireUrl({
+                        baseUrl: await readPublicBaseUrl(clinicId),
+                        token: genQLink.rawToken,
+                        useHashRouting: true,
+                    });
+                }
+                catch (genQErr) {
+                    logger_1.logger.warn("General questionnaire link creation failed", {
+                        clinicId,
+                        requestId,
+                        err: safeStr(genQErr === null || genQErr === void 0 ? void 0 : genQErr.message) || String(genQErr),
+                    });
+                }
+            }
         }
         // Persist on appointment + booking request
         await db

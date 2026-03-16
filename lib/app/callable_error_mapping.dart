@@ -6,8 +6,9 @@
 import 'package:cloud_functions/cloud_functions.dart';
 
 /// Returns a short user-facing message for callable errors (invite/membership).
+/// [logHint] Optional Cloud Function name to check in logs (e.g. 'settingsSetAppointmentTypeActive').
 String messageForCallableError(Object error,
-    {String fallback = 'Something went wrong.'}) {
+    {String fallback = 'Something went wrong.', String? logHint}) {
   if (error is FirebaseFunctionsException) {
     final code = error.code;
     final msg = (error.message ?? '').trim();
@@ -29,7 +30,12 @@ String messageForCallableError(Object error,
       case 'internal':
       case 'unknown':
         if (msg.isNotEmpty && msg != 'internal') return msg;
-        return 'A server error occurred. Please try again. If it keeps happening, redeploy Cloud Functions (upsertStaffProfileFn).';
+        final base =
+            'A server error occurred. Please try again. If it keeps happening, check Cloud Functions logs or redeploy.';
+        if (logHint != null && logHint.isNotEmpty) {
+          return '$base Check logs for: $logHint';
+        }
+        return base;
       default:
         return msg.isNotEmpty ? msg : fallback;
     }

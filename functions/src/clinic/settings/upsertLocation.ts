@@ -32,6 +32,8 @@ const LOCATION_PATCH_KEYS = new Set([
   "active",
   "showInOnlineBooking",
   "colorHex",
+  "phone",
+  "notes",
 ]);
 
 export type UpsertLocationPatch = {
@@ -40,6 +42,8 @@ export type UpsertLocationPatch = {
   active?: boolean | null;
   showInOnlineBooking?: boolean | null;
   colorHex?: string | null;
+  phone?: string | null;
+  notes?: string | null;
 };
 
 function validateAndPickPatch(patch: unknown, isCreate: boolean): UpsertLocationPatch {
@@ -60,6 +64,8 @@ function validateAndPickPatch(patch: unknown, isCreate: boolean): UpsertLocation
   const active = assertBoolean(raw.active, "active");
   const showInOnlineBooking = assertBoolean(raw.showInOnlineBooking, "showInOnlineBooking");
   const colorHex = assertHexColor(raw.colorHex, "colorHex");
+  const phone = assertString(raw.phone, "phone", { trim: true, maxLength: 64 });
+  const notes = assertString(raw.notes, "notes", { trim: true, maxLength: 1024 });
 
   // Address optional unless showInOnlineBooking is being set to true: then require minimal address (future: line1, city, country).
   if (raw.showInOnlineBooking === true) {
@@ -78,6 +84,8 @@ function validateAndPickPatch(patch: unknown, isCreate: boolean): UpsertLocation
   if (active !== undefined) out.active = active ?? null;
   if (showInOnlineBooking !== undefined) out.showInOnlineBooking = showInOnlineBooking ?? null;
   if (colorHex !== undefined) out.colorHex = colorHex ?? null;
+  if (phone !== undefined) out.phone = phone ?? null;
+  if (notes !== undefined) out.notes = notes ?? null;
   return out;
 }
 

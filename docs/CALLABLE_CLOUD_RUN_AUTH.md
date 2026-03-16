@@ -39,3 +39,78 @@ gcloud run services list --region=europe-west3 --project=kineticdx-v3-dev
 ```
 
 After adding the binding, retry the callable (e.g. profile photo upload). The function will still enforce Firebase Auth (`req.auth`) in code.
+
+---
+
+## Fix all settings callables (Active toggle, save appointment type, Online booking)
+
+If you see "request was not authenticated" when toggling **Active**, saving **Online booking**, or editing appointment types, the Cloud Run services for those callables need the invoker binding. Service names are the function name in **lowercase with no separators**.
+
+**1. List services to see exact names:**
+
+```bash
+gcloud run services list --region=europe-west3 --project=kineticdx-v3-dev --format="value(metadata.name)"
+```
+
+**2. Add invoker for the settings callables (PowerShell):**
+
+```powershell
+$region = "europe-west3"
+$project = "kineticdx-v3-dev"
+$services = @(
+  "settingssetappointmenttypeactive",
+  "settingsupsertappointmenttype",
+  "settingsupdatepublicbookingconfig",
+  "settingsupsertlocation",
+  "settingssetlocationactive",
+  "settingsgetcommunicationsettings",
+  "settingsupdatecommunicationsettings",
+  "settingsgetcalendardisplayconfig",
+  "settingsupdatecalendardisplayconfig"
+)
+foreach ($svc in $services) {
+  gcloud run services add-iam-policy-binding $svc --region=$region --member="allUsers" --role="roles/run.invoker" --project=$project
+}
+```
+
+**2b. Same in Bash:**
+
+```bash
+REGION=europe-west3
+PROJECT=kineticdx-v3-dev
+for svc in settingssetappointmenttypeactive settingsupsertappointmenttype settingsupdatepublicbookingconfig settingsupsertlocation settingssetlocationactive settingsgetcommunicationsettings settingsupdatecommunicationsettings settingsgetcalendardisplayconfig settingsupdatecalendardisplayconfig; do
+  gcloud run services add-iam-policy-binding "$svc" --region="$REGION" --member="allUsers" --role="roles/run.invoker" --project="$PROJECT"
+done
+```
+
+If a binding fails with "service not found", Firebase Gen 2 may use different Cloud Run service names. Use the **fix-all** option below.
+
+---
+
+## Fix all Cloud Run services in the region (no guessing names)
+
+Run this once to add `allUsers` invoker to **every** Cloud Run service in `europe-west3` for your project. Safe for Firebase callables: they still enforce Auth in code.
+
+**PowerShell:**
+
+```powershell
+$region = "europe-west3"
+$project = "kineticdx-v3-dev"
+gcloud run services list --region=$region --project=$project --format="value(metadata.name)" | ForEach-Object {
+  Write-Host "Adding invoker to $_"
+  gcloud run services add-iam-policy-binding $_ --region=$region --member="allUsers" --role="roles/run.invoker" --project=$project
+}
+```
+
+**Bash:**
+
+```bash
+REGION=europe-west3
+PROJECT=kineticdx-v3-dev
+for svc in $(gcloud run services list --region=$REGION --project=$PROJECT --format="value(metadata.name)"); do
+  echo "Adding invoker to $svc"
+  gcloud run services add-iam-policy-binding "$svc" --region="$REGION" --member="allUsers" --role="roles/run.invoker" --project="$PROJECT"
+done
+```
+
+Then retry the app (e.g. toggle Active or save settings). The request should reach the function.

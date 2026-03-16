@@ -262,7 +262,7 @@ describe("settings callables", () => {
       expect(writeSettingsAuditEvent).toHaveBeenCalledWith(
         expect.anything(),
         "c1",
-        "settings.location.active_set",
+        "settings.location.deactivated",
         "u1",
         "clinics/c1/locations/existing-loc",
         "existing-loc",
@@ -293,6 +293,16 @@ describe("settings callables", () => {
         updateCalendarDisplayConfig({
           auth: { uid: "u1" },
           data: { clinicId: "c1", patch: { minutesPerBlock: 7 } },
+        } as any)
+      ).rejects.toThrow(HttpsError);
+    });
+
+    it("throws invalid-argument for slotMinutes not in allowed set", async () => {
+      requireClinicPermission.mockResolvedValueOnce({});
+      await expect(
+        updateCalendarDisplayConfig({
+          auth: { uid: "u1" },
+          data: { clinicId: "c1", patch: { slotMinutes: 7 } },
         } as any)
       ).rejects.toThrow(HttpsError);
     });
@@ -380,7 +390,23 @@ describe("settings callables", () => {
         data: { clinicId: "c1", patch: { minutesPerBlock: 15 } },
       } as any);
       const changes = writeSettingsAuditEvent.mock.calls[0][5];
-      expectAuditChangedKeysOnly(changes, ["minutesPerBlock"]);
+      expectAuditChangedKeysOnly(changes, ["slotMinutes"]);
+    });
+
+    it("accepts slotMinutes in patch and writes slotMinutes to audit", async () => {
+      const { writeSettingsAuditEvent } = require("../audit/audit");
+      requireClinicPermission.mockResolvedValueOnce({});
+      const result = await updateCalendarDisplayConfig({
+        auth: { uid: "u1" },
+        data: { clinicId: "c1", patch: { slotMinutes: 10 } },
+      } as any);
+      expect(result).toEqual({ ok: true });
+      expect(mockSet).toHaveBeenCalledWith(
+        expect.objectContaining({ slotMinutes: 10, updatedAt: expect.anything() }),
+        { merge: true }
+      );
+      const changes = writeSettingsAuditEvent.mock.calls[0][5];
+      expect(changes).toEqual({ slotMinutes: 10 });
     });
   });
 

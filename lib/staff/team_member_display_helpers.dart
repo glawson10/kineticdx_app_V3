@@ -23,6 +23,7 @@ const Map<String, String> _permissionLabels = {
   'services.manage': 'Services manage',
   'resources.manage': 'Resources manage',
   'registries.manage': 'Registries manage',
+  'templates.manage': 'Templates manage',
   'audit.read': 'Audit read',
   'billing.manage': 'Billing manage',
 };

@@ -1,6 +1,6 @@
 /**
  * Tests for buildPublicBookingProjection (full mirror: practitioners, services, etc.).
- * Verifies practitioner visibility: showInOnlineBooking, active, membership.
+ * Verifies practitioner visibility: showInPublicBooking, active, membership.
  */
 
 import { describe, it, expect, jest, beforeEach } from "@jest/globals";
@@ -19,7 +19,7 @@ import { buildPublicBookingProjection } from "./publicProjection";
 
 describe("publicProjection", () => {
   describe("buildPublicBookingProjection practitioners", () => {
-    it("includes practitioner with showInOnlineBooking true", () => {
+    it("includes practitioner with showInPublicBooking true", () => {
       const out = buildPublicBookingProjection({
         clinicId: "c1",
         clinicName: "Test Clinic",
@@ -31,7 +31,7 @@ describe("publicProjection", () => {
             id: "p1",
             data: {
               displayName: "Dr One",
-              showInOnlineBooking: true,
+              showInPublicBooking: true,
               active: true,
             },
           },
@@ -44,7 +44,7 @@ describe("publicProjection", () => {
       expect(out.practitioners![0].displayName).toBe("Dr One");
     });
 
-    it("excludes practitioner with showInOnlineBooking false", () => {
+    it("excludes practitioner with showInPublicBooking false", () => {
       const out = buildPublicBookingProjection({
         clinicId: "c1",
         clinicName: "Test Clinic",
@@ -56,7 +56,7 @@ describe("publicProjection", () => {
             id: "p1",
             data: {
               displayName: "Dr One",
-              showInOnlineBooking: false,
+              showInPublicBooking: false,
               active: true,
             },
           },
@@ -79,7 +79,7 @@ describe("publicProjection", () => {
             id: "p1",
             data: {
               displayName: "Dr One",
-              showInOnlineBooking: true,
+              showInPublicBooking: true,
               active: false,
             },
           },
@@ -102,7 +102,7 @@ describe("publicProjection", () => {
             id: "p1",
             data: {
               displayName: "Dr One",
-              showInOnlineBooking: true,
+              showInPublicBooking: true,
               active: true,
             },
           },
@@ -130,7 +130,7 @@ describe("publicProjection", () => {
             id: "p1",
             data: {
               displayName: "Dr One",
-              showInOnlineBooking: true,
+              showInPublicBooking: true,
               active: true,
             },
           },
@@ -159,7 +159,7 @@ describe("publicProjection", () => {
             id: "p1",
             data: {
               displayName: "Dr One",
-              showInOnlineBooking: true,
+              showInPublicBooking: true,
               active: true,
               allowedLocationIds: ["loc1", "loc2"],
             },

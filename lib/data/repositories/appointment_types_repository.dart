@@ -58,8 +58,11 @@ class AppointmentTypesRepository {
   /// Creates or updates an appointment type. For create, omit [appointmentTypeId].
   /// [patch] must contain at least one of: name, durationMinutes, colorHex, active,
   /// showInOnlineBooking, description, defaultPrice, allowedLocationIds.
+  static FirebaseFunctions get _functions =>
+      FirebaseFunctions.instanceFor(region: 'europe-west3');
+
   Future<void> upsert(String clinicId, {String? appointmentTypeId, required Map<String, dynamic> patch}) async {
-    final fn = FirebaseFunctions.instance.httpsCallable('settingsUpsertAppointmentType');
+    final fn = _functions.httpsCallable('settingsUpsertAppointmentType');
     final payload = <String, dynamic>{'clinicId': clinicId, 'patch': patch};
     if (appointmentTypeId != null && appointmentTypeId.trim().isNotEmpty) {
       payload['appointmentTypeId'] = appointmentTypeId.trim();
@@ -68,7 +71,7 @@ class AppointmentTypesRepository {
   }
 
   Future<void> setActive(String clinicId, String appointmentTypeId, bool active) async {
-    final fn = FirebaseFunctions.instance.httpsCallable('settingsSetAppointmentTypeActive');
+    final fn = _functions.httpsCallable('settingsSetAppointmentTypeActive');
     await fn.call({'clinicId': clinicId, 'appointmentTypeId': appointmentTypeId, 'active': active});
   }
 

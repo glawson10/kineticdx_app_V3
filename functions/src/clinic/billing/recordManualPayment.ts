@@ -1,5 +1,5 @@
-import { HttpsError } from "firebase-functions/v2/https";
+import { recordPayment } from "./recordPayment";
 
-export async function recordManualPayment(_request: { auth?: { uid?: string }; data?: unknown }) {
-  throw new HttpsError("unimplemented", "recordManualPayment not implemented");
+export async function recordManualPayment(request: { auth?: { uid?: string }; data?: unknown }) {
+  return recordPayment(request);
 }

@@ -33,6 +33,7 @@ import { acceptInvite } from "./clinic/acceptInvite";
 import { updateClinicProfile } from "./clinic/updateClinicProfile";
 import { upsertLocation } from "./clinic/settings/upsertLocation";
 import { setLocationActive } from "./clinic/settings/setLocationActive";
+import { updateLocationWeeklyHours } from "./clinic/settings/updateLocationWeeklyHours";
 import { upsertAppointmentType } from "./clinic/settings/upsertAppointmentType";
 import { setAppointmentTypeActive } from "./clinic/settings/setAppointmentTypeActive";
 import { updateCalendarDisplayConfig } from "./clinic/settings/updateCalendarDisplayConfig";
@@ -47,8 +48,10 @@ import { getPublicBookingConfig } from "./clinic/settings/getPublicBookingConfig
 import { getCommunicationSettings } from "./clinic/settings/getCommunicationSettings";
 import { updatePublicBookingConfig } from "./clinic/settings/updatePublicBookingConfig";
 import { updateOnlineBookingEnablement } from "./clinic/settings/updateOnlineBookingEnablement";
+import { updateLocationDisplayOrder } from "./clinic/settings/updateLocationDisplayOrder";
 import { updateCommunicationSettings } from "./clinic/settings/updateCommunicationSettings";
 import { upsertPractitionerAvailability } from "./clinic/settings/upsertPractitionerAvailability";
+import { deletePractitionerAvailability } from "./clinic/settings/deletePractitionerAvailability";
 import { upsertPractitionerOverride } from "./clinic/settings/upsertPractitionerOverride";
 import { deletePractitionerOverride } from "./clinic/settings/deletePractitionerOverride";
 import { setMembershipStatus } from "./clinic/setMembershipStatus";
@@ -115,13 +118,28 @@ import { getAssessmentPack } from "./clinic/assessments/getAssessmentPack";
 // ─────────────────────────────
 import { createCharge } from "./clinic/billing/createCharge";
 import { createInvoiceDraft } from "./clinic/billing/createInvoiceDraft";
+import { createInvoice } from "./clinic/billing/createInvoice";
+import { updateInvoice } from "./clinic/billing/updateInvoice";
+import { createInvoiceFromAppointment } from "./clinic/billing/createInvoiceFromAppointment";
 import { issueInvoice } from "./clinic/billing/issueInvoice";
 import { recordManualPayment } from "./clinic/billing/recordManualPayment";
+import { recordPayment } from "./clinic/billing/recordPayment";
 import { issueCreditNote } from "./clinic/billing/issueCreditNote";
+import { refundPayment } from "./clinic/billing/refundPayment";
 import { updateBillingSettings } from "./clinic/billing/updateBillingSettings";
 import { createStripePaymentIntent } from "./clinic/billing/createStripePaymentIntent";
 import { handleStripeWebhook } from "./clinic/billing/stripeWebhook";
 import { generateInvoicePdf, getInvoicePdfDownloadUrl } from "./clinic/billing/generateInvoicePdf";
+import { upsertTax } from "./clinic/billing/upsertTax";
+import { upsertPaymentType } from "./clinic/billing/upsertPaymentType";
+import { upsertBillableItem } from "./clinic/billing/upsertBillableItem";
+import { upsertProduct } from "./clinic/billing/upsertProduct";
+import { createInvoicePaymentLink } from "./clinic/billing/createInvoicePaymentLink";
+import { getBillingSummary } from "./clinic/billing/getBillingSummary";
+import { getBillingJurisdiction } from "./clinic/billing/getBillingJurisdiction";
+import { getAgedReceivables } from "./clinic/billing/getAgedReceivables";
+import { updatePricingSettings } from "./clinic/billing/updatePricingSettings";
+import { resolvePricingForAppointment } from "./clinic/billing/resolvePricingForAppointment";
 
 
 
@@ -132,7 +150,12 @@ import { submitIntakeSession } from "./clinic/intake/submitIntakeSession";
 export { computeIntakeSummaryV2 } from "./clinic/intake/computeIntakeSummary";
 export * from "./clinic/intake/computeDecisionSupport";
 import { createGeneralQuestionnaireLinkFn } from "./intake/createGeneralQuestionnaireLinkFn";
+import { createQuestionnaireLaunchLinkFn } from "./intake/createQuestionnaireLaunchLinkFn";
 import { resolveIntakeLinkTokenFn } from "./intake/resolveIntakeLinkTokenFn";
+import {
+  listQuestionnaireTemplatesFn,
+  updateQuestionnaireTemplateFn,
+} from "./clinic/questionnaires/listQuestionnaireTemplatesFn";
 
 // ─────────────────────────────
 // Audit exports
@@ -208,6 +231,10 @@ export const settingsSetLocationActive = onCall(
   { region: REGION, cors: true },
   setLocationActive
 );
+export const settingsUpdateLocationWeeklyHours = onCall(
+  { region: REGION, cors: true },
+  updateLocationWeeklyHours
+);
 export const settingsUpsertAppointmentType = onCall(
   { region: REGION, cors: true },
   upsertAppointmentType
@@ -264,6 +291,10 @@ export const settingsUpdateOnlineBookingEnablement = onCall(
   { region: REGION, cors: true },
   updateOnlineBookingEnablement
 );
+export const settingsUpdateLocationDisplayOrder = onCall(
+  { region: REGION, cors: true },
+  updateLocationDisplayOrder
+);
 /** Rebuild public booking mirror (practitioners, locations, appointment types). Requires settings.write. */
 export const rebuildPublicBookingMirrorFn = onCall(
   { region: REGION, cors: true },
@@ -288,6 +319,10 @@ export const settingsUpdateCommunicationSettings = onCall(
 export const settingsUpsertPractitionerAvailability = onCall(
   { region: REGION, cors: true },
   upsertPractitionerAvailability
+);
+export const settingsDeletePractitionerAvailability = onCall(
+  { region: REGION, cors: true },
+  deletePractitionerAvailability
 );
 export const settingsUpsertPractitionerOverride = onCall(
   { region: REGION, cors: true },
@@ -497,6 +532,21 @@ export const billingCreateInvoiceDraftFn = onCall(
   createInvoiceDraft
 );
 
+export const billingCreateInvoiceFn = onCall(
+  { region: REGION, cors: true },
+  createInvoice
+);
+
+export const billingUpdateInvoiceFn = onCall(
+  { region: REGION, cors: true },
+  updateInvoice
+);
+
+export const billingCreateInvoiceFromAppointmentFn = onCall(
+  { region: REGION, cors: true },
+  createInvoiceFromAppointment
+);
+
 export const billingIssueInvoiceFn = onCall(
   { region: REGION, cors: true },
   issueInvoice
@@ -507,9 +557,19 @@ export const billingRecordManualPaymentFn = onCall(
   recordManualPayment
 );
 
+export const billingRecordPaymentFn = onCall(
+  { region: REGION, cors: true },
+  recordPayment
+);
+
 export const billingIssueCreditNoteFn = onCall(
   { region: REGION, cors: true },
   issueCreditNote
+);
+
+export const billingRefundPaymentFn = onCall(
+  { region: REGION, cors: true },
+  refundPayment
 );
 
 export const billingUpdateSettingsFn = onCall(
@@ -517,9 +577,44 @@ export const billingUpdateSettingsFn = onCall(
   updateBillingSettings
 );
 
+export const billingUpdatePricingSettingsFn = onCall(
+  { region: REGION, cors: true },
+  updatePricingSettings
+);
+
+export const billingResolvePricingForAppointmentFn = onCall(
+  { region: REGION, cors: true },
+  resolvePricingForAppointment
+);
+
+export const settingsUpsertTax = onCall(
+  { region: REGION, cors: true },
+  upsertTax
+);
+
+export const settingsUpsertPaymentType = onCall(
+  { region: REGION, cors: true },
+  upsertPaymentType
+);
+
+export const settingsUpsertBillableItem = onCall(
+  { region: REGION, cors: true },
+  upsertBillableItem
+);
+
+export const settingsUpsertProduct = onCall(
+  { region: REGION, cors: true },
+  upsertProduct
+);
+
 export const billingCreateStripePaymentIntentFn = onCall(
   { region: REGION, cors: true },
   createStripePaymentIntent
+);
+
+export const billingCreateInvoicePaymentLinkFn = onCall(
+  { region: REGION, cors: true },
+  createInvoicePaymentLink
 );
 
 export const billingGenerateInvoicePdfFn = onCall(
@@ -530,6 +625,21 @@ export const billingGenerateInvoicePdfFn = onCall(
 export const billingGetInvoicePdfDownloadUrlFn = onCall(
   { region: REGION, cors: true },
   getInvoicePdfDownloadUrl
+);
+
+export const billingGetSummaryFn = onCall(
+  { region: REGION, cors: true },
+  getBillingSummary
+);
+
+export const billingGetJurisdictionFn = onCall(
+  { region: REGION, cors: true },
+  getBillingJurisdiction
+);
+
+export const billingGetAgedReceivablesFn = onCall(
+  { region: REGION, cors: true },
+  getAgedReceivables
 );
 
 // Stripe webhook (HTTP function, not callable)
@@ -552,7 +662,13 @@ export const submitIntakeSessionFn = onCall(
   { region: REGION, cors: true },
   submitIntakeSession
 );
-export { createGeneralQuestionnaireLinkFn, resolveIntakeLinkTokenFn };
+export {
+  createGeneralQuestionnaireLinkFn,
+  createQuestionnaireLaunchLinkFn,
+  resolveIntakeLinkTokenFn,
+  listQuestionnaireTemplatesFn,
+  updateQuestionnaireTemplateFn,
+};
 
 // Audit
 export const exportClosureOverrideAuditReportFn = onCall(
@@ -564,11 +680,11 @@ export const exportClosureOverrideAuditReportFn = onCall(
 // Triggers / background
 // ─────────────────────────────
 export { onBookingRequestCreateV2 } from "./clinic/booking/onBookingRequestCreate";
-export { onPublicBookingSettingsWrite } from "./public/onPublicBookingSettingsWrite";
 export { onPractitionerWritten } from "./public/mirrorPublicBooking";
 export { onPublicBookingConfigMirror } from "./public/onPublicBookingConfigMirror";
 export {
   onPublicBookingSettingsWriteProjection,
+  onLocationWritePublicBookingConfigProjection,
   projectionsRebuildPublicBookingConfig,
 } from "./clinic/projections/publicBookingProjection";
 export { onAppointmentWrite_toBusyBlock } from "./availability/onAppointmentWrite_toBusyBlock";

@@ -1,10 +1,11 @@
 // functions/src/public/mirrorPublicBooking.ts
-// CP-P2: Public mirror includes curated locations, practitioners, appointmentTypes (active + showInOnlineBooking).
+// CP-P2: Public mirror includes curated locations, practitioners, appointmentTypes (active + visibility).
 import * as admin from "firebase-admin";
 import { logger } from "firebase-functions/logger";
 import { onDocumentWritten } from "firebase-functions/v2/firestore";
 
 import { buildPublicBookingProjection } from "../clinic/publicProjection";
+import { buildPublicQuestionnaireFlow } from "../clinic/questionnaires/questionnaireTemplates";
 
 if (!admin.apps.length) admin.initializeApp();
 const db = admin.firestore();
@@ -31,7 +32,59 @@ function assertOnlyPublicWrites(clinicId: string, path: string): void {
   }
 }
 
-/** CP-P2: Run mirror for a clinic (trigger or callable). Reads settings/publicBooking, locations, practitioners, appointmentTypes; writes public doc only. */
+const DAY_KEYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] as const;
+
+/** When private config is deleted, write a safe empty projection (no admin/private fields). */
+function buildSafeDefaultPublicProjection(clinicId: string): AnyMap {
+  const emptyWeeklyHours = Object.fromEntries(DAY_KEYS.map((k) => [k, []]));
+  return {
+    timezone: "Europe/London",
+    weeklyHours: emptyWeeklyHours,
+    slotStepMinutes: 15,
+    minNoticeMinutes: 60,
+    maxAdvanceDays: 365,
+    schemaVersion: 1,
+    locations: [],
+    practitioners: [],
+    appointmentTypes: [],
+  };
+}
+
+/** Compare payloads for no-op; exclude updatedAt/updatedBy. */
+function payloadsEqual(a: AnyMap, b: AnyMap): boolean {
+  const strip = (o: AnyMap) => {
+    const out = { ...o };
+    delete out.updatedAt;
+    delete out.updatedBy;
+    return out;
+  };
+  return JSON.stringify(strip(a)) === JSON.stringify(strip(b));
+}
+
+/** Recursively remove undefined values so Firestore accepts the document. Leaves Timestamp/FieldValue intact. */
+function removeUndefined<T>(val: T): T {
+  if (val === undefined) return undefined as T;
+  if (val === null || typeof val !== "object") return val;
+  if (val instanceof admin.firestore.Timestamp) return val;
+  if (Array.isArray(val)) return val.map((item) => removeUndefined(item)) as T;
+  // Plain object only; do not recurse into FieldValue or other sentinels
+  if (Object.getPrototypeOf(val) !== Object.prototype) return val;
+  const out: AnyMap = {};
+  for (const [k, v] of Object.entries(val as AnyMap)) {
+    if (v === undefined) continue;
+    out[k] = removeUndefined(v);
+  }
+  return out as T;
+}
+
+/**
+ * CP-P2: Run mirror for a clinic (trigger or callable). Reads settings/publicBooking, locations,
+ * practitioners, appointmentTypes; writes public doc only.
+ *
+ * Main public booking projection: clinics/{clinicId}/public/config/publicBooking/publicBooking.
+ * This is the single doc written by onPublicBookingConfigMirror when settings/publicBooking
+ * changes; listPublicSlots and public booking UI read from here (no direct client writes).
+ */
 export async function runPublicBookingMirrorForClinic(clinicId: string): Promise<void> {
   const cid = safeStr(clinicId);
   if (!cid) return;
@@ -44,11 +97,28 @@ export async function runPublicBookingMirrorForClinic(clinicId: string): Promise
   const settingsRef = db.doc(`clinics/${cid}/settings/publicBooking`);
   const settingsSnap = await settingsRef.get().catch(() => null);
   if (!settingsSnap?.exists) {
-    await publicDocRef.delete().catch(() => {});
+    // Private config deleted: write safe empty projection (do not hard-delete public doc).
+    const safeDefaults = buildSafeDefaultPublicProjection(cid);
+    const defaultPayload = removeUndefined({
+      ...safeDefaults,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedBy: "mirrorPublicBooking-defaults",
+    });
+    await publicDocRef.set(defaultPayload, { merge: true });
+    logger.info("mirrorPublicBooking: source deleted, wrote safe defaults", { clinicId: cid });
     return;
   }
 
   const publicBookingSettingsDoc = asMap(settingsSnap.data());
+  const publicQuestionnaireFlow = await buildPublicQuestionnaireFlow(
+    db,
+    cid,
+    publicBookingSettingsDoc.questionnaireFlow
+  );
+  const publicBookingSettingsForProjection: AnyMap = {
+    ...publicBookingSettingsDoc,
+    questionnaireFlow: publicQuestionnaireFlow,
+  };
 
   const clinicRef = db.doc(`clinics/${cid}`);
   const servicesCol = db.collection(`clinics/${cid}/services`);
@@ -112,7 +182,7 @@ export async function runPublicBookingMirrorForClinic(clinicId: string): Promise
     clinicName,
     logoUrl,
     clinicDoc,
-    publicBookingSettingsDoc,
+    publicBookingSettingsDoc: publicBookingSettingsForProjection,
     services,
     practitioners,
     memberships,
@@ -121,7 +191,7 @@ export async function runPublicBookingMirrorForClinic(clinicId: string): Promise
 
   const projection = buildPublicBookingProjection(input as any);
 
-  // CP-P2: Curated lists for public booking (active + showInOnlineBooking only; no addresses/PII)
+  // CP-P2: Curated lists for public booking (active + visibility only; no addresses/PII)
   const locationsList =
     locationsSnap?.docs
       ?.filter((d) => {
@@ -149,6 +219,9 @@ export async function runPublicBookingMirrorForClinic(clinicId: string): Promise
         const allowedLocs = Array.isArray(dta.allowedLocationIds)
           ? dta.allowedLocationIds.filter((x: any) => typeof x === "string" && x.trim())
           : undefined;
+        const allowedPractitioners = Array.isArray(dta.allowedPractitionerIds)
+          ? dta.allowedPractitionerIds.filter((x: any) => typeof x === "string" && x.trim())
+          : undefined;
         return {
           id: d.id,
           name: safeStr(dta.name) || d.id,
@@ -157,33 +230,46 @@ export async function runPublicBookingMirrorForClinic(clinicId: string): Promise
           defaultPrice: typeof dta.defaultPrice === "number" ? dta.defaultPrice : undefined,
           colorHex: safeStr(dta.colorHex) || undefined,
           allowedLocationIds: allowedLocs && allowedLocs.length > 0 ? allowedLocs : undefined,
+          telehealth: dta.telehealth === true,
+          allowedPractitionerIds: allowedPractitioners && allowedPractitioners.length > 0 ? allowedPractitioners : undefined,
         };
       }) ?? [];
 
-  await publicDocRef.set(
-    {
-      ...projection,
-      locations: locationsList,
-      practitioners: practitionersList.map((p: AnyMap) => ({
-        id: p.id,
-        displayName: p.displayName ?? p.id,
-        title: p.title ?? p.designation ?? undefined,
-        photoUrl: p.photoUrl ?? undefined,
-        bio: p.bio ?? undefined,
-        serviceIdsAllowed: Array.isArray(p.serviceIdsAllowed) ? p.serviceIdsAllowed : undefined,
-        sortOrder: typeof p.sortOrder === "number" ? p.sortOrder : undefined,
-        allowedLocationIds: Array.isArray(p.allowedLocationIds) ? p.allowedLocationIds : undefined,
-      })),
-      appointmentTypes: appointmentTypesList,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      updatedBy: "mirrorPublicBooking-v2",
-    },
-    { merge: true }
-  );
+  const practitionersForDoc = practitionersList.map((p: AnyMap) => ({
+    id: p.id,
+    displayName: p.displayName ?? p.id,
+    title: p.title ?? p.designation ?? undefined,
+    photoUrl: p.photoUrl ?? undefined,
+    bio: p.bio ?? undefined,
+    serviceIdsAllowed: Array.isArray(p.serviceIdsAllowed) ? p.serviceIdsAllowed : undefined,
+    sortOrder: typeof p.sortOrder === "number" ? p.sortOrder : undefined,
+    allowedLocationIds: Array.isArray(p.allowedLocationIds) ? p.allowedLocationIds : undefined,
+  }));
+
+  const newPayload: AnyMap = {
+    ...projection,
+    locations: locationsList,
+    practitioners: practitionersForDoc,
+    appointmentTypes: appointmentTypesList,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    updatedBy: "mirrorPublicBooking-v2",
+  };
+
+  const currentSnap = await publicDocRef.get().catch(() => null);
+  if (currentSnap?.exists) {
+    const currentData = asMap(currentSnap.data());
+    if (payloadsEqual(newPayload, currentData)) {
+      logger.info("mirrorPublicBooking: unchanged, skip write", { clinicId: cid });
+      return;
+    }
+  }
+
+  const payloadToWrite = removeUndefined(newPayload);
+  await publicDocRef.set(payloadToWrite, { merge: true });
 
   if (practitionersList.length === 0) {
     const withVisibility = practitionersSnap?.docs?.filter(
-      (d) => d.data()?.showInOnlineBooking === true && d.data()?.active !== false
+      (d) => d.data()?.showInPublicBooking === true && d.data()?.active !== false
     ).length ?? 0;
     const memberByIdLog = new Map<string, AnyMap>();
     for (const m of memberships) {
@@ -192,7 +278,7 @@ export async function runPublicBookingMirrorForClinic(clinicId: string): Promise
     const whyExcluded: Array<{ id: string; show: boolean; active: boolean; activeForBooking: boolean; memStatus?: string; memActive?: boolean }> = [];
     for (const d of practitionersSnap?.docs ?? []) {
       const dta = d.data() ?? {};
-      const show = dta.showInOnlineBooking === true;
+      const show = dta.showInPublicBooking === true;
       if (!show) continue;
       const mem = memberByIdLog.get(d.id);
       const memStatus = mem ? (safeStr(mem.status).toLowerCase() || (mem.active === true ? "active" : "inactive")) : "none";
@@ -208,7 +294,7 @@ export async function runPublicBookingMirrorForClinic(clinicId: string): Promise
     }
     logger.warn("mirrorPublicBooking: 0 practitioners in mirror", {
       clinicId: cid,
-      practitionersWithShowInOnlineBooking: withVisibility,
+      practitionersWithPublicVisibility: withVisibility,
       totalPractitioners: practitionersSnap?.size ?? 0,
       membersCount: membersSnap?.size ?? 0,
       membershipsCount: membershipsSnap?.size ?? 0,
@@ -224,7 +310,7 @@ export async function runPublicBookingMirrorForClinic(clinicId: string): Promise
   }
 }
 
-/** When a practitioner doc is written (e.g. showInOnlineBooking toggled), refresh the public mirror so public booking sees the change. */
+/** When a practitioner doc is written (e.g. showInPublicBooking toggled), refresh the public mirror so public booking sees the change. */
 export const onPractitionerWritten = onDocumentWritten(
   {
     region: "europe-west3",
@@ -238,26 +324,4 @@ export const onPractitionerWritten = onDocumentWritten(
   }
 );
 
-export const onPublicBookingSettingsWrite = onDocumentWritten(
-  {
-    region: "europe-west3",
-    document: "clinics/{clinicId}/settings/publicBooking",
-  },
-  async (event) => {
-    const clinicId = safeStr(event.params?.clinicId);
-    if (!clinicId) {
-      logger.warn("mirrorPublicBooking: missing clinicId param");
-      return;
-    }
-    const afterSnap = event.data?.after;
-    if (!afterSnap?.exists) {
-      const publicDocRef = db.doc(
-        `clinics/${clinicId}/public/config/publicBooking/publicBooking`
-      );
-      await publicDocRef.delete().catch(() => {});
-      logger.info("mirrorPublicBooking: source deleted, mirror deleted", { clinicId });
-      return;
-    }
-    await runPublicBookingMirrorForClinic(clinicId);
-  }
-);
+// Trigger on settings/publicBooking is onPublicBookingConfigMirror (see onPublicBookingConfigMirror.ts).

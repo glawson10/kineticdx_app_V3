@@ -16,22 +16,24 @@ import '../../../../data/repositories/locations_repository.dart';
 import '../../../../data/repositories/public_booking_settings_repository.dart';
 import '../../../../data/repositories/staff_repository.dart';
 import '../../../../app/clinic_context.dart';
+import '../../../../config/permission_keys.dart';
 import '../../../../shared/ui/perm_gate.dart';
 import '../screens/appointment_types_list_screen.dart';
 import '../screens/clinic_general_settings_screen.dart';
 import '../screens/public_booking_settings_screen.dart';
-import '../screens/online_booking_enablement_screen.dart';
 import '../screens/communication_settings_screen.dart';
 import '../screens/location_display_order_screen.dart';
 import '../screens/location_form_screen.dart';
 import '../screens/location_resources_screen.dart';
 import '../screens/locations_list_screen.dart';
 import '../screens/settings_placeholder_screen.dart';
+import '../../billing/ui/billing_settings_screen.dart';
 
 import '../../../features/clinic/settings/ui/clinic_opening_hours_screen.dart';
 import '../../../features/clinic_settings/clinic_closures_screen.dart';
 import '../../../features/clinic_settings/clinic_policies_screen.dart';
 import '../screens/calendar_display_settings_screen.dart' as settings_calendar;
+import '../screens/questionnaire_templates_list_screen.dart';
 
 import '../../../models/clinic_location.dart';
 import '../../../staff/invite_staff_form.dart';
@@ -62,7 +64,7 @@ extension _SettingsSectionX on SettingsSection {
       case SettingsSection.communication:
         return AppRoutes.settingsCommunication;
       case SettingsSection.billing:
-        return AppRoutes.settingsBilling;
+        return AppRoutes.settingsAccounts;
       case SettingsSection.data:
         return AppRoutes.settingsData;
     }
@@ -81,7 +83,7 @@ extension _SettingsSectionX on SettingsSection {
       case SettingsSection.communication:
         return 'Communication';
       case SettingsSection.billing:
-        return 'Billing';
+        return 'Accounts';
       case SettingsSection.data:
         return 'Data';
     }
@@ -108,7 +110,6 @@ extension _SettingsSectionX on SettingsSection {
 
   bool get enabled {
     switch (this) {
-      case SettingsSection.billing:
       case SettingsSection.data:
         return false;
       default:
@@ -126,10 +127,23 @@ extension _SettingsSectionX on SettingsSection {
       case SettingsSection.team:
         return ['Members', 'Invite'];
       case SettingsSection.scheduling:
-        return ['Calendar display', 'Appointment types', 'Public booking', 'Online booking', 'Practitioners'];
+        return ['Calendar display', 'Appointment types', 'Online booking', 'Practitioners'];
       case SettingsSection.communication:
-        return ['Defaults', 'Templates'];
+        return ['Defaults', 'Templates', 'Questionnaire templates'];
       case SettingsSection.billing:
+        return [
+          'Business Identity',
+          'Tax & Jurisdiction',
+          'Invoice Numbering',
+          'Invoice Defaults',
+          'Invoice Template',
+          'Payment Terms',
+          'Compliance & Retention',
+          'Taxes',
+          'Payment types',
+          'Billable items',
+          'Products',
+        ];
       case SettingsSection.data:
         return [];
     }
@@ -138,6 +152,10 @@ extension _SettingsSectionX on SettingsSection {
 
 SettingsSection? _sectionFromSlug(String? slug) {
   if (slug == null || slug.isEmpty) return SettingsSection.clinic;
+  // Legacy: 'billing' and 'accounts' both map to Accounts (billing) section.
+  if (slug == AppRoutes.settingsBilling || slug == AppRoutes.settingsAccounts) {
+    return SettingsSection.billing;
+  }
   for (final s in SettingsSection.values) {
     if (s.slug == slug) return s;
   }
@@ -284,7 +302,27 @@ class _SettingsHomeScreenState extends State<SettingsHomeScreen> {
     }
   }
 
+  bool _canAccessBilling(BuildContext context) {
+    final clinicCtx = context.read<ClinicContext>();
+    if (!clinicCtx.hasSession) return false;
+    final perms = clinicCtx.session.permissions;
+    return perms.has('settings.write') ||
+        PermissionKeys.billingReadAny.any((k) => perms.has(k));
+  }
+
+  bool _isSectionEnabled(BuildContext context, SettingsSection section) {
+    if (!section.enabled) return false;
+    if (section == SettingsSection.billing) return _canAccessBilling(context);
+    return true;
+  }
+
   Widget _buildContent(BuildContext context) {
+    if (_category == SettingsSection.billing && !_canAccessBilling(context)) {
+      return const Center(
+        child: Text('You do not have billing access for this clinic.'),
+      );
+    }
+
     if (!_category.enabled) {
       return SettingsPlaceholderScreen(
         title: _category.label,
@@ -298,9 +336,14 @@ class _SettingsHomeScreenState extends State<SettingsHomeScreen> {
     }
     final clinicId = widget.clinicId ?? context.read<ClinicContext>().clinicId;
 
-    // Scheduling requires a clinic; avoid building any sub-screen (e.g. Calendar StreamBuilder) with empty clinicId.
-    if (_category == SettingsSection.scheduling && clinicId.trim().isEmpty) {
-      return const Center(child: Text('No clinic selected.'));
+    // Scheduling and Clinic content require a clinic; avoid building sub-screens with empty clinicId (loading/errors).
+    if (clinicId.trim().isEmpty) {
+      if (_category == SettingsSection.scheduling ||
+          _category == SettingsSection.clinic ||
+          _category == SettingsSection.locations ||
+          _category == SettingsSection.communication) {
+        return const Center(child: Text('No clinic selected.'));
+      }
     }
 
     // Clinic → General: read-only clinic profile (Commit 03).
@@ -468,29 +511,21 @@ class _SettingsHomeScreenState extends State<SettingsHomeScreen> {
       );
     }
 
-    // Scheduling → Public booking (Commit 15: callable-only writes).
+    // Scheduling → Online booking (enablement + slot rules + patient rules + confirmation message).
     if (_category == SettingsSection.scheduling &&
         tabs.length > 2 &&
         _subIndex == 2 &&
-        tabs[_subIndex] == 'Public booking') {
+        tabs[_subIndex] == 'Online booking') {
       return PermGate(
         requiredPerm: 'settings.read',
         child: PublicBookingSettingsScreen(clinicId: clinicId),
       );
     }
 
-    // Scheduling → Online booking (CP-P2: visibility toggles for locations/practitioners/types).
+    // Scheduling → Practitioners: same staff list as Team → Members (view + Edit availability).
     if (_category == SettingsSection.scheduling &&
         tabs.length > 3 &&
         _subIndex == 3 &&
-        tabs[_subIndex] == 'Online booking') {
-      return OnlineBookingEnablementScreen(clinicId: clinicId);
-    }
-
-    // Scheduling → Practitioners: same staff list as Team → Members (view + Edit availability).
-    if (_category == SettingsSection.scheduling &&
-        tabs.length > 4 &&
-        _subIndex == 4 &&
         tabs[_subIndex] == 'Practitioners') {
       return PermGate(
         requiredPerm: 'members.read',
@@ -525,6 +560,23 @@ class _SettingsHomeScreenState extends State<SettingsHomeScreen> {
               'Coming soon; see SETTINGS_SYSTEM §4.9 for the data contract.',
         ),
       );
+    }
+
+    // Communication → Questionnaire templates (OBS-P2: clinics/{clinicId}/questionnaireTemplates).
+    if (_category == SettingsSection.communication &&
+        tabs.length > 2 &&
+        _subIndex == 2 &&
+        tabs[2] == 'Questionnaire templates') {
+      return PermGate(
+        requiredPerm: 'settings.read',
+        child: QuestionnaireTemplatesListScreen(clinicId: clinicId),
+      );
+    }
+
+    // Accounts (billing) → dedicated panes 0–6 config, 7–10 catalog.
+    if (_category == SettingsSection.billing && tabs.isNotEmpty) {
+      final tabIndex = _subIndex.clamp(0, 10);
+      return BillingSettingsScreen(initialTabIndex: tabIndex);
     }
 
     // Clinic → Opening hours: same source as public booking (settings/publicBooking.weeklyHours).
@@ -646,7 +698,7 @@ class _SettingsHomeScreenState extends State<SettingsHomeScreen> {
           padding: const EdgeInsets.symmetric(vertical: 8),
           children: [
             for (final item in _categories) ...[
-              if (!item.section.enabled)
+              if (!_isSectionEnabled(context, item.section))
                 _buildCategoryTile(theme, item.section, disabled: true)
               else
                 _buildCategoryTile(theme, item.section, disabled: false),
@@ -697,9 +749,16 @@ class _SettingsHomeScreenState extends State<SettingsHomeScreen> {
     if (!_category.enabled || _category.subTabs.isEmpty) {
       return const SizedBox.shrink();
     }
+    // Accounts (billing) uses its own vertical section list inside BillingSettingsScreen; avoid duplicate horizontal row.
+    if (_category == SettingsSection.billing) {
+      return const SizedBox.shrink();
+    }
     final tabs = _category.subTabs;
     return Container(
-      padding: EdgeInsets.symmetric(horizontal: isNarrow ? 12 : 24, vertical: 8),
+      padding: EdgeInsets.symmetric(
+        horizontal: isNarrow ? 12 : 24,
+        vertical: 6,
+      ),
       decoration: BoxDecoration(
         color: theme.colorScheme.surface,
         border: Border(bottom: BorderSide(color: theme.dividerColor)),
@@ -709,7 +768,7 @@ class _SettingsHomeScreenState extends State<SettingsHomeScreen> {
         child: Row(
           children: [
             for (int i = 0; i < tabs.length; i++) ...[
-              if (i > 0) const SizedBox(width: 8),
+              if (i > 0) const SizedBox(width: 6),
               _SubTabChip(
                 label: tabs[i],
                 icon: _subTabIcon(_category, tabs[i]),
@@ -748,9 +807,9 @@ class _SettingsHomeScreenState extends State<SettingsHomeScreen> {
               ListTile(
                 leading: Icon(item.section.icon, size: 22),
                 title: Text(item.section.label),
-                enabled: item.section.enabled,
+                enabled: _isSectionEnabled(context, item.section),
                 selected: _category == item.section,
-                onTap: item.section.enabled
+                onTap: _isSectionEnabled(context, item.section)
                     ? () {
                         setState(() { _category = item.section; _subIndex = 0; });
                         Navigator.of(context).pop();
@@ -864,30 +923,35 @@ class _SubTabChip extends StatelessWidget {
     final theme = Theme.of(context);
     return Material(
       color: selected
-          ? theme.colorScheme.primaryContainer
-          : theme.colorScheme.surfaceContainerHighest,
-      borderRadius: BorderRadius.circular(20),
+          ? theme.colorScheme.primaryContainer.withValues(alpha: 0.85)
+          : theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.7),
+      borderRadius: BorderRadius.circular(16),
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(16),
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
               if (icon != null) ...[
                 Icon(
                   icon,
-                  size: 18,
-                  color: selected ? theme.colorScheme.onPrimaryContainer : theme.colorScheme.onSurfaceVariant,
+                  size: 17,
+                  color: selected
+                      ? theme.colorScheme.primary
+                      : theme.colorScheme.onSurfaceVariant,
                 ),
-                const SizedBox(width: 8),
+                const SizedBox(width: 6),
               ],
               Text(
                 label,
                 style: theme.textTheme.labelLarge?.copyWith(
-                  color: selected ? theme.colorScheme.onPrimaryContainer : theme.colorScheme.onSurfaceVariant,
-                  fontWeight: selected ? FontWeight.w600 : null,
+                  fontSize: 13,
+                  color: selected
+                      ? theme.colorScheme.primary
+                      : theme.colorScheme.onSurfaceVariant,
+                  fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
                 ),
               ),
             ],

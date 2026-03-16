@@ -3,6 +3,7 @@ import { onCall, HttpsError } from "firebase-functions/v2/https";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
 
 import { requireActiveMemberWithPerm } from "../authz";
+import { legacyFlowIdToRegistry, getClinicalProfile } from "./flowRegistry";
 
 // Engines...
 import { buildAnkleLegacyAnswers } from "./scoring/adapters/ankleAdapter";
@@ -260,10 +261,28 @@ export const computeDecisionSupport = onCall(
       }
 
       const flowId = safeStr(flow.flowId);
-      let summary: any;
-      let engineDispatch = flowId;
+      const snapshotClinicalProfileId = safeStr((intake as any).clinicalProfileId);
+      const snapshotSupportsDifferential = (intake as any).supportsDifferentialHypothesis === true;
+      const legacy = legacyFlowIdToRegistry(flowId, (intake as any).flowVersion ?? flow.flowVersion);
+      const profile = snapshotClinicalProfileId
+        ? getClinicalProfile(snapshotClinicalProfileId)
+        : legacy
+          ? getClinicalProfile(legacy.clinicalProfileId)
+          : null;
+      const supportsDifferentialHypothesis =
+        profile != null
+          ? profile.supportsDifferentialHypothesis
+          : (snapshotSupportsDifferential || legacy?.supportsDifferentialHypothesis) ?? true;
+      const summaryEngine =
+        safeStr((intake as any).summaryEngine) ||
+        legacy?.summaryEngine ||
+        profile?.summaryEngine ||
+        flowId;
 
-      switch (flowId) {
+      let summary: any;
+      let engineDispatch = summaryEngine;
+
+      switch (summaryEngine) {
         case "ankle": {
           const raw = await computeAnkleResult(answers);
           summary = buildAnkleSummary(raw, answers);
@@ -349,19 +368,44 @@ export const computeDecisionSupport = onCall(
           break;
         }
 
+        case "generalVisit": {
+          const reason =
+            answers?.generalVisit?.goals?.reasonForVisit?.v ??
+            answers?.["generalVisit.goals.reasonForVisit"]?.v ??
+            "";
+          const narrative =
+            typeof reason === "string" && reason.trim()
+              ? `Reason for visit: ${(reason as string).trim()}`
+              : "General visit questionnaire completed.";
+          summary = {
+            narrative,
+            triage: { status: "green", reasons: [] },
+            topDifferentials: [],
+            objectiveTests: [],
+          };
+          engineDispatch = "generalVisit";
+          break;
+        }
+
         default:
           throw new HttpsError(
             "invalid-argument",
-            `Unsupported flowId: ${flowId}`,
-            { flowId }
+            `Unsupported summaryEngine: ${summaryEngine}`,
+            { flowId, summaryEngine }
           );
       }
 
       const mapped = mapSummaryToDecisionSupport(summary);
+      const diagnosticHypotheses = supportsDifferentialHypothesis
+        ? mapped.diagnosticHypotheses
+        : [];
+      const recommendedTests = supportsDifferentialHypothesis
+        ? mapped.recommendedTests
+        : [];
 
       const doc: DecisionSupportDoc = {
         status: "ready",
-        engine: `${flowId}_engine`,
+        engine: `${summaryEngine}_engine`,
         engineDispatch,
         region: flowId,
         rulesetVersion: "layerB_v1",
@@ -369,11 +413,11 @@ export const computeDecisionSupport = onCall(
 
         computedFromAnswerCount: Object.keys(answers ?? {}).length,
         summaryKeys: mapped.summaryKeys,
-        topDifferentialsCount: mapped.topDifferentialsCount,
-        objectiveTestsCount: mapped.objectiveTestsCount,
+        topDifferentialsCount: supportsDifferentialHypothesis ? mapped.topDifferentialsCount : 0,
+        objectiveTestsCount: recommendedTests.length,
 
-        diagnosticHypotheses: mapped.diagnosticHypotheses,
-        recommendedTests: mapped.recommendedTests,
+        diagnosticHypotheses,
+        recommendedTests,
       };
 
       const dsRef = db
@@ -388,7 +432,9 @@ export const computeDecisionSupport = onCall(
         ok: true,
         status: "ready",
         flowId,
+        summaryEngine,
         engineDispatch,
+        supportsDifferentialHypothesis,
         hypothesesCount: doc.diagnosticHypotheses.length,
         testsCount: doc.recommendedTests.length,
       };

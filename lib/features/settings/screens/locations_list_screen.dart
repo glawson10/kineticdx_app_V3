@@ -10,6 +10,7 @@ import 'package:provider/provider.dart';
 import '../../../app/callable_error_mapping.dart';
 import '../../../data/repositories/locations_repository.dart';
 import '../../../models/clinic_location.dart';
+import 'location_opening_hours_screen.dart';
 
 class LocationsListScreen extends StatelessWidget {
   const LocationsListScreen({
@@ -114,6 +115,7 @@ class LocationsListScreen extends StatelessWidget {
                 )
               else
                 ...locations.map((loc) => _LocationCard(
+                      clinicId: clinicId,
                       location: loc,
                       onEdit: onEditLocation ?? onEdit,
                       onToggleActive: () => _setActive(context, repo, clinicId, loc),
@@ -153,11 +155,13 @@ class LocationsListScreen extends StatelessWidget {
 
 class _LocationCard extends StatelessWidget {
   const _LocationCard({
+    required this.clinicId,
     required this.location,
     required this.onEdit,
     required this.onToggleActive,
   });
 
+  final String clinicId;
   final ClinicLocation location;
   final void Function(dynamic location)? onEdit;
   final VoidCallback onToggleActive;
@@ -200,6 +204,22 @@ class _LocationCard extends StatelessWidget {
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
+            IconButton(
+              icon: const Icon(Icons.schedule_outlined),
+              onPressed: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => LocationOpeningHoursScreen(
+                      clinicId: clinicId,
+                      locationId: location.id,
+                      locationName: location.name,
+                      initialWeeklyHours: Map.from(location.weeklyHours ?? {}),
+                    ),
+                  ),
+                );
+              },
+              tooltip: 'Opening hours',
+            ),
             FilterChip(
               label: Text(location.active ? 'Active' : 'Inactive'),
               selected: location.active,

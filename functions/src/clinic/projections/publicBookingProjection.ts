@@ -13,6 +13,7 @@ import { logger } from "firebase-functions/logger";
 import { requireClinicPermission } from "../permissions";
 import { sha256Hex } from "./hash";
 import { publicBookingConfigDocPath } from "./paths";
+import { buildPublicQuestionnaireFlow } from "../questionnaires/questionnaireTemplates";
 
 type AnyMap = Record<string, unknown>;
 
@@ -26,6 +27,7 @@ const BOOKING_RULES_DEFAULTS: Record<string, number | boolean> = {
   requireEmail: true,
   requirePhone: false,
   cancellationPolicyHours: 24,
+  onlineBookingEnabled: true,
 };
 
 function safeStr(v: unknown): string {
@@ -75,8 +77,12 @@ function buildBookingRules(settings: AnyMap): AnyMap {
   if (settings.requireEmail === true || settings.requireEmail === false) r.requireEmail = settings.requireEmail;
   if (settings.requirePhone === true || settings.requirePhone === false) r.requirePhone = settings.requirePhone;
   if (safeNum(settings.cancellationPolicyHours, NaN) >= 0) r.cancellationPolicyHours = Number(settings.cancellationPolicyHours);
+  if (settings.onlineBookingEnabled === true || settings.onlineBookingEnabled === false) r.onlineBookingEnabled = settings.onlineBookingEnabled;
   return r;
 }
+
+/** Per-location opening hours (same shape as clinic weeklyHours). Missing or empty = no extra restriction. */
+export type LocationOpeningHoursMap = Record<string, Record<string, Array<{ start: string; end: string }>>>;
 
 export type PublicBookingPublicConfigV1 = {
   schemaVersion: 1;
@@ -90,18 +96,38 @@ export type PublicBookingPublicConfigV1 = {
   jurisdiction: { timezone: string; currencyCode: string };
   bookingRules: AnyMap;
   weeklyHours: Record<string, Array<{ start: string; end: string }>>;
+  /** Location-specific opening hours. Key = locationId. Empty/missing = use clinic hours only for that location. */
+  locationOpeningHours: LocationOpeningHoursMap;
   hash: string;
 };
 
 /**
  * Build the v1 public config payload (no PII). Caller sets updatedAt when writing.
  */
+function normalizeLocationOpeningHours(locations: Array<{ id: string; data: AnyMap }>): LocationOpeningHoursMap {
+  const out: LocationOpeningHoursMap = {};
+  for (const loc of locations) {
+    const wh = loc.data?.weeklyHours;
+    if (!isObj(wh)) continue;
+    const normalized: Record<string, Array<{ start: string; end: string }>> = {};
+    for (const day of DAY_KEYS) {
+      const v = wh[day];
+      normalized[day] = Array.isArray(v) ? takeIntervals(v) : [];
+    }
+    const hasAny = DAY_KEYS.some((d) => (normalized[d]?.length ?? 0) > 0);
+    if (hasAny) out[loc.id] = normalized;
+  }
+  return out;
+}
+
 export function buildPublicBookingConfigV1(args: {
   clinicId: string;
   settingsDoc: AnyMap | null;
   settingsUpdatedAt: admin.firestore.Timestamp | null;
   clinicDoc: AnyMap | null;
   clinicUpdatedAt: admin.firestore.Timestamp | null;
+  questionnaireFlow: AnyMap;
+  locationOpeningHours?: LocationOpeningHoursMap;
 }): Omit<PublicBookingPublicConfigV1, "updatedAt"> & { updatedAt: admin.firestore.FieldValue } {
   const settings = isObj(args.settingsDoc) ? args.settingsDoc : {};
   const clinic = isObj(args.clinicDoc) ? args.clinicDoc : {};
@@ -110,7 +136,9 @@ export function buildPublicBookingConfigV1(args: {
   const currencyCode = safeStr(clinic.currencyCode ?? (clinic.profile as AnyMap)?.currencyCode) || "EUR";
 
   const bookingRules = buildBookingRules(settings);
+  bookingRules.questionnaireFlow = args.questionnaireFlow;
   const weeklyHours = normalizeWeeklyHours(settings);
+  const locationOpeningHours = args.locationOpeningHours ?? {};
 
   const payloadForHash = {
     schemaVersion: 1 as const,
@@ -123,6 +151,7 @@ export function buildPublicBookingConfigV1(args: {
     jurisdiction: { timezone, currencyCode },
     bookingRules,
     weeklyHours,
+    locationOpeningHours,
   };
   const hash = sha256Hex(payloadForHash);
 
@@ -138,12 +167,14 @@ export function buildPublicBookingConfigV1(args: {
     jurisdiction: { timezone, currencyCode },
     bookingRules,
     weeklyHours,
+    locationOpeningHours,
     hash,
   };
 }
 
 /**
  * Write the minimal config doc. Idempotent: same inputs → same hash → same content.
+ * Reads all locations for the clinic and includes locationOpeningHours in the config.
  */
 export async function writePublicBookingConfigProjection(
   clinicId: string,
@@ -160,12 +191,24 @@ export async function writePublicBookingConfigProjection(
     ? (clinicSnap.get("updatedAt") as admin.firestore.Timestamp)
     : null;
 
+  const locationsSnap = await db.collection(`clinics/${clinicId}/locations`).get();
+  const locations = locationsSnap.docs.map((d) => ({ id: d.id, data: (d.data() ?? {}) as AnyMap }));
+  const locationOpeningHours = normalizeLocationOpeningHours(locations);
+
+  const questionnaireFlow = await buildPublicQuestionnaireFlow(
+    db,
+    clinicId,
+    settingsData.questionnaireFlow
+  );
+
   const payload = buildPublicBookingConfigV1({
     clinicId,
     settingsDoc: settingsData,
     settingsUpdatedAt,
     clinicDoc: clinicData,
     clinicUpdatedAt,
+    questionnaireFlow,
+    locationOpeningHours,
   });
 
   const ref = db.doc(publicBookingConfigDocPath(clinicId));
@@ -174,6 +217,7 @@ export async function writePublicBookingConfigProjection(
   logger.info("[projection/publicBooking] wrote config", {
     clinicId,
     hash: payload.hash,
+    locationCount: Object.keys(locationOpeningHours).length,
     source: {
       publicBookingUpdatedAt: settingsUpdatedAt?.toMillis?.() ?? null,
       clinicUpdatedAt: clinicUpdatedAt?.toMillis?.() ?? null,
@@ -187,7 +231,7 @@ export async function writePublicBookingConfigProjection(
  * On delete: write defaults with source.publicBookingUpdatedAt = null.
  *
  * Data flow (opening hours correlation):
- * - Opening hours UI saves via updateClinicWeeklyHoursFn → settings/publicBooking.
+ * - Opening hours UI saves via settings.updatePublicBookingConfig (or updateClinicWeeklyHoursFn wrapper) → settings/publicBooking.
  * - This trigger runs and writes weeklyHours (and booking rules) to public/config/publicBooking/config.
  * - listPublicSlotsFn and clinician calendar read only from that config; public booking slots use it too.
  * - Flutter may also call projectionsRebuildPublicBookingConfig after save for immediate sync.
@@ -220,7 +264,7 @@ export const onPublicBookingSettingsWriteProjection = onDocumentWritten(
 
 /**
  * Manual rebuild callable. Permission: settings.write.
- * Runs the same projection once (reads settings + clinic, writes public config).
+ * Runs the same projection once (reads settings + clinic + locations, writes public config).
  */
 export const projectionsRebuildPublicBookingConfig = onCall(
   { region: "europe-west3" },
@@ -243,5 +287,29 @@ export const projectionsRebuildPublicBookingConfig = onCall(
     await writePublicBookingConfigProjection(clinicId, settingsSnap, clinicSnap);
 
     return { ok: true, clinicId };
+  }
+);
+
+/**
+ * Trigger: on write to clinics/{clinicId}/locations/{locationId}.
+ * Re-runs the public booking config projection so locationOpeningHours in the mirror stays in sync.
+ */
+export const onLocationWritePublicBookingConfigProjection = onDocumentWritten(
+  {
+    region: "europe-west3",
+    document: "clinics/{clinicId}/locations/{locationId}",
+  },
+  async (event) => {
+    const clinicId = safeStr(event.params?.clinicId);
+    if (!clinicId) return;
+
+    const db = admin.firestore();
+    const [settingsSnap, clinicSnap] = await Promise.all([
+      db.doc(`clinics/${clinicId}/settings/publicBooking`).get(),
+      db.doc(`clinics/${clinicId}`).get(),
+    ]);
+
+    await writePublicBookingConfigProjection(clinicId, settingsSnap, clinicSnap);
+    logger.info("[projection/publicBooking] location write, refreshed config", { clinicId });
   }
 );

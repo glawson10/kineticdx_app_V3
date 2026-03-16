@@ -6,9 +6,54 @@ import { enforceRateLimit } from "./rateLimit";
 import { requireClinicPermission } from "../clinic/permissions";
 
 // Commit 17: Availability reads only from public/config/publicBooking/config (no writePublicBookingMirror / private settings).
+// Commit 51: In-memory slot cache (TTL 45s, key: clinicId|locationId|practitionerId|appointmentTypeId|date in clinic TZ).
+
+import { normalizeBookingRulesFromConfigDoc } from "./bookingConfig";
 
 if (!admin.apps.length) admin.initializeApp();
 const db = admin.firestore();
+
+const SLOT_CACHE_TTL_MS = 45 * 1000;
+const SLOT_CACHE_MAX_KEYS = 500;
+const slotCache = new Map<
+  string,
+  { result: Record<string, unknown>; cachedAt: number }
+>();
+
+function evictSlotCacheIfNeeded(): void {
+  if (slotCache.size <= SLOT_CACHE_MAX_KEYS) return;
+  const entries = Array.from(slotCache.entries()).sort(
+    (a, b) => a[1].cachedAt - b[1].cachedAt
+  );
+  const toDelete = entries.length - SLOT_CACHE_MAX_KEYS;
+  for (let i = 0; i < toDelete; i++) {
+    slotCache.delete(entries[i][0]);
+  }
+}
+
+/** Commit 51: Invalidate slot cache for a given clinic/practitioner/date after successful booking. */
+export function invalidateSlotCacheForBooking(
+  clinicId: string,
+  practitionerId: string,
+  dateYmd: string
+): void {
+  const toDelete: string[] = [];
+  for (const key of slotCache.keys()) {
+    const parts = key.split("|");
+    if (parts[0] === clinicId && parts[2] === practitionerId && parts[4] === dateYmd) {
+      toDelete.push(key);
+    }
+  }
+  for (const k of toDelete) slotCache.delete(k);
+  if (toDelete.length > 0) {
+    logger.info("Slot cache invalidated after booking", {
+      clinicId,
+      practitionerId,
+      dateYmd,
+      keysRemoved: toDelete.length,
+    });
+  }
+}
 
 type Input = {
   clinicId: string;
@@ -38,6 +83,9 @@ type PublicPractitioner = {
   serviceIdsAllowed?: string[];
   sortOrder?: number;
   allowedLocationIds?: string[];
+  title?: string;
+  photoUrl?: string;
+  bio?: string;
 };
 
 type PublicSettings = {
@@ -45,9 +93,12 @@ type PublicSettings = {
   slotStepMinutes?: number;
   minNoticeMinutes?: number;
   maxAdvanceDays?: number;
+  onlineBookingEnabled?: boolean;
 
   // Clinic hours (public booking settings)
   weeklyHours?: Record<string, Array<{ start: string; end: string }>>;
+  /** Per-location opening hours from mirror. Key = locationId. */
+  locationOpeningHours?: Record<string, Record<string, Array<{ start: string; end: string }>>>;
   openingHours?: any;
 
   corporatePrograms?: Array<{
@@ -350,6 +401,70 @@ async function loadAppointmentsAsBlocks(
   return out;
 }
 
+type OverrideRanges = {
+  unavailable: Array<{ startMs: number; endMs: number }>;
+  available: Array<{ startMs: number; endMs: number }>;
+};
+
+/**
+ * Load practitioner overrides that overlap [rangeStart, rangeEnd].
+ * When locationId is set, only include overrides whose locationId is null (global) or matches.
+ * Used so public slots respect "unavailable" (time off) and "extra available" (one-off hours).
+ */
+async function loadPractitionerOverrides(
+  clinicId: string,
+  practitionerId: string,
+  rangeStart: admin.firestore.Timestamp,
+  rangeEnd: admin.firestore.Timestamp,
+  locationId?: string
+): Promise<OverrideRanges> {
+  const pid = safeStr(practitionerId);
+  if (!pid) return { unavailable: [], available: [] };
+
+  const col = db
+    .collection("clinics")
+    .doc(clinicId)
+    .collection("practitioners")
+    .doc(pid)
+    .collection("overrides");
+
+  const snap = await col.where("toAt", ">", rangeStart).get();
+  const rangeStartMs = rangeStart.toMillis();
+  const rangeEndMs = rangeEnd.toMillis();
+  const locId = safeStr(locationId);
+
+  const unavailable: Array<{ startMs: number; endMs: number }> = [];
+  const available: Array<{ startMs: number; endMs: number }> = [];
+
+  for (const doc of snap.docs) {
+    const d = doc.data() as any;
+    const fromAt = d?.fromAt as admin.firestore.Timestamp | undefined;
+    const toAt = d?.toAt as admin.firestore.Timestamp | undefined;
+    if (!fromAt || !toAt) continue;
+    const fromMs = fromAt.toMillis();
+    const toMs = toAt.toMillis();
+    if (fromMs >= rangeEndMs) continue;
+
+    const overrideLocId = d?.locationId == null || d?.locationId === "" ? null : safeStr(d.locationId);
+    if (locId.length > 0 && overrideLocId != null && overrideLocId !== locId) continue;
+
+    const isAvailable = d?.isAvailable === true;
+    const block = { startMs: fromMs, endMs: toMs };
+    if (isAvailable) available.push(block);
+    else unavailable.push(block);
+  }
+
+  return { unavailable, available };
+}
+
+function slotContainedInRanges(
+  startMs: number,
+  endMs: number,
+  ranges: Array<{ startMs: number; endMs: number }>
+): boolean {
+  return ranges.some((r) => startMs >= r.startMs && endMs <= r.endMs);
+}
+
 function overlapsAny(
   startMs: number,
   endMs: number,
@@ -498,6 +613,94 @@ async function loadStaffWeeklyAvailability(params: {
   return { timezone, weekly: out };
 }
 
+const AVAIL_DAY_KEYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] as const;
+/** dayOfWeek 1 = Monday → mon, 7 = Sunday → sun (canonical availability blocks). */
+const DOW_TO_DAY: Record<number, (typeof AVAIL_DAY_KEYS)[number]> = {
+  1: "mon",
+  2: "tue",
+  3: "wed",
+  4: "thu",
+  5: "fri",
+  6: "sat",
+  7: "sun",
+};
+
+/**
+ * Load practitioner availability from practitioners/{id}/availability filtered by locationId.
+ * Used when the request is location-scoped so slots/calendar only show availability for that location.
+ * See docs/AVAILABILITY_SOURCES.md.
+ */
+async function loadStaffWeeklyAvailabilityForLocation(params: {
+  clinicId: string;
+  practitionerId: string;
+  locationId: string;
+}): Promise<{
+  timezone?: string;
+  weekly: Record<string, Array<{ start: string; end: string }>>;
+} | null> {
+  const clinicId = safeStr(params.clinicId);
+  const pid = safeStr(params.practitionerId);
+  const locationId = safeStr(params.locationId);
+  if (!clinicId || !pid || !locationId) return null;
+
+  const availCol = db
+    .collection("clinics")
+    .doc(clinicId)
+    .collection("practitioners")
+    .doc(pid)
+    .collection("availability");
+
+  const snap = await availCol.get();
+  const perDay: Record<string, IntervalMin[]> = Object.fromEntries(
+    AVAIL_DAY_KEYS.map((k) => [k, []])
+  ) as Record<string, IntervalMin[]>;
+
+  for (const doc of snap.docs) {
+    const data = doc.data();
+    if (data?.active === false) continue;
+    if (safeStr(data?.locationId) !== locationId) continue;
+
+    const blocks = Array.isArray(data?.blocks) ? data.blocks : [];
+    for (const b of blocks) {
+      if (!b || typeof b !== "object") continue;
+      const bookableOnline = (b as any).bookableOnline !== false;
+      if (!bookableOnline) continue;
+
+      const dayOfWeek = Number((b as any).dayOfWeek);
+      const dayKey = DOW_TO_DAY[dayOfWeek];
+      if (!dayKey) continue;
+
+      const startM = hmToMinutes(safeStr((b as any).startTime));
+      const endM = hmToMinutes(safeStr((b as any).endTime));
+      if (startM == null || endM == null || endM <= startM) continue;
+
+      perDay[dayKey].push({ a: startM, b: endM });
+    }
+  }
+
+  const weekly: Record<string, Array<{ start: string; end: string }>> =
+    Object.fromEntries(
+      AVAIL_DAY_KEYS.map((k) => [
+        k,
+        mergeIntervals(perDay[k]).map(({ a, b }) => ({
+          start: minutesToHHmm(a),
+          end: minutesToHHmm(b),
+        })),
+      ])
+    );
+
+  const hasAny = Object.values(weekly).some((arr) => arr.length > 0);
+  if (!hasAny) return null;
+
+  return { timezone: undefined, weekly };
+}
+
+function minutesToHHmm(m: number): string {
+  const hh = Math.floor(m / 60);
+  const mm = m % 60;
+  return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
+}
+
 type IntervalMin = { a: number; b: number };
 
 function mergeIntervals(list: IntervalMin[]): IntervalMin[] {
@@ -568,7 +771,8 @@ function minsToWeekly(
   return out;
 }
 
-function intersectWeeklyHours(
+/** Exported for unit tests (multi-location slot resolution). */
+export function intersectWeeklyHours(
   clinicWeekly: Record<string, Array<{ start: string; end: string }>>,
   staffWeekly: Record<string, Array<{ start: string; end: string }>>
 ): Record<string, Array<{ start: string; end: string }>> {
@@ -608,6 +812,25 @@ function intersectWeeklyHours(
   return minsToWeekly(outMins);
 }
 
+/**
+ * Compute effective weekly hours for slot resolution: clinic ∩ (location if present) ∩ (practitioner if present).
+ * Exported for unit tests (multi-location slot resolution).
+ */
+export function computeEffectiveWeeklyHours(
+  clinicWeekly: Record<string, Array<{ start: string; end: string }>>,
+  locationWeekly: Record<string, Array<{ start: string; end: string }>> | null,
+  practitionerWeekly: Record<string, Array<{ start: string; end: string }>> | null
+): Record<string, Array<{ start: string; end: string }>> {
+  let afterClinic = clinicWeekly;
+  if (locationWeekly && Object.values(locationWeekly).some((arr) => Array.isArray(arr) && arr.length > 0)) {
+    afterClinic = intersectWeeklyHours(clinicWeekly, locationWeekly);
+  }
+  if (practitionerWeekly && Object.values(practitionerWeekly).some((arr) => Array.isArray(arr) && arr.length > 0)) {
+    return intersectWeeklyHours(afterClinic, practitionerWeekly);
+  }
+  return afterClinic;
+}
+
 type DayFlag = {
   corporateOnly: boolean;
   mode: CorporateMode | null;
@@ -630,13 +853,30 @@ function defaultWeeklyHours(): Record<string, Array<{ start: string; end: string
   >;
 }
 
-/** Load booking rules + weeklyHours from mirror config doc only. Uses defaults if missing. */
+/** Normalize one location's weekly hours from mirror (same shape as clinic weeklyHours). */
+function normalizeLocationWeeklyHoursFromMirror(raw: unknown): Record<string, Array<{ start: string; end: string }>> {
+  const out = defaultWeeklyHours();
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return out;
+  const obj = raw as Record<string, unknown>;
+  for (const day of DAY_KEYS) {
+    const v = obj[day];
+    if (!Array.isArray(v)) continue;
+    out[day] = v
+      .filter((it: any) => it && typeof it === "object" && safeStr(it.start) && safeStr(it.end))
+      .map((it: any) => ({ start: safeStr(it.start), end: safeStr(it.end) }));
+  }
+  return out;
+}
+
+/** Load booking rules + weeklyHours + locationOpeningHours from mirror config doc only. Uses defaults if missing. */
 async function loadPublicConfigFromMirror(clinicId: string): Promise<{
   timezone: string;
   slotStepMinutes: number;
   minNoticeMinutes: number;
   maxAdvanceDays: number;
   weeklyHours: Record<string, Array<{ start: string; end: string }>>;
+  locationOpeningHours: Record<string, Record<string, Array<{ start: string; end: string }>>>;
+  onlineBookingEnabled: boolean;
 }> {
   const configRef = db.doc(CONFIG_DOC_PATH(clinicId));
   const configSnap = await configRef.get();
@@ -651,27 +891,24 @@ async function loadPublicConfigFromMirror(clinicId: string): Promise<{
       minNoticeMinutes: 0,
       maxAdvanceDays: 90,
       weeklyHours: defaultWeeklyHours(),
+      locationOpeningHours: {},
+      onlineBookingEnabled: true,
     };
   }
 
   const d = configSnap.data() as any;
-  const jurisdiction = d?.jurisdiction && typeof d.jurisdiction === "object" ? d.jurisdiction : {};
-  const rules = d?.bookingRules && typeof d.bookingRules === "object" ? d.bookingRules : {};
+  const rules = normalizeBookingRulesFromConfigDoc(d);
+  const rulesRaw = d?.bookingRules && typeof d.bookingRules === "object" ? d.bookingRules : {};
   const wh = d?.weeklyHours && typeof d.weeklyHours === "object" ? d.weeklyHours : {};
+  const locHoursRaw = d?.locationOpeningHours && typeof d.locationOpeningHours === "object" ? d.locationOpeningHours : {};
 
-  const timezone = safeStr(jurisdiction.timezone) || "UTC";
+  const timezone = rules.timezone || "UTC";
   const slotStepMinutes =
-    typeof rules.slotStepMinutes === "number" && [5, 10, 15, 20, 30].includes(rules.slotStepMinutes)
-      ? rules.slotStepMinutes
+    typeof rulesRaw.slotStepMinutes === "number" && [5, 10, 15, 20, 30].includes(rulesRaw.slotStepMinutes)
+      ? rulesRaw.slotStepMinutes
       : 15;
-  const minNoticeMinutes =
-    typeof rules.minNoticeMinutes === "number" && rules.minNoticeMinutes >= 0
-      ? rules.minNoticeMinutes
-      : 0;
-  const maxAdvanceDays =
-    typeof rules.maxAdvanceDays === "number" && rules.maxAdvanceDays >= 7 && rules.maxAdvanceDays <= 365
-      ? rules.maxAdvanceDays
-      : 90;
+  const minNoticeMinutes = rules.minNoticeMinutes;
+  const maxAdvanceDays = rules.maxAdvanceDays;
 
   const weeklyHours = defaultWeeklyHours();
   for (const day of DAY_KEYS) {
@@ -683,12 +920,24 @@ async function loadPublicConfigFromMirror(clinicId: string): Promise<{
     }
   }
 
+  const locationOpeningHours: Record<string, Record<string, Array<{ start: string; end: string }>>> = {};
+  for (const [locId, raw] of Object.entries(locHoursRaw)) {
+    if (typeof locId !== "string" || !locId.trim()) continue;
+    const normalized = normalizeLocationWeeklyHoursFromMirror(raw);
+    const hasAny = DAY_KEYS.some((day) => (normalized[day]?.length ?? 0) > 0);
+    if (hasAny) locationOpeningHours[locId.trim()] = normalized;
+  }
+
+  const onlineBookingEnabled = rulesRaw.onlineBookingEnabled !== false;
+
   return {
     timezone,
     slotStepMinutes,
     minNoticeMinutes,
     maxAdvanceDays,
     weeklyHours,
+    locationOpeningHours,
+    onlineBookingEnabled,
   };
 }
 
@@ -714,13 +963,20 @@ async function loadFullMirrorExtras(clinicId: string): Promise<{
         const allowedLocationIds = Array.isArray((item as any).allowedLocationIds)
           ? (item as any).allowedLocationIds.filter((x: any) => typeof x === "string" && x.trim())
           : undefined;
-        practitioners.push({
+        const entry: PublicPractitioner = {
           id,
           displayName: safeStr((item as any).displayName),
           serviceIdsAllowed: (item as any).serviceIdsAllowed,
           sortOrder: (item as any).sortOrder,
           allowedLocationIds,
-        });
+        };
+        const title = safeStr((item as any).title);
+        if (title) entry.title = title;
+        const photoUrl = safeStr((item as any).photoUrl);
+        if (photoUrl) entry.photoUrl = photoUrl;
+        const bio = safeStr((item as any).bio);
+        if (bio) entry.bio = bio;
+        practitioners.push(entry);
       }
     }
   }
@@ -741,6 +997,8 @@ async function loadPublicSettingsFromMirror(clinicId: string): Promise<PublicSet
     minNoticeMinutes: config.minNoticeMinutes,
     maxAdvanceDays: config.maxAdvanceDays,
     weeklyHours: config.weeklyHours,
+    locationOpeningHours: config.locationOpeningHours ?? {},
+    onlineBookingEnabled: config.onlineBookingEnabled,
     practitioners: extras.practitioners,
     corporatePrograms: extras.corporatePrograms,
   } as PublicSettings;
@@ -805,10 +1063,16 @@ export const listPublicSlotsFn = onCall(
       // ✅ Commit 17: Read only from mirror config (no private settings)
       const settings = await loadPublicSettingsFromMirror(clinicId);
 
+      const isOpeningWindows = purpose === "openingWindows";
+      if (!isOpeningWindows && settings.onlineBookingEnabled === false) {
+        throw new HttpsError(
+          "failed-precondition",
+          "Booking is temporarily unavailable."
+        );
+      }
+
       // Validate practitionerId against allowlist (only if practitionerId provided AND not openingWindows)
       // For openingWindows (internal calendar), we allow any practitioner - they just need to exist in the clinic
-      const isOpeningWindows = purpose === "openingWindows";
-      
       if (practitionerId) {
         if (isOpeningWindows) {
           // ✅ For internal calendar, verify practitioner exists in clinic (but don't check public allowlist)
@@ -846,6 +1110,20 @@ export const listPublicSlotsFn = onCall(
           ? settings.slotStepMinutes
           : 15;
 
+      if (!isOpeningWindows) {
+        const cacheKey = [
+          clinicId,
+          locationId ?? "",
+          practitionerId ?? "",
+          appointmentTypeId ?? "",
+          ymdFromDateInTz(rangeStartDt, clinicTz),
+        ].join("|");
+        const cached = slotCache.get(cacheKey);
+        if (cached && Date.now() - cached.cachedAt < SLOT_CACHE_TTL_MS) {
+          return { ...cached.result, cached: true };
+        }
+      }
+
       const minNotice =
         typeof settings.minNoticeMinutes === "number"
           ? settings.minNoticeMinutes
@@ -878,20 +1156,37 @@ export const listPublicSlotsFn = onCall(
             )
           : Promise.resolve([]);
 
-      const staffAvailPromise = practitionerId
-        ? loadStaffWeeklyAvailability({ clinicId, practitionerId })
-        : Promise.resolve(null);
+      const staffAvailPromise =
+        practitionerId && locationId
+          ? loadStaffWeeklyAvailabilityForLocation({
+              clinicId,
+              practitionerId,
+              locationId,
+            })
+          : practitionerId
+            ? loadStaffWeeklyAvailability({ clinicId, practitionerId })
+            : Promise.resolve(null);
 
-      const [closures, busy, apptBlocks, staffAvail] = await Promise.all([
+      const overridesPromise = practitionerId
+        ? loadPractitionerOverrides(
+            clinicId,
+            practitionerId,
+            rangeStartTs,
+            rangeEndTs,
+            locationId
+          )
+        : Promise.resolve({ unavailable: [], available: [] } as OverrideRanges);
+
+      const [closures, busy, apptBlocks, staffAvail, overrides] = await Promise.all([
         closuresPromise,
         busyPromise,
         apptPromise,
         staffAvailPromise,
+        overridesPromise,
       ]);
 
-      const tzOverride = safeStr((data as any).tz);
+      // Commit 52: Use only clinic timezone for slot/day logic; client tz is for display only.
       const tz =
-        tzOverride ||
         safeStr(staffAvail?.timezone) ||
         safeStr(settings.timezone) ||
         clinicTz ||
@@ -901,14 +1196,19 @@ export const listPublicSlotsFn = onCall(
         ...closures.map((c) => ({ startMs: c.fromMs, endMs: c.toMs })),
         ...busy.map((b) => ({ startMs: b.startMs, endMs: b.endMs })),
         ...apptBlocks.map((a) => ({ startMs: a.startMs, endMs: a.endMs })),
+        ...overrides.unavailable,
       ];
 
       const clinicWeekly = normalizeWeeklyHours(settings);
-
-      const weekly =
-        practitionerId && staffAvail?.weekly
-          ? intersectWeeklyHours(clinicWeekly, staffAvail.weekly)
-          : clinicWeekly;
+      const locHours =
+        locationId && settings.locationOpeningHours?.[locationId]
+          ? settings.locationOpeningHours[locationId]
+          : null;
+      const weekly = computeEffectiveWeeklyHours(
+        clinicWeekly,
+        locHours,
+        practitionerId && staffAvail?.weekly ? staffAvail.weekly : null
+      );
 
       const hasAnyHours = Object.values(weekly).some(
         (arr) => Array.isArray(arr) && arr.length > 0
@@ -986,7 +1286,7 @@ export const listPublicSlotsFn = onCall(
       }
 
       if (!hasAnyHours) {
-        return {
+        const result = {
           ok: true,
           clinicId,
           serviceId,
@@ -1000,11 +1300,23 @@ export const listPublicSlotsFn = onCall(
             : null,
           weeklyHours: weekly,
           dayFlags,
-          slots: [],
+          slots: [] as Array<{ startMs: number; endMs: number }>,
           openingOnly,
           staffAvailabilityApplied: Boolean(practitionerId && staffAvail?.weekly),
           appointmentsApplied: Boolean(!openingOnly && practitionerId),
         };
+        if (!isOpeningWindows) {
+          const cacheKey = [
+            clinicId,
+            locationId ?? "",
+            practitionerId ?? "",
+            appointmentTypeId ?? "",
+            ymdFromDateInTz(rangeStartDt, clinicTz),
+          ].join("|");
+          slotCache.set(cacheKey, { result, cachedAt: Date.now() });
+          evictSlotCacheIfNeeded();
+        }
+        return result;
       }
 
       const slots: Array<{ startMs: number; endMs: number }> = [];
@@ -1056,20 +1368,21 @@ export const listPublicSlotsFn = onCall(
         const eMin = hmToMinutes(endHm);
         if (!Number.isFinite(sMin) || !Number.isFinite(eMin)) continue;
 
-        const within = intervals.some((it: any) => {
+        const withinWeekly = intervals.some((it: any) => {
           const a = hmToMinutes(safeStr(it.start));
           const b = hmToMinutes(safeStr(it.end));
           if (!Number.isFinite(a) || !Number.isFinite(b) || b <= a) return false;
           return sMin >= a && eMin <= b;
         });
-        if (!within) continue;
+        const withinOverride = slotContainedInRanges(startMs, endMs, overrides.available);
+        if (!withinWeekly && !withinOverride) continue;
 
         if (overlapsAny(startMs, endMs, blocked)) continue;
 
         slots.push({ startMs, endMs });
       }
 
-      return {
+      const result = {
         ok: true,
         clinicId,
         serviceId,
@@ -1088,6 +1401,18 @@ export const listPublicSlotsFn = onCall(
         staffAvailabilityApplied: Boolean(practitionerId && staffAvail?.weekly),
         appointmentsApplied: Boolean(!openingOnly && practitionerId),
       };
+      if (!isOpeningWindows) {
+        const cacheKey = [
+          clinicId,
+          locationId ?? "",
+          practitionerId ?? "",
+          appointmentTypeId ?? "",
+          ymdFromDateInTz(rangeStartDt, clinicTz),
+        ].join("|");
+        slotCache.set(cacheKey, { result, cachedAt: Date.now() });
+        evictSlotCacheIfNeeded();
+      }
+      return result;
     } catch (err: any) {
       logger.error("listPublicSlots failed", {
         err: err?.message ?? String(err),
@@ -1127,6 +1452,7 @@ export const getPublicMonthAvailabilityFn = onCall(
       const data = (request.data ?? {}) as Partial<MonthAvailabilityInput>;
       const clinicId = safeStr(data.clinicId);
       const practitionerId = safeStr(data.practitionerId);
+      const locationId = safeStr(data.locationId) || undefined;
       const serviceId = safeStr(data.serviceId) || "default";
 
       if (!clinicId || !practitionerId) {
@@ -1185,17 +1511,38 @@ export const getPublicMonthAvailabilityFn = onCall(
           : { corporateOnly: false, mode: null };
       }
 
-      const [closures, busy, apptBlocks, staffAvail] = await Promise.all([
+      const staffAvailPromise =
+        practitionerId && locationId
+          ? loadStaffWeeklyAvailabilityForLocation({
+              clinicId,
+              practitionerId,
+              locationId,
+            })
+          : practitionerId
+            ? loadStaffWeeklyAvailability({ clinicId, practitionerId })
+            : Promise.resolve(null);
+
+      const overridesPromiseMonth = loadPractitionerOverrides(
+        clinicId,
+        practitionerId,
+        rangeStartTs,
+        rangeEndTs,
+        locationId
+      );
+
+      const [closures, busy, apptBlocks, staffAvail, overridesMonth] = await Promise.all([
         loadClosures(clinicId, rangeStartTs, rangeEndTs),
         loadBusyBlocks(clinicId, practitionerId, rangeStartTs, rangeEndTs),
         loadAppointmentsAsBlocks(clinicId, practitionerId, rangeStartTs, rangeEndTs),
-        loadStaffWeeklyAvailability({ clinicId, practitionerId }),
+        staffAvailPromise,
+        overridesPromiseMonth,
       ]);
 
       const blocked = [
         ...closures.map((c) => ({ startMs: c.fromMs, endMs: c.toMs })),
         ...busy.map((b) => ({ startMs: b.startMs, endMs: b.endMs })),
         ...apptBlocks.map((a) => ({ startMs: a.startMs, endMs: a.endMs })),
+        ...overridesMonth.unavailable,
       ];
 
       const clinicWeekly = normalizeWeeklyHours(settings);
@@ -1248,13 +1595,14 @@ export const getPublicMonthAvailabilityFn = onCall(
         const eMin = hmToMinutes(endHm);
         if (!Number.isFinite(sMin) || !Number.isFinite(eMin)) continue;
 
-        const within = intervals.some((it: any) => {
+        const withinWeekly = intervals.some((it: any) => {
           const a = hmToMinutes(safeStr(it.start));
           const b = hmToMinutes(safeStr(it.end));
           if (!Number.isFinite(a) || !Number.isFinite(b) || b <= a) return false;
           return sMin >= a && eMin <= b;
         });
-        if (!within) continue;
+        const withinOverride = slotContainedInRanges(startMs, endMs, overridesMonth.available);
+        if (!withinWeekly && !withinOverride) continue;
 
         if (overlapsAny(startMs, endMs, blocked)) continue;
 
@@ -1284,8 +1632,14 @@ export const getPublicMonthAvailabilityFn = onCall(
  * Returns the public booking practitioner list from the full mirror (server-side read).
  * Use this from the public booking UI instead of reading Firestore directly to avoid
  * client-side "Unexpected state" / assertion errors in the Firestore web SDK.
- * When locationId is provided, returns only practitioners eligible at that location
- * (allowedLocationIds empty/undefined = all locations, else must include locationId).
+ *
+ * Filters:
+ * - locationId: returns only practitioners eligible at that location
+ *   (allowedLocationIds empty/undefined = all locations, else must include locationId).
+ * - serviceId / appointmentTypeId: returns only practitioners eligible for that service
+ *   (serviceIdsAllowed empty/undefined = all services, else must include serviceId).
+ *
+ * Returns full public-safe projected fields so the UI can display rich practitioner info.
  */
 export const getPublicBookingPractitionersFn = onCall(
   { region: "europe-west3", cors: true },
@@ -1296,14 +1650,27 @@ export const getPublicBookingPractitionersFn = onCall(
         throw new HttpsError("invalid-argument", "clinicId is required.");
       }
       const locationId = safeStr((request.data as any)?.locationId) || undefined;
+      const serviceId =
+        safeStr((request.data as any)?.serviceId) ||
+        safeStr((request.data as any)?.appointmentTypeId) ||
+        undefined;
       const { practitioners } = await loadFullMirrorExtras(clinicId);
 
       let list = practitioners;
+
       if (locationId) {
-        list = practitioners.filter((p) => {
+        list = list.filter((p) => {
           const ids = p.allowedLocationIds;
           if (!ids || ids.length === 0) return true;
           return ids.includes(locationId);
+        });
+      }
+
+      if (serviceId) {
+        list = list.filter((p) => {
+          const ids = p.serviceIdsAllowed;
+          if (!ids || ids.length === 0) return true;
+          return ids.includes(serviceId);
         });
       }
 
@@ -1311,6 +1678,12 @@ export const getPublicBookingPractitionersFn = onCall(
         practitioners: list.map((p) => ({
           id: p.id,
           displayName: p.displayName ?? "",
+          title: p.title ?? null,
+          photoUrl: p.photoUrl ?? null,
+          bio: p.bio ?? null,
+          sortOrder: p.sortOrder ?? 0,
+          allowedLocationIds: p.allowedLocationIds ?? [],
+          serviceIdsAllowed: p.serviceIdsAllowed ?? [],
         })),
       };
     } catch (err: any) {
@@ -1321,7 +1694,6 @@ export const getPublicBookingPractitionersFn = onCall(
         error: msg,
         code: err?.code,
       });
-      // Return empty list so UI shows "No practitioners" + hint instead of "[internal] internal"
       return { practitioners: [] };
     }
   }
@@ -1462,7 +1834,7 @@ export const getPublicBookingDiagnosticsFn = onCall(
       const membershipActive = membershipStatus === "none" || membershipStatus === "active";
       return {
         id: d.id,
-        showInOnlineBooking: data?.showInOnlineBooking === true,
+        showInPublicBooking: data?.showInPublicBooking === true,
         active: data?.active !== false,
         activeForBooking: data?.activeForBooking !== false,
         membershipStatus,
@@ -1470,20 +1842,20 @@ export const getPublicBookingDiagnosticsFn = onCall(
       };
     });
 
-    const withVisibility = practitionersInClinic.filter((p) => p.showInOnlineBooking).length;
+    const withVisibility = practitionersInClinic.filter((p) => p.showInPublicBooking).length;
     const withVisibilityButInactiveMembership = practitionersInClinic.filter(
-      (p) => p.showInOnlineBooking && !p.membershipActive
+      (p) => p.showInPublicBooking && !p.membershipActive
     ).length;
 
     let hint: string | undefined;
     if (practitionerCountInMirror === 0 && withVisibility > 0) {
       hint =
         withVisibilityButInactiveMembership > 0
-          ? `${withVisibilityButInactiveMembership} practitioner(s) have showInOnlineBooking but inactive/suspended membership. Set membership to Active in Settings → Team, then re-save Online booking.`
-          : "Mirror has 0 practitioners but some have showInOnlineBooking. Re-save Settings → Public booking or Online booking to rebuild the mirror.";
+          ? `${withVisibilityButInactiveMembership} practitioner(s) have showInPublicBooking but inactive/suspended membership. Set membership to Active in Settings → Team, then re-save Public booking.`
+          : "Mirror has 0 practitioners but some have showInPublicBooking. Re-save Settings → Public booking to rebuild the mirror.";
     } else if (practitionerCountInMirror === 0 && withVisibility === 0) {
       hint =
-        "No practitioners have showInOnlineBooking: true. Turn ON in Settings → Online booking and Save.";
+        "No practitioners have showInPublicBooking: true. Turn ON in Settings → Public booking and Save.";
     }
 
     return {
@@ -1491,7 +1863,7 @@ export const getPublicBookingDiagnosticsFn = onCall(
       practitionerCountInMirror,
       locationCountInMirror,
       practitionersInClinicCount: practitionersInClinic.length,
-      practitionersWithShowInOnlineBooking: withVisibility,
+      practitionersWithPublicVisibility: withVisibility,
       practitioners: practitionersInClinic,
       hint,
     };

@@ -9,7 +9,7 @@
 
 Both open the same **Availability** screen (location scope, base availability per location, overrides with global/location option).
 
-**Engine (backend):** Public slot generation (`listPublicSlots`) reads from `staffProfiles/{uid}/availability/default`. A **transitional mirror** is in place: when practitioner availability or overrides are written (via `settingsUpsertPractitionerAvailability`, `settingsUpsertPractitionerOverride`, or `settingsDeletePractitionerOverride`), the base availability is merged and written to `staffProfiles/{uid}/availability/default`, so **edits in the new Availability screen now affect public booking slots**. Overrides (exceptions) are not yet applied in the mirror; only base recurring availability is synced. A future step is to have `listPublicSlots` read directly from `practitioners/{id}/availability` and apply `practitioners/{id}/overrides`.
+**Engine (backend):** Public slot generation (`listPublicSlots`) reads base availability from `staffProfiles/{uid}/availability/default` or, when location-scoped, from `practitioners/{id}/availability` filtered by `locationId`. **Override rules are applied:** `listPublicSlots` and `getPublicMonthAvailabilityFn` load `practitioners/{id}/overrides` for the query range; unavailable overrides (e.g. time off) are added to blocked time, and available overrides (one-off extra hours) are treated as bookable. Location-scoped requests only apply overrides whose `locationId` is null (global) or matches the selected location.
 
 ---
 

@@ -30,10 +30,19 @@ class _LocationFormScreenState extends State<LocationFormScreen> {
   final _formKey = GlobalKey<FormState>();
   final _nameController = TextEditingController();
   final _addressController = TextEditingController();
+  final _colorHexController = TextEditingController();
+  final _phoneController = TextEditingController();
+  final _notesController = TextEditingController();
   bool _showInOnlineBooking = true;
   bool _active = true;
   String? _error;
   bool _saving = false;
+
+  bool _isValidHex(String? s) {
+    if (s == null || s.isEmpty) return true;
+    final h = s.replaceFirst('#', '').trim();
+    return h.length == 6 && int.tryParse(h, radix: 16) != null;
+  }
 
   @override
   void initState() {
@@ -42,6 +51,9 @@ class _LocationFormScreenState extends State<LocationFormScreen> {
     if (loc != null) {
       _nameController.text = loc.name;
       _addressController.text = loc.addressText;
+      _colorHexController.text = loc.colorHex ?? '';
+      _phoneController.text = loc.phone ?? '';
+      _notesController.text = loc.notes ?? '';
       _showInOnlineBooking = loc.showInOnlineBooking;
       _active = loc.active;
     }
@@ -51,6 +63,9 @@ class _LocationFormScreenState extends State<LocationFormScreen> {
   void dispose() {
     _nameController.dispose();
     _addressController.dispose();
+    _colorHexController.dispose();
+    _phoneController.dispose();
+    _notesController.dispose();
     super.dispose();
   }
 
@@ -66,6 +81,9 @@ class _LocationFormScreenState extends State<LocationFormScreen> {
         patch: {
           'name': _nameController.text.trim(),
           'addressText': _addressController.text.trim(),
+          'colorHex': _colorHexController.text.trim().isEmpty ? null : (_colorHexController.text.trim().startsWith('#') ? _colorHexController.text.trim() : '#${_colorHexController.text.trim()}'),
+          'phone': _phoneController.text.trim().isEmpty ? null : _phoneController.text.trim(),
+          'notes': _notesController.text.trim().isEmpty ? null : _notesController.text.trim(),
           'showInOnlineBooking': _showInOnlineBooking,
           'active': _active,
         },
@@ -112,6 +130,39 @@ class _LocationFormScreenState extends State<LocationFormScreen> {
                 border: OutlineInputBorder(),
               ),
               maxLines: 2,
+            ),
+            const SizedBox(height: 16),
+            TextFormField(
+              controller: _colorHexController,
+              decoration: const InputDecoration(
+                labelText: 'Color (hex)',
+                hintText: '#FF5733 or FF5733',
+                border: OutlineInputBorder(),
+              ),
+              validator: (v) {
+                final s = (v ?? '').trim();
+                if (s.isEmpty) return null;
+                return _isValidHex(s) ? null : 'Use 6-digit hex (e.g. #FF5733).';
+              },
+            ),
+            const SizedBox(height: 16),
+            TextFormField(
+              controller: _phoneController,
+              decoration: const InputDecoration(
+                labelText: 'Phone (optional)',
+                border: OutlineInputBorder(),
+              ),
+              keyboardType: TextInputType.phone,
+            ),
+            const SizedBox(height: 16),
+            TextFormField(
+              controller: _notesController,
+              decoration: const InputDecoration(
+                labelText: 'Notes (optional)',
+                border: OutlineInputBorder(),
+                alignLabelWithHint: true,
+              ),
+              maxLines: 3,
             ),
             const SizedBox(height: 16),
             SwitchListTile(

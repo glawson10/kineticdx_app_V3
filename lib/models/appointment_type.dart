@@ -13,6 +13,8 @@ class AppointmentType {
   final String? description;
   final double? defaultPrice;
   final List<String> allowedLocationIds;
+  final bool telehealth;
+  final List<String> allowedPractitionerIds;
 
   const AppointmentType({
     required this.id,
@@ -24,17 +26,24 @@ class AppointmentType {
     this.description,
     this.defaultPrice,
     this.allowedLocationIds = const [],
+    this.telehealth = false,
+    this.allowedPractitionerIds = const [],
   });
+
+  static List<String> _stringList(dynamic raw) {
+    if (raw is! List) return const [];
+    return raw
+        .map((e) => e.toString().trim())
+        .where((e) => e.isNotEmpty)
+        .toList();
+  }
 
   factory AppointmentType.fromFirestore(String id, Map<String, dynamic> data) {
     final allowedRaw = data['allowedLocationIds'];
-    final List<String> allowed = allowedRaw is List
-        ? allowedRaw
-            .whereType<String>()
-            .map((e) => e.toString().trim())
-            .where((e) => e.isNotEmpty)
-            .toList()
-        : const [];
+    final List<String> allowed = _stringList(allowedRaw);
+
+    final allowedPractRaw = data['allowedPractitionerIds'];
+    final List<String> allowedPract = _stringList(allowedPractRaw);
 
     double? defaultPrice;
     final dp = data['defaultPrice'];
@@ -61,6 +70,8 @@ class AppointmentType {
           : null,
       defaultPrice: defaultPrice,
       allowedLocationIds: allowed,
+      telehealth: data['telehealth'] as bool? ?? false,
+      allowedPractitionerIds: allowedPract,
     );
   }
 }

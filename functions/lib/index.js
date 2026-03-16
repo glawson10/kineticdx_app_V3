@@ -36,9 +36,9 @@ var __exportStar = (this && this.__exportStar) || function(m, exports) {
     for (var p in m) if (p !== "default" && !Object.prototype.hasOwnProperty.call(exports, p)) __createBinding(exports, m, p);
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.updatePatientFn = exports.createPatientFn = exports.cancelAppointmentFn = exports.updateAppointmentStatusFn = exports.splitAppointmentSeriesFn = exports.updateAppointmentSeriesFn = exports.updateAppointmentOccurrenceFn = exports.updateAppointmentFn = exports.deleteAppointmentFn = exports.createAppointmentSeriesFn = exports.createAppointmentFn = exports.deleteClosureFn = exports.createClosureFn = exports.setStaffAvailabilityDefaultFn = exports.upsertStaffProfileFn = exports.updateClinicWeeklyHoursFn = exports.syncMyDisplayNameFn = exports.updateMemberFn = exports.setMembershipStatusFn = exports.upsertPractitionerBookingMetaFn = exports.settingsDeletePractitionerOverride = exports.settingsUpsertPractitionerOverride = exports.settingsUpsertPractitionerAvailability = exports.settingsUpdateCommunicationSettings = exports.rebuildPublicBookingMirrorFn = exports.settingsUpdateOnlineBookingEnablement = exports.settingsUpdatePublicBookingConfig = exports.settingsGetCommunicationSettings = exports.settingsGetPublicBookingConfig = exports.settingsListAppointmentTypes = exports.settingsListLocations = exports.settingsListMembers = exports.settingsGetClosures = exports.settingsGetMembership = exports.settingsGetClinicProfile = exports.settingsGetCalendarDisplayConfig = exports.settingsUpdateCalendarDisplayConfig = exports.settingsSetAppointmentTypeActive = exports.settingsUpsertAppointmentType = exports.settingsSetLocationActive = exports.settingsUpsertLocation = exports.updateClinicProfileFn = exports.settingsUpdateClinicProfile = exports.acceptInviteFn = exports.inviteMemberFn = exports.updateMemberProfileFn = exports.clinicCreateFn = exports.getSchemaVersionsFn = exports.computeIntakeSummaryV2 = exports.BREVO_API_KEY = void 0;
-exports.rescheduleBookingWithTokenFn = exports.cancelBookingWithTokenFn = exports.getManageContextFn = exports.getPublicBookingDiagnosticsFn = exports.getPublicBookingAppointmentTypesFn = exports.getPublicBookingLocationsFn = exports.getPublicBookingPractitionersFn = exports.getPublicMonthAvailabilityFn = exports.listPublicSlotsFn = exports.onSoapNoteWrite = exports.onClinicalNoteWrite = exports.mirrorPractitionerToPublic = exports.onAppointmentWrite_toBusyBlock = exports.projectionsRebuildPublicBookingConfig = exports.onPublicBookingSettingsWriteProjection = exports.onPublicBookingConfigMirror = exports.onPractitionerWritten = exports.onPublicBookingSettingsWrite = exports.onBookingRequestCreateV2 = exports.exportClosureOverrideAuditReportFn = exports.resolveIntakeLinkTokenFn = exports.createGeneralQuestionnaireLinkFn = exports.submitIntakeSessionFn = exports.billingStripeWebhookFn = exports.billingGetInvoicePdfDownloadUrlFn = exports.billingGenerateInvoicePdfFn = exports.billingCreateStripePaymentIntentFn = exports.billingUpdateSettingsFn = exports.billingIssueCreditNoteFn = exports.billingRecordManualPaymentFn = exports.billingIssueInvoiceFn = exports.billingCreateInvoiceDraftFn = exports.billingCreateChargeFn = exports.generateAssessmentPdfFn = exports.getAssessmentPackFn = exports.submitAssessmentFn = exports.deleteOutcomeMeasureFn = exports.upsertOutcomeMeasureFn = exports.deleteClinicalTestFn = exports.upsertClinicalTestFn = exports.unfinalizeSoapNoteFn = exports.finalizeSoapNoteFn = exports.amendClinicalNoteFn = exports.createClinicalNoteFn = exports.closeEpisodeFn = exports.updateEpisodeFn = exports.createEpisodeFn = exports.listPatientsForBookingFn = exports.deletePatientFn = exports.mergePatientsFn = void 0;
-exports.onClinicCreatedProvisionOwnerMembership = exports.resolveIntakeSessionFromBookingRequestFn = exports.intakePdfOnSubmit = exports.createBookingRequestFn = exports.bootstrapPublicBookingSettingsFn = exports.consumeIntakeInviteFn = exports.backfillMemberPermissions = exports.backfillRoles = exports.backfillNotificationsSettings = exports.onClinicCreatedProvisionDefaults = exports.testCallable = void 0;
+exports.updateAppointmentStatusFn = exports.splitAppointmentSeriesFn = exports.updateAppointmentSeriesFn = exports.updateAppointmentOccurrenceFn = exports.updateAppointmentFn = exports.deleteAppointmentFn = exports.createAppointmentSeriesFn = exports.createAppointmentFn = exports.deleteClosureFn = exports.createClosureFn = exports.setStaffAvailabilityDefaultFn = exports.upsertStaffProfileFn = exports.updateClinicWeeklyHoursFn = exports.syncMyDisplayNameFn = exports.updateMemberFn = exports.setMembershipStatusFn = exports.upsertPractitionerBookingMetaFn = exports.settingsDeletePractitionerOverride = exports.settingsUpsertPractitionerOverride = exports.settingsDeletePractitionerAvailability = exports.settingsUpsertPractitionerAvailability = exports.settingsUpdateCommunicationSettings = exports.rebuildPublicBookingMirrorFn = exports.settingsUpdateLocationDisplayOrder = exports.settingsUpdateOnlineBookingEnablement = exports.settingsUpdatePublicBookingConfig = exports.settingsGetCommunicationSettings = exports.settingsGetPublicBookingConfig = exports.settingsListAppointmentTypes = exports.settingsListLocations = exports.settingsListMembers = exports.settingsGetClosures = exports.settingsGetMembership = exports.settingsGetClinicProfile = exports.settingsGetCalendarDisplayConfig = exports.settingsUpdateCalendarDisplayConfig = exports.settingsSetAppointmentTypeActive = exports.settingsUpsertAppointmentType = exports.settingsUpdateLocationWeeklyHours = exports.settingsSetLocationActive = exports.settingsUpsertLocation = exports.updateClinicProfileFn = exports.settingsUpdateClinicProfile = exports.acceptInviteFn = exports.inviteMemberFn = exports.updateMemberProfileFn = exports.clinicCreateFn = exports.getSchemaVersionsFn = exports.computeIntakeSummaryV2 = exports.BREVO_API_KEY = void 0;
+exports.listQuestionnaireTemplatesFn = exports.resolveIntakeLinkTokenFn = exports.createQuestionnaireLaunchLinkFn = exports.createGeneralQuestionnaireLinkFn = exports.submitIntakeSessionFn = exports.billingStripeWebhookFn = exports.billingGetAgedReceivablesFn = exports.billingGetJurisdictionFn = exports.billingGetSummaryFn = exports.billingGetInvoicePdfDownloadUrlFn = exports.billingGenerateInvoicePdfFn = exports.billingCreateInvoicePaymentLinkFn = exports.billingCreateStripePaymentIntentFn = exports.settingsUpsertProduct = exports.settingsUpsertBillableItem = exports.settingsUpsertPaymentType = exports.settingsUpsertTax = exports.billingResolvePricingForAppointmentFn = exports.billingUpdatePricingSettingsFn = exports.billingUpdateSettingsFn = exports.billingRefundPaymentFn = exports.billingIssueCreditNoteFn = exports.billingRecordPaymentFn = exports.billingRecordManualPaymentFn = exports.billingIssueInvoiceFn = exports.billingCreateInvoiceFromAppointmentFn = exports.billingUpdateInvoiceFn = exports.billingCreateInvoiceFn = exports.billingCreateInvoiceDraftFn = exports.billingCreateChargeFn = exports.generateAssessmentPdfFn = exports.getAssessmentPackFn = exports.submitAssessmentFn = exports.deleteOutcomeMeasureFn = exports.upsertOutcomeMeasureFn = exports.deleteClinicalTestFn = exports.upsertClinicalTestFn = exports.unfinalizeSoapNoteFn = exports.finalizeSoapNoteFn = exports.amendClinicalNoteFn = exports.createClinicalNoteFn = exports.closeEpisodeFn = exports.updateEpisodeFn = exports.createEpisodeFn = exports.listPatientsForBookingFn = exports.deletePatientFn = exports.mergePatientsFn = exports.updatePatientFn = exports.createPatientFn = exports.cancelAppointmentFn = void 0;
+exports.onClinicCreatedProvisionOwnerMembership = exports.resolveIntakeSessionFromBookingRequestFn = exports.intakePdfOnSubmit = exports.createBookingRequestFn = exports.bootstrapPublicBookingSettingsFn = exports.consumeIntakeInviteFn = exports.backfillMemberPermissions = exports.backfillRoles = exports.backfillNotificationsSettings = exports.onClinicCreatedProvisionDefaults = exports.testCallable = exports.rescheduleBookingWithTokenFn = exports.cancelBookingWithTokenFn = exports.getManageContextFn = exports.getPublicBookingDiagnosticsFn = exports.getPublicBookingAppointmentTypesFn = exports.getPublicBookingLocationsFn = exports.getPublicBookingPractitionersFn = exports.getPublicMonthAvailabilityFn = exports.listPublicSlotsFn = exports.onSoapNoteWrite = exports.onClinicalNoteWrite = exports.mirrorPractitionerToPublic = exports.onAppointmentWrite_toBusyBlock = exports.projectionsRebuildPublicBookingConfig = exports.onLocationWritePublicBookingConfigProjection = exports.onPublicBookingSettingsWriteProjection = exports.onPublicBookingConfigMirror = exports.onPractitionerWritten = exports.onBookingRequestCreateV2 = exports.exportClosureOverrideAuditReportFn = exports.updateQuestionnaireTemplateFn = void 0;
 // functions/src/index.ts
 const admin = __importStar(require("firebase-admin"));
 const https_1 = require("firebase-functions/v2/https");
@@ -69,6 +69,7 @@ const acceptInvite_1 = require("./clinic/acceptInvite");
 const updateClinicProfile_1 = require("./clinic/updateClinicProfile");
 const upsertLocation_1 = require("./clinic/settings/upsertLocation");
 const setLocationActive_1 = require("./clinic/settings/setLocationActive");
+const updateLocationWeeklyHours_1 = require("./clinic/settings/updateLocationWeeklyHours");
 const upsertAppointmentType_1 = require("./clinic/settings/upsertAppointmentType");
 const setAppointmentTypeActive_1 = require("./clinic/settings/setAppointmentTypeActive");
 const updateCalendarDisplayConfig_1 = require("./clinic/settings/updateCalendarDisplayConfig");
@@ -83,8 +84,10 @@ const getPublicBookingConfig_1 = require("./clinic/settings/getPublicBookingConf
 const getCommunicationSettings_1 = require("./clinic/settings/getCommunicationSettings");
 const updatePublicBookingConfig_1 = require("./clinic/settings/updatePublicBookingConfig");
 const updateOnlineBookingEnablement_1 = require("./clinic/settings/updateOnlineBookingEnablement");
+const updateLocationDisplayOrder_1 = require("./clinic/settings/updateLocationDisplayOrder");
 const updateCommunicationSettings_1 = require("./clinic/settings/updateCommunicationSettings");
 const upsertPractitionerAvailability_1 = require("./clinic/settings/upsertPractitionerAvailability");
+const deletePractitionerAvailability_1 = require("./clinic/settings/deletePractitionerAvailability");
 const upsertPractitionerOverride_1 = require("./clinic/settings/upsertPractitionerOverride");
 const deletePractitionerOverride_1 = require("./clinic/settings/deletePractitionerOverride");
 const setMembershipStatus_1 = require("./clinic/setMembershipStatus");
@@ -144,13 +147,28 @@ const getAssessmentPack_1 = require("./clinic/assessments/getAssessmentPack");
 // ─────────────────────────────
 const createCharge_1 = require("./clinic/billing/createCharge");
 const createInvoiceDraft_1 = require("./clinic/billing/createInvoiceDraft");
+const createInvoice_1 = require("./clinic/billing/createInvoice");
+const updateInvoice_1 = require("./clinic/billing/updateInvoice");
+const createInvoiceFromAppointment_1 = require("./clinic/billing/createInvoiceFromAppointment");
 const issueInvoice_1 = require("./clinic/billing/issueInvoice");
 const recordManualPayment_1 = require("./clinic/billing/recordManualPayment");
+const recordPayment_1 = require("./clinic/billing/recordPayment");
 const issueCreditNote_1 = require("./clinic/billing/issueCreditNote");
+const refundPayment_1 = require("./clinic/billing/refundPayment");
 const updateBillingSettings_1 = require("./clinic/billing/updateBillingSettings");
 const createStripePaymentIntent_1 = require("./clinic/billing/createStripePaymentIntent");
 const stripeWebhook_1 = require("./clinic/billing/stripeWebhook");
 const generateInvoicePdf_1 = require("./clinic/billing/generateInvoicePdf");
+const upsertTax_1 = require("./clinic/billing/upsertTax");
+const upsertPaymentType_1 = require("./clinic/billing/upsertPaymentType");
+const upsertBillableItem_1 = require("./clinic/billing/upsertBillableItem");
+const upsertProduct_1 = require("./clinic/billing/upsertProduct");
+const createInvoicePaymentLink_1 = require("./clinic/billing/createInvoicePaymentLink");
+const getBillingSummary_1 = require("./clinic/billing/getBillingSummary");
+const getBillingJurisdiction_1 = require("./clinic/billing/getBillingJurisdiction");
+const getAgedReceivables_1 = require("./clinic/billing/getAgedReceivables");
+const updatePricingSettings_1 = require("./clinic/billing/updatePricingSettings");
+const resolvePricingForAppointment_1 = require("./clinic/billing/resolvePricingForAppointment");
 // ─────────────────────────────
 // Intake / decision support
 // ─────────────────────────────
@@ -160,8 +178,13 @@ Object.defineProperty(exports, "computeIntakeSummaryV2", { enumerable: true, get
 __exportStar(require("./clinic/intake/computeDecisionSupport"), exports);
 const createGeneralQuestionnaireLinkFn_1 = require("./intake/createGeneralQuestionnaireLinkFn");
 Object.defineProperty(exports, "createGeneralQuestionnaireLinkFn", { enumerable: true, get: function () { return createGeneralQuestionnaireLinkFn_1.createGeneralQuestionnaireLinkFn; } });
+const createQuestionnaireLaunchLinkFn_1 = require("./intake/createQuestionnaireLaunchLinkFn");
+Object.defineProperty(exports, "createQuestionnaireLaunchLinkFn", { enumerable: true, get: function () { return createQuestionnaireLaunchLinkFn_1.createQuestionnaireLaunchLinkFn; } });
 const resolveIntakeLinkTokenFn_1 = require("./intake/resolveIntakeLinkTokenFn");
 Object.defineProperty(exports, "resolveIntakeLinkTokenFn", { enumerable: true, get: function () { return resolveIntakeLinkTokenFn_1.resolveIntakeLinkTokenFn; } });
+const listQuestionnaireTemplatesFn_1 = require("./clinic/questionnaires/listQuestionnaireTemplatesFn");
+Object.defineProperty(exports, "listQuestionnaireTemplatesFn", { enumerable: true, get: function () { return listQuestionnaireTemplatesFn_1.listQuestionnaireTemplatesFn; } });
+Object.defineProperty(exports, "updateQuestionnaireTemplateFn", { enumerable: true, get: function () { return listQuestionnaireTemplatesFn_1.updateQuestionnaireTemplateFn; } });
 // ─────────────────────────────
 // Audit exports
 // ─────────────────────────────
@@ -195,6 +218,7 @@ exports.settingsUpdateClinicProfile = (0, https_1.onCall)({ region: REGION, cors
 exports.updateClinicProfileFn = (0, https_1.onCall)({ region: REGION, cors: true }, updateClinicProfile_1.updateClinicProfile);
 exports.settingsUpsertLocation = (0, https_1.onCall)({ region: REGION, cors: true }, upsertLocation_1.upsertLocation);
 exports.settingsSetLocationActive = (0, https_1.onCall)({ region: REGION, cors: true }, setLocationActive_1.setLocationActive);
+exports.settingsUpdateLocationWeeklyHours = (0, https_1.onCall)({ region: REGION, cors: true }, updateLocationWeeklyHours_1.updateLocationWeeklyHours);
 exports.settingsUpsertAppointmentType = (0, https_1.onCall)({ region: REGION, cors: true }, upsertAppointmentType_1.upsertAppointmentType);
 exports.settingsSetAppointmentTypeActive = (0, https_1.onCall)({ region: REGION, cors: true }, setAppointmentTypeActive_1.setAppointmentTypeActive);
 exports.settingsUpdateCalendarDisplayConfig = (0, https_1.onCall)({ region: REGION, cors: true }, updateCalendarDisplayConfig_1.updateCalendarDisplayConfig);
@@ -209,6 +233,7 @@ exports.settingsGetPublicBookingConfig = (0, https_1.onCall)({ region: REGION, c
 exports.settingsGetCommunicationSettings = (0, https_1.onCall)({ region: REGION, cors: true }, getCommunicationSettings_1.getCommunicationSettings);
 exports.settingsUpdatePublicBookingConfig = (0, https_1.onCall)({ region: REGION, cors: true }, updatePublicBookingConfig_1.updatePublicBookingConfig);
 exports.settingsUpdateOnlineBookingEnablement = (0, https_1.onCall)({ region: REGION, cors: true }, updateOnlineBookingEnablement_1.updateOnlineBookingEnablement);
+exports.settingsUpdateLocationDisplayOrder = (0, https_1.onCall)({ region: REGION, cors: true }, updateLocationDisplayOrder_1.updateLocationDisplayOrder);
 /** Rebuild public booking mirror (practitioners, locations, appointment types). Requires settings.write. */
 exports.rebuildPublicBookingMirrorFn = (0, https_1.onCall)({ region: REGION, cors: true }, async (request) => {
     var _a, _b, _c;
@@ -226,6 +251,7 @@ exports.rebuildPublicBookingMirrorFn = (0, https_1.onCall)({ region: REGION, cor
 });
 exports.settingsUpdateCommunicationSettings = (0, https_1.onCall)({ region: REGION, cors: true }, updateCommunicationSettings_1.updateCommunicationSettings);
 exports.settingsUpsertPractitionerAvailability = (0, https_1.onCall)({ region: REGION, cors: true }, upsertPractitionerAvailability_1.upsertPractitionerAvailability);
+exports.settingsDeletePractitionerAvailability = (0, https_1.onCall)({ region: REGION, cors: true }, deletePractitionerAvailability_1.deletePractitionerAvailability);
 exports.settingsUpsertPractitionerOverride = (0, https_1.onCall)({ region: REGION, cors: true }, upsertPractitionerOverride_1.upsertPractitionerOverride);
 exports.settingsDeletePractitionerOverride = (0, https_1.onCall)({ region: REGION, cors: true }, deletePractitionerOverride_1.deletePractitionerOverride);
 exports.upsertPractitionerBookingMetaFn = (0, https_1.onCall)({ region: REGION, cors: true }, upsertPractitionerBookingMeta_1.upsertPractitionerBookingMeta);
@@ -276,13 +302,28 @@ exports.generateAssessmentPdfFn = (0, https_1.onCall)({ region: REGION, cors: tr
 // Billing
 exports.billingCreateChargeFn = (0, https_1.onCall)({ region: REGION, cors: true }, createCharge_1.createCharge);
 exports.billingCreateInvoiceDraftFn = (0, https_1.onCall)({ region: REGION, cors: true }, createInvoiceDraft_1.createInvoiceDraft);
+exports.billingCreateInvoiceFn = (0, https_1.onCall)({ region: REGION, cors: true }, createInvoice_1.createInvoice);
+exports.billingUpdateInvoiceFn = (0, https_1.onCall)({ region: REGION, cors: true }, updateInvoice_1.updateInvoice);
+exports.billingCreateInvoiceFromAppointmentFn = (0, https_1.onCall)({ region: REGION, cors: true }, createInvoiceFromAppointment_1.createInvoiceFromAppointment);
 exports.billingIssueInvoiceFn = (0, https_1.onCall)({ region: REGION, cors: true }, issueInvoice_1.issueInvoice);
 exports.billingRecordManualPaymentFn = (0, https_1.onCall)({ region: REGION, cors: true }, recordManualPayment_1.recordManualPayment);
+exports.billingRecordPaymentFn = (0, https_1.onCall)({ region: REGION, cors: true }, recordPayment_1.recordPayment);
 exports.billingIssueCreditNoteFn = (0, https_1.onCall)({ region: REGION, cors: true }, issueCreditNote_1.issueCreditNote);
+exports.billingRefundPaymentFn = (0, https_1.onCall)({ region: REGION, cors: true }, refundPayment_1.refundPayment);
 exports.billingUpdateSettingsFn = (0, https_1.onCall)({ region: REGION, cors: true }, updateBillingSettings_1.updateBillingSettings);
+exports.billingUpdatePricingSettingsFn = (0, https_1.onCall)({ region: REGION, cors: true }, updatePricingSettings_1.updatePricingSettings);
+exports.billingResolvePricingForAppointmentFn = (0, https_1.onCall)({ region: REGION, cors: true }, resolvePricingForAppointment_1.resolvePricingForAppointment);
+exports.settingsUpsertTax = (0, https_1.onCall)({ region: REGION, cors: true }, upsertTax_1.upsertTax);
+exports.settingsUpsertPaymentType = (0, https_1.onCall)({ region: REGION, cors: true }, upsertPaymentType_1.upsertPaymentType);
+exports.settingsUpsertBillableItem = (0, https_1.onCall)({ region: REGION, cors: true }, upsertBillableItem_1.upsertBillableItem);
+exports.settingsUpsertProduct = (0, https_1.onCall)({ region: REGION, cors: true }, upsertProduct_1.upsertProduct);
 exports.billingCreateStripePaymentIntentFn = (0, https_1.onCall)({ region: REGION, cors: true }, createStripePaymentIntent_1.createStripePaymentIntent);
+exports.billingCreateInvoicePaymentLinkFn = (0, https_1.onCall)({ region: REGION, cors: true }, createInvoicePaymentLink_1.createInvoicePaymentLink);
 exports.billingGenerateInvoicePdfFn = (0, https_1.onCall)({ region: REGION, cors: true, memory: "2GiB", timeoutSeconds: 120 }, generateInvoicePdf_1.generateInvoicePdf);
 exports.billingGetInvoicePdfDownloadUrlFn = (0, https_1.onCall)({ region: REGION, cors: true }, generateInvoicePdf_1.getInvoicePdfDownloadUrl);
+exports.billingGetSummaryFn = (0, https_1.onCall)({ region: REGION, cors: true }, getBillingSummary_1.getBillingSummary);
+exports.billingGetJurisdictionFn = (0, https_1.onCall)({ region: REGION, cors: true }, getBillingJurisdiction_1.getBillingJurisdiction);
+exports.billingGetAgedReceivablesFn = (0, https_1.onCall)({ region: REGION, cors: true }, getAgedReceivables_1.getAgedReceivables);
 // Stripe webhook (HTTP function, not callable)
 // Note: Stripe webhooks require raw body for signature verification
 // May need to configure body parsing in Firebase Functions settings
@@ -303,14 +344,13 @@ exports.exportClosureOverrideAuditReportFn = (0, https_1.onCall)({ region: REGIO
 // ─────────────────────────────
 var onBookingRequestCreate_1 = require("./clinic/booking/onBookingRequestCreate");
 Object.defineProperty(exports, "onBookingRequestCreateV2", { enumerable: true, get: function () { return onBookingRequestCreate_1.onBookingRequestCreateV2; } });
-var onPublicBookingSettingsWrite_1 = require("./public/onPublicBookingSettingsWrite");
-Object.defineProperty(exports, "onPublicBookingSettingsWrite", { enumerable: true, get: function () { return onPublicBookingSettingsWrite_1.onPublicBookingSettingsWrite; } });
 var mirrorPublicBooking_2 = require("./public/mirrorPublicBooking");
 Object.defineProperty(exports, "onPractitionerWritten", { enumerable: true, get: function () { return mirrorPublicBooking_2.onPractitionerWritten; } });
 var onPublicBookingConfigMirror_1 = require("./public/onPublicBookingConfigMirror");
 Object.defineProperty(exports, "onPublicBookingConfigMirror", { enumerable: true, get: function () { return onPublicBookingConfigMirror_1.onPublicBookingConfigMirror; } });
 var publicBookingProjection_1 = require("./clinic/projections/publicBookingProjection");
 Object.defineProperty(exports, "onPublicBookingSettingsWriteProjection", { enumerable: true, get: function () { return publicBookingProjection_1.onPublicBookingSettingsWriteProjection; } });
+Object.defineProperty(exports, "onLocationWritePublicBookingConfigProjection", { enumerable: true, get: function () { return publicBookingProjection_1.onLocationWritePublicBookingConfigProjection; } });
 Object.defineProperty(exports, "projectionsRebuildPublicBookingConfig", { enumerable: true, get: function () { return publicBookingProjection_1.projectionsRebuildPublicBookingConfig; } });
 var onAppointmentWrite_toBusyBlock_1 = require("./availability/onAppointmentWrite_toBusyBlock");
 Object.defineProperty(exports, "onAppointmentWrite_toBusyBlock", { enumerable: true, get: function () { return onAppointmentWrite_toBusyBlock_1.onAppointmentWrite_toBusyBlock; } });

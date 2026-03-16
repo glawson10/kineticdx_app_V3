@@ -5,6 +5,7 @@
  */
 
 import * as admin from "firebase-admin";
+import type { Firestore } from "firebase-admin/firestore";
 import { HttpsError } from "firebase-functions/v2/https";
 import { requireClinicPermission } from "../permissions";
 import { writeSettingsAuditEvent } from "../audit/audit";
@@ -29,6 +30,8 @@ const APPT_TYPE_PATCH_KEYS = new Set([
   "description",
   "defaultPrice",
   "allowedLocationIds",
+  "telehealth",
+  "allowedPractitionerIds",
 ]);
 
 export type UpsertAppointmentTypePatch = {
@@ -40,6 +43,8 @@ export type UpsertAppointmentTypePatch = {
   description?: string | null;
   defaultPrice?: number | null;
   allowedLocationIds?: string[] | null;
+  telehealth?: boolean | null;
+  allowedPractitionerIds?: string[] | null;
 };
 
 function validateAndPickPatch(patch: unknown, isCreate: boolean): UpsertAppointmentTypePatch {
@@ -89,6 +94,17 @@ function validateAndPickPatch(patch: unknown, isCreate: boolean): UpsertAppointm
     }
   }
 
+  const telehealth = assertBoolean(raw.telehealth, "telehealth");
+
+  let allowedPractitionerIds: string[] | null | undefined;
+  if (raw.allowedPractitionerIds !== undefined) {
+    if (raw.allowedPractitionerIds === null) {
+      allowedPractitionerIds = null;
+    } else if (Array.isArray(raw.allowedPractitionerIds)) {
+      allowedPractitionerIds = raw.allowedPractitionerIds.map((id: unknown) => String(id).trim()).filter(Boolean);
+    }
+  }
+
   const out: UpsertAppointmentTypePatch = {};
   if (name != null) out.name = name;
   if (durationMinutes != null) out.durationMinutes = durationMinutes;
@@ -98,6 +114,8 @@ function validateAndPickPatch(patch: unknown, isCreate: boolean): UpsertAppointm
   if (description !== undefined) out.description = description ?? null;
   if (defaultPrice !== undefined) out.defaultPrice = defaultPrice;
   if (allowedLocationIds !== undefined) out.allowedLocationIds = allowedLocationIds;
+  if (telehealth !== undefined && telehealth !== null) out.telehealth = telehealth;
+  if (allowedPractitionerIds !== undefined) out.allowedPractitionerIds = allowedPractitionerIds;
   return out;
 }
 
@@ -130,6 +148,23 @@ export async function upsertAppointmentType(request: { auth?: { uid?: string }; 
   const uid = request.auth.uid;
   await requireClinicPermission(db, clinicId, uid, "settings.write");
 
+  try {
+    return await upsertAppointmentTypeImpl(db, clinicId, uid, appointmentTypeId, isCreate, patch);
+  } catch (e) {
+    if (e instanceof HttpsError) throw e;
+    const message = e instanceof Error ? e.message : String(e);
+    throw new HttpsError("internal", message || "Failed to save appointment type.");
+  }
+}
+
+async function upsertAppointmentTypeImpl(
+  db: Firestore,
+  clinicId: string,
+  uid: string,
+  appointmentTypeId: string | null,
+  isCreate: boolean,
+  patch: UpsertAppointmentTypePatch
+): Promise<{ ok: boolean; appointmentTypeId: string }> {
   const colRef = db.collection("clinics").doc(clinicId).collection("appointmentTypes");
   const now = FV.serverTimestamp();
 
@@ -144,6 +179,8 @@ export async function upsertAppointmentType(request: { auth?: { uid?: string }; 
       description: patch.description ?? null,
       defaultPrice: patch.defaultPrice ?? null,
       allowedLocationIds: patch.allowedLocationIds ?? null,
+      telehealth: patch.telehealth ?? false,
+      allowedPractitionerIds: patch.allowedPractitionerIds ?? null,
       createdAt: now,
       updatedAt: now,
     };
@@ -191,5 +228,5 @@ export async function upsertAppointmentType(request: { auth?: { uid?: string }; 
     appointmentTypeId!,
     changes
   );
-  return { ok: true, appointmentTypeId };
+  return { ok: true, appointmentTypeId: appointmentTypeId! };
 }

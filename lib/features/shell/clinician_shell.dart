@@ -14,13 +14,13 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../app/clinic_context.dart';
 import '../../app/clinic_session.dart';
 import '../../data/repositories/clinic_repository.dart';
+import '../../config/permission_keys.dart';
 import '../../staff/screens/staff_member_screen.dart';
 import '../../features/clinic/settings/ui/clinic_opening_hours_screen.dart';
 import '../../ui/design_tokens.dart';
 
 import '../home/clinic_home_shell.dart';
 import '../public/ui/intro_screen.dart';
-import '../../shared/ui/sticky_tab_button.dart';
 import 'shell_overlay_scope.dart';
 
 // Screens (tab content is built by ClinicHomeShell; only profile menu screens here)
@@ -237,15 +237,13 @@ class _WideScaffoldState extends State<_WideScaffold>
                     final isOpen = t > 0.5;
                     return LayoutBuilder(
                       builder: (context, constraints) {
-                        final h = constraints.maxHeight;
-                        final tabGroupHeight = StickyTabButton.restingHeight * 2 + 4; // shell tab + gap + calendar tab (resting)
-                        final top = (h - tabGroupHeight) / 2;
                         return Stack(
                           clipBehavior: Clip.none,
                           children: [
                             Row(
                               children: [
-                                SizedBox(width: w),
+                                // Sidebar width + strip width so child content starts after the strip
+                                SizedBox(width: w + _ShellCollapseStrip.stripWidth),
                                 Expanded(
                                   child: RepaintBoundary(
                                     child: Container(
@@ -284,9 +282,10 @@ class _WideScaffoldState extends State<_WideScaffold>
                               ),
                             Positioned(
                               left: w,
-                              top: top,
-                              child: AngledStickyTabButton(
-                                icon: Icons.menu,
+                              top: 0,
+                              bottom: 0,
+                              child: _ShellCollapseStrip(
+                                isExpanded: t > 0.5,
                                 onTap: () {
                                   if (_shellAnimController.value > 0.5) {
                                     _shellAnimController.reverse();
@@ -294,7 +293,6 @@ class _WideScaffoldState extends State<_WideScaffold>
                                     _shellAnimController.forward();
                                   }
                                 },
-                                tooltip: 'Menu',
                               ),
                             ),
                           ],
@@ -349,10 +347,55 @@ class _ToggleSidebarIntent extends Intent {
   const _ToggleSidebarIntent();
 }
 
-/// Small tab on the outside (right) edge of the sidebar to collapse/expand.
+/// Full-height narrow vertical strip (calendar overlay layout): light purple, <> chevrons.
+class _ShellCollapseStrip extends StatelessWidget {
+  final bool isExpanded;
+  final VoidCallback onTap;
+
+  /// Width of the strip; shell reserves this so it does not overlap calendar tool rail.
+  static const double stripWidth = 20;
+  static const double _stripWidth = stripWidth;
+  static const Color _stripBg = Color(0xFFEDE7F6);
+  static const Color _chevronColor = Color(0xFF6A4C93);
+
+  const _ShellCollapseStrip({
+    required this.isExpanded,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: isExpanded ? 'Close menu' : 'Open menu',
+      child: Material(
+        color: _stripBg,
+        child: InkWell(
+          onTap: onTap,
+          child: SizedBox(
+            width: _stripWidth,
+            child: Center(
+              child: Icon(
+                isExpanded ? Icons.chevron_left : Icons.chevron_right,
+                size: 18,
+                color: _chevronColor,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Full-length narrow vertical strip to collapse/expand the shell.
+/// Light purple background with darker purple chevrons.
 class _CollapseTab extends StatelessWidget {
   final bool isCollapsed;
   final VoidCallback onToggle;
+
+  static const double _stripWidth = 20;
+  static const Color _stripBg = Color(0xFFEDE7F6);
+  static const Color _chevronColor = Color(0xFF6A4C93);
 
   const _CollapseTab({
     required this.isCollapsed,
@@ -361,27 +404,17 @@ class _CollapseTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final scheme = theme.colorScheme;
     return Material(
-      color: scheme.surfaceContainerHighest,
-      borderRadius: const BorderRadius.only(
-        topLeft: Radius.circular(6),
-        bottomLeft: Radius.circular(6),
-      ),
+      color: _stripBg,
       child: InkWell(
         onTap: onToggle,
-        borderRadius: const BorderRadius.only(
-          topLeft: Radius.circular(6),
-          bottomLeft: Radius.circular(6),
-        ),
         child: SizedBox(
-          width: 12,
+          width: _stripWidth,
           child: Center(
             child: Icon(
               isCollapsed ? Icons.chevron_right : Icons.chevron_left,
-              size: 16,
-              color: scheme.onSurfaceVariant,
+              size: 18,
+              color: _chevronColor,
             ),
           ),
         ),
@@ -922,6 +955,7 @@ List<ClinicianTab> _visibleTabs(BuildContext context) {
   final perms = session?.permissions;
 
   bool has(String key) => perms?.has(key) == true;
+  bool hasAny(List<String> keys) => keys.any(has);
 
   final tabs = <ClinicianTab>[];
 
@@ -935,7 +969,7 @@ List<ClinicianTab> _visibleTabs(BuildContext context) {
   }
 
   tabs.add(ClinicianTab.exercises);
-  if (perms == null || has('manageBilling') || has('viewFinancialReports')) {
+  if (perms != null && hasAny(PermissionKeys.billingReadAny)) {
     tabs.add(ClinicianTab.invoices);
   }
   tabs.add(ClinicianTab.paymentQr);
@@ -969,7 +1003,7 @@ String _labelFor(ClinicianTab t) {
     case ClinicianTab.exercises:
       return 'Exercises';
     case ClinicianTab.invoices:
-      return 'Invoices';
+      return 'Accounts';
     case ClinicianTab.paymentQr:
       return 'Payment QR';
     case ClinicianTab.settings:

@@ -1,13 +1,21 @@
 // lib/features/public/ui/patient_booking_simple_screen.dart
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:http/http.dart' as http;
+import 'package:provider/provider.dart';
 
 import '../../../app/app_routes.dart';
+import '../../../data/repositories/public_booking_mirror_repository.dart';
+import '../../../models/public_booking_config_v1.dart';
+import '../../../models/questionnaire_flow.dart';
+import '../../booking/data/questionnaire_launch_dispatcher.dart';
 import '../../booking/ui/public_booking_mirror_health_banner.dart';
 import '../../../ui/design_tokens.dart';
 import '../widgets/public_header.dart';
@@ -16,6 +24,49 @@ import '../widgets/public_contact_actions.dart';
 import '../widgets/inline_month_calendar.dart';
 import '../widgets/therapy_loading_indicator.dart';
 import '../models/day_availability.dart';
+
+/// Returns a short, user-facing message for booking/availability errors.
+String _userFriendlyError(Object e) {
+  final s = e.toString().trim();
+  if (s.contains('sign-in') || s.contains('signed in') || s.contains('Not signed in')) {
+    return "We couldn't start the booking session. Please check your connection and try again.";
+  }
+  if (s.contains('permission-denied') || s.contains('permission_denied')) {
+    return "Booking isn't available right now. Please try again later.";
+  }
+  if (s.contains('unavailable') || s.contains('slot') && s.contains('taken')) {
+    return "That time is no longer available. Please choose another.";
+  }
+  return "Something went wrong. Please try again.";
+}
+
+// #region agent log
+void _debugIngest(String location, String message, Map<String, dynamic> data, {String? hypothesisId}) {
+  // Show in terminal so you can see questionnaire/mirror debug without ingest server
+  debugPrint('[DEBUG] $message');
+  debugPrint('[DEBUG]   location: $location');
+  for (final e in data.entries) {
+    debugPrint('[DEBUG]   ${e.key}: ${e.value}');
+  }
+  if (hypothesisId != null) debugPrint('[DEBUG]   hypothesisId: $hypothesisId');
+
+  final payload = <String, dynamic>{
+    'sessionId': 'bdeb9a',
+    'location': location,
+    'message': message,
+    'data': data,
+    'timestamp': DateTime.now().millisecondsSinceEpoch,
+    if (hypothesisId != null) 'hypothesisId': hypothesisId,
+  };
+  http
+      .post(
+        Uri.parse('http://127.0.0.1:7244/ingest/75fd3dc6-3aec-43be-9287-34e20642c3e8'),
+        headers: {'Content-Type': 'application/json', 'X-Debug-Session-Id': 'bdeb9a'},
+        body: jsonEncode(payload),
+      )
+      .catchError((_, __) => http.Response('', 200)); // 200 = ignore ingest failure (server often not running)
+}
+// #endregion
 
 /// Selectable slot tile — fixed height, centered label, grid-friendly.
 class SlotTile extends StatefulWidget {
@@ -59,6 +110,10 @@ class _SlotTileState extends State<SlotTile> {
     super.dispose();
   }
 
+  void _activate() {
+    if (!widget.disabled && widget.onTap != null) widget.onTap!();
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -67,6 +122,11 @@ class _SlotTileState extends State<SlotTile> {
     final existingColor = widget.corporate
         ? Colors.orange.withValues(alpha: 0.25)
         : (widget.selected ? primary.withValues(alpha: 0.5) : Colors.black12);
+
+    final semanticsLabel = widget.selected
+        ? '${widget.label}, selected'
+        : widget.label;
+    final semanticsHint = widget.badge != null ? ', ${widget.badge}' : '';
 
     return MouseRegion(
       onEnter: (_) => setState(() => _hovered = true),
@@ -77,25 +137,47 @@ class _SlotTileState extends State<SlotTile> {
         color: widget.selected
             ? primary.withValues(alpha: 0.08)
             : Colors.transparent,
-        child: Focus(
-          focusNode: _focusNode,
-          child: Builder(
-            builder: (context) {
-              final isFocused = _focusNode.hasFocus;
-              return Container(
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(AppRadius.element),
-                  border: isFocused
-                      ? Border.all(
-                          color: theme.colorScheme.primary,
-                          width: 2,
-                        )
-                      : null,
-                ),
-                child: InkWell(
-                  borderRadius: BorderRadius.circular(AppRadius.element),
-                  onTap: isInteractive ? widget.onTap! : null,
-                  child: Container(
+        child: Semantics(
+          button: true,
+          enabled: isInteractive,
+          selected: widget.selected,
+          label: semanticsLabel + semanticsHint,
+          child: CallbackShortcuts(
+            bindings: {
+              const SingleActivator(LogicalKeyboardKey.enter): _activate,
+              const SingleActivator(LogicalKeyboardKey.space): _activate,
+            },
+            child: Focus(
+              focusNode: _focusNode,
+              canRequestFocus: isInteractive,
+              child: Builder(
+                builder: (context) {
+                  final isFocused = _focusNode.hasFocus;
+                  final inner = Column(
+                    mainAxisSize: MainAxisSize.min,
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Text(
+                        widget.label,
+                        style: theme.textTheme.titleSmall?.copyWith(
+                          fontWeight: widget.selected ? FontWeight.w600 : null,
+                          color: widget.disabled
+                              ? theme.colorScheme.onSurface.withValues(alpha: 0.38)
+                              : (widget.selected ? theme.colorScheme.primary : null),
+                        ),
+                      ),
+                      if (widget.badge != null) ...[
+                        const SizedBox(height: 2),
+                        Text(
+                          widget.badge!,
+                          style: theme.textTheme.labelSmall?.copyWith(
+                            color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+                          ),
+                        ),
+                      ],
+                    ],
+                  );
+                  final middle = Container(
                     height: SlotTile.height,
                     alignment: Alignment.center,
                     decoration: BoxDecoration(
@@ -107,34 +189,27 @@ class _SlotTileState extends State<SlotTile> {
                         width: widget.selected ? 2 : 1,
                       ),
                     ),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Text(
-                          widget.label,
-                          style: theme.textTheme.titleSmall?.copyWith(
-                            fontWeight: widget.selected ? FontWeight.w600 : null,
-                            color: widget.disabled
-                                ? theme.colorScheme.onSurface.withValues(alpha: 0.38)
-                                : (widget.selected ? theme.colorScheme.primary : null),
-                          ),
-                        ),
-                        if (widget.badge != null) ...[
-                          const SizedBox(height: 2),
-                          Text(
-                            widget.badge!,
-                            style: theme.textTheme.labelSmall?.copyWith(
-                              color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
-                            ),
-                          ),
-                        ],
-                      ],
+                    child: inner,
+                  );
+                  return Container(
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(AppRadius.element),
+                      border: isFocused
+                          ? Border.all(
+                              color: theme.colorScheme.primary,
+                              width: 2,
+                            )
+                          : null,
                     ),
-                  ),
-                ),
-              );
-            },
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(AppRadius.element),
+                      onTap: isInteractive ? widget.onTap! : null,
+                      child: middle,
+                    ),
+                  );
+                },
+              ),
+            ),
           ),
         ),
       ),
@@ -204,8 +279,6 @@ class _PatientBookingSimpleScreenState
   // --- UX timings ---
   static const Duration _confirmTimeout = Duration(seconds: 25);
 
-  // Preassessment routing fade behaviour
-  static const Duration _fadeDuration = Duration(milliseconds: 500);
   static const Duration _fadePause = Duration(milliseconds: 500);
 
   // --- Slot rules ---
@@ -224,6 +297,7 @@ class _PatientBookingSimpleScreenState
   // --- Practitioners (public booking must run listPublicSlotsFn against a practitionerId) ---
   bool _loadingPractitioners = false;
   String? _practitionersError;
+  bool _practitionersLoadedOnce = false;
 
   List<_PractitionerOption> _practitioners = const [];
   String? _selectedPractitionerId; // null = not yet chosen/resolved
@@ -234,6 +308,23 @@ class _PatientBookingSimpleScreenState
   List<_AppointmentTypeOption> _appointmentTypes = const [];
   String? _selectedAppointmentTypeId;
 
+  // --- Location (location-first flow) ---
+  bool _loadingLocations = false;
+  String? _locationsError;
+  List<_LocationOption> _locations = const [];
+  String? _selectedLocationId;
+
+  /// Commit 49: Gate booking UI until locations and appointment types have loaded at least once.
+  bool _locationsLoadedOnce = false;
+  bool _appointmentTypesLoadedOnce = false;
+  /// Commit 50: Config loaded for empty states (booking disabled, etc.).
+  bool _configLoadedOnce = false;
+  PublicBookingConfigV1? _publicConfig;
+  bool get _bookingDataReady =>
+      _locationsLoadedOnce &&
+      _appointmentTypesLoadedOnce &&
+      _configLoadedOnce;
+
   CollectionReference<Map<String, dynamic>> get _bookingRequestsCol =>
       FirebaseFirestore.instance
           .collection('clinics')
@@ -241,6 +332,16 @@ class _PatientBookingSimpleScreenState
           .collection('bookingRequests');
 
   bool get _ready => _authReady && _authError == null;
+
+  /// For API calls: when "First available" is selected, use the first practitioner's id.
+  String? get _effectivePractitionerId {
+    final id = (_selectedPractitionerId ?? '').trim();
+    if (id.isEmpty) return null;
+    if (id == '__first_available__' && _practitioners.isNotEmpty) {
+      return _practitioners.first.id;
+    }
+    return id;
+  }
 
   @override
   void initState() {
@@ -254,6 +355,29 @@ class _PatientBookingSimpleScreenState
     }
 
     _initAndLoad();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _loadConfigOnce();
+    });
+  }
+
+  /// Commit 50: Load public config once for empty states (booking disabled, etc.).
+  Future<void> _loadConfigOnce() async {
+    if (!mounted) return;
+    try {
+      final repo = context.read<PublicBookingMirrorRepository>();
+      final config = await repo.getConfig(widget.clinicId);
+      if (!mounted) return;
+      setState(() {
+        _publicConfig = config;
+        _configLoadedOnce = true;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _publicConfig = null;
+        _configLoadedOnce = true;
+      });
+    }
   }
 
   @override
@@ -278,21 +402,78 @@ class _PatientBookingSimpleScreenState
       if (!mounted) return;
       setState(() => _authReady = true);
 
-      await _loadAppointmentTypesIfNeeded();
+      await Future.wait([
+        _loadAppointmentTypesIfNeeded(),
+        _loadLocationsIfNeeded(),
+      ]);
       if (mounted) await _refreshAll();
       if (mounted) _loadMonthAvailability();
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _authError = 'Anonymous sign-in failed: $e';
+        _authError = _userFriendlyError(e);
         _authReady = false;
       });
     }
   }
 
   Future<void> _refreshAll() async {
+    await _loadLocationsIfNeeded();
     await _loadPractitionersIfNeeded();
     await _loadSlots();
+  }
+
+  /// Loads locations from public mirror (getPublicBookingLocationsFn). Used for location-first flow.
+  Future<void> _loadLocationsIfNeeded({bool force = false}) async {
+    if (!force && _locations.isNotEmpty) return;
+
+    setState(() {
+      _loadingLocations = true;
+      _locationsError = null;
+    });
+
+    try {
+      final cid = widget.clinicId.trim();
+      if (cid.isEmpty) throw StateError('Missing clinicId');
+
+      final fn = FirebaseFunctions.instanceFor(region: 'europe-west3');
+      final result = await fn.httpsCallable('getPublicBookingLocationsFn').call({'clinicId': cid});
+      final data = result.data as Map<String, dynamic>?;
+      final rawList = data?['locations'] as List<dynamic>? ?? [];
+
+      final list = <_LocationOption>[];
+      for (final item in rawList) {
+        if (item is Map) {
+          final m = Map<String, dynamic>.from(item);
+          final id = (m['id'] ?? '').toString().trim();
+          final name = (m['name'] ?? '').toString().trim();
+          if (id.isNotEmpty) {
+            list.add(_LocationOption(id: id, name: name.isNotEmpty ? name : id));
+          }
+        }
+      }
+
+      if (!mounted) return;
+      String? autoSelect;
+      if (list.length == 1) autoSelect = list.single.id;
+      setState(() {
+        _locations = list;
+        _loadingLocations = false;
+        _locationsError = null;
+        _locationsLoadedOnce = true;
+        if (autoSelect != null && (_selectedLocationId == null || _selectedLocationId!.isEmpty)) {
+          _selectedLocationId = autoSelect;
+        }
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _locations = [];
+        _loadingLocations = false;
+        _locationsError = 'Could not load locations: $e';
+        _locationsLoadedOnce = true;
+      });
+    }
   }
 
   /// Loads appointment types from public mirror (getPublicBookingAppointmentTypesFn). Single type → auto-select.
@@ -354,6 +535,7 @@ class _PatientBookingSimpleScreenState
         _appointmentTypes = list;
         _loadingAppointmentTypes = false;
         _appointmentTypesError = null;
+        _appointmentTypesLoadedOnce = true;
         if (autoSelect != null && (_selectedAppointmentTypeId == null || _selectedAppointmentTypeId!.isEmpty)) {
           _selectedAppointmentTypeId = autoSelect;
         }
@@ -364,6 +546,7 @@ class _PatientBookingSimpleScreenState
         _appointmentTypes = [];
         _loadingAppointmentTypes = false;
         _appointmentTypesError = 'Could not load appointment types: $e';
+        _appointmentTypesLoadedOnce = true;
       });
     }
   }
@@ -395,7 +578,12 @@ class _PatientBookingSimpleScreenState
       final deepLinked = (widget.clinicianId ?? '').trim();
 
       final fn = FirebaseFunctions.instanceFor(region: 'europe-west3');
-      final result = await fn.httpsCallable('getPublicBookingPractitionersFn').call({'clinicId': cid});
+      final practPayload = <String, dynamic>{'clinicId': cid};
+      final apptTypeId = (_selectedAppointmentTypeId ?? '').trim();
+      if (apptTypeId.isNotEmpty) practPayload['appointmentTypeId'] = apptTypeId;
+      final locId = (_selectedLocationId ?? '').trim();
+      if (locId.isNotEmpty) practPayload['locationId'] = locId;
+      final result = await fn.httpsCallable('getPublicBookingPractitionersFn').call(practPayload);
       final data = result.data as Map<String, dynamic>?;
       final rawList = data?['practitioners'] as List<dynamic>? ?? [];
 
@@ -476,7 +664,8 @@ class _PatientBookingSimpleScreenState
 
       if (finalList.isEmpty || (nextSelected ?? '').isEmpty) {
         throw StateError(
-          'No practitioners found. Publish public booking config in Settings → Public booking and save once (or run Rebuild).',
+          'No clinicians are available for online booking. In the clinic app: (1) Save Settings → Scheduling → Online booking once. '
+          '(2) In Team, open each clinician and turn ON "Show in online booking". (3) Run Rebuild on this page if you have admin access.',
         );
       }
 
@@ -491,7 +680,10 @@ class _PatientBookingSimpleScreenState
         _practitionersError = 'Could not load practitioners: $e';
       });
     } finally {
-      if (mounted) setState(() => _loadingPractitioners = false);
+      if (mounted) setState(() {
+        _loadingPractitioners = false;
+        _practitionersLoadedOnce = true;
+      });
     }
   }
 
@@ -500,13 +692,25 @@ class _PatientBookingSimpleScreenState
     return '${id.substring(0, 4)}…${id.substring(id.length - 4)}';
   }
 
+  Future<void> _onLocationChanged(String? id) async {
+    final next = (id ?? '').trim();
+    if (next == (_selectedLocationId ?? '').trim()) return;
+
+    setState(() => _selectedLocationId = next.isEmpty ? null : next);
+
+    await _loadPractitionersIfNeeded(force: true);
+    await _loadSlots();
+    if (mounted) _loadMonthAvailability();
+  }
+
   Future<void> _onAppointmentTypeChanged(String? id) async {
     final next = (id ?? '').trim();
     if (next == (_selectedAppointmentTypeId ?? '').trim()) return;
 
     setState(() => _selectedAppointmentTypeId = next.isEmpty ? null : next);
 
-    await _refreshAll();
+    await _loadPractitionersIfNeeded(force: true);
+    await _loadSlots();
     if (mounted) _loadMonthAvailability();
   }
 
@@ -566,8 +770,8 @@ class _PatientBookingSimpleScreenState
     await _loadPractitionersIfNeeded();
     if (token != _requestToken) return;
 
-    final practitionerId = (_selectedPractitionerId ?? '').trim();
-    if (practitionerId.isEmpty) {
+    final practitionerId = _effectivePractitionerId;
+    if (practitionerId == null || practitionerId.isEmpty) {
       setState(() {
         _loadingSlots = false;
         _slotsError = null;
@@ -609,10 +813,11 @@ class _PatientBookingSimpleScreenState
         'practitionerId': practitionerId,
         'rangeStartMs': startUtc.millisecondsSinceEpoch,
         'rangeEndMs': endUtc.millisecondsSinceEpoch,
-        'tz': 'Europe/Prague',
       };
       final apptTypeId = (_selectedAppointmentTypeId ?? '').trim();
       if (apptTypeId.isNotEmpty) payload['appointmentTypeId'] = apptTypeId;
+      final locId = (_selectedLocationId ?? '').trim();
+      if (locId.isNotEmpty) payload['locationId'] = locId;
 
       final res = await fn.call(payload).timeout(_confirmTimeout);
       if (token != _requestToken) return;
@@ -640,7 +845,7 @@ class _PatientBookingSimpleScreenState
     } catch (e) {
       if (!mounted) return;
       if (token != _requestToken) return;
-      setState(() => _slotsError = 'Failed to load availability: $e');
+      setState(() => _slotsError = "We couldn't load availability. Please check your connection and try again.");
     } finally {
       if (mounted) setState(() => _loadingSlots = false);
     }
@@ -652,14 +857,18 @@ class _PatientBookingSimpleScreenState
     final endUtc = startUtc.add(const Duration(days: 1));
     try {
       final fn = FirebaseFunctions.instanceFor(region: 'europe-west3').httpsCallable('listPublicSlotsFn');
-      final res = await fn.call(<String, dynamic>{
+      final bgPayload = <String, dynamic>{
         'clinicId': widget.clinicId.trim(),
         'serviceId': 'default',
         'practitionerId': practitionerId,
         'rangeStartMs': startUtc.millisecondsSinceEpoch,
         'rangeEndMs': endUtc.millisecondsSinceEpoch,
-        'tz': 'Europe/Prague',
-      }).timeout(_confirmTimeout);
+      };
+      final apptTypeIdBg = (_selectedAppointmentTypeId ?? '').trim();
+      if (apptTypeIdBg.isNotEmpty) bgPayload['appointmentTypeId'] = apptTypeIdBg;
+      final locIdBg = (_selectedLocationId ?? '').trim();
+      if (locIdBg.isNotEmpty) bgPayload['locationId'] = locIdBg;
+      final res = await fn.call(bgPayload).timeout(_confirmTimeout);
       final rawData = res.data;
       if (rawData is! Map || token != _requestToken) return;
       final data = Map<String, dynamic>.from(rawData);
@@ -683,8 +892,8 @@ class _PatientBookingSimpleScreenState
   /// Prefetch slots for a single day into cache only. One at a time; no UI update.
   Future<void> _prefetchSlotsForDay(DateTime day) async {
     if (_slotsPrefetchBusy) return;
-    final practitionerId = (_selectedPractitionerId ?? '').trim();
-    if (practitionerId.isEmpty) return;
+    final practitionerId = _effectivePractitionerId;
+    if (practitionerId == null || practitionerId.isEmpty) return;
 
     _slotsPrefetchBusy = true;
     try {
@@ -697,10 +906,11 @@ class _PatientBookingSimpleScreenState
         'practitionerId': practitionerId,
         'rangeStartMs': startUtc.millisecondsSinceEpoch,
         'rangeEndMs': endUtc.millisecondsSinceEpoch,
-        'tz': 'Europe/Prague',
       };
       final apptTypeId = (_selectedAppointmentTypeId ?? '').trim();
       if (apptTypeId.isNotEmpty) prefetchPayload['appointmentTypeId'] = apptTypeId;
+      final locId = (_selectedLocationId ?? '').trim();
+      if (locId.isNotEmpty) prefetchPayload['locationId'] = locId;
       final res = await fn.call(prefetchPayload).timeout(const Duration(seconds: 15));
       final rawData = res.data;
       if (rawData is! Map) return;
@@ -721,7 +931,7 @@ class _PatientBookingSimpleScreenState
   }
 
   Future<void> _setSelectedDay(DateTime day) async {
-    final hasClinician = (_selectedPractitionerId ?? '').trim().isNotEmpty;
+    final hasClinician = _effectivePractitionerId != null;
 
     setState(() {
       _selectedDay = _dateOnly(day);
@@ -758,8 +968,8 @@ class _PatientBookingSimpleScreenState
 
   /// Finds the first day with availability from [selectedDay] + 1 using month availability cache (no slot fetch). Max horizon 90 days.
   Future<DateTime?> _findNextAvailableDate() async {
-    final practitionerId = (_selectedPractitionerId ?? '').trim();
-    if (practitionerId.isEmpty) return null;
+    final practitionerId = _effectivePractitionerId;
+    if (practitionerId == null || practitionerId.isEmpty) return null;
     DateTime cursor = _dateOnly(_selectedDay.add(const Duration(days: 1)));
     final end = _dateOnly(DateTime.now().add(const Duration(days: _nextAvailableMaxDays)));
     while (!cursor.isAfter(end)) {
@@ -853,8 +1063,8 @@ class _PatientBookingSimpleScreenState
   }
 
   Future<void> _loadMonthAvailability({DateTime? forMonth, bool silent = false}) async {
-    final practitionerId = (_selectedPractitionerId ?? '').trim();
-    if (practitionerId.isEmpty) {
+    final practitionerId = _effectivePractitionerId;
+    if (practitionerId == null || practitionerId.isEmpty) {
       if (!silent && mounted) setState(() => _monthAvail = {});
       return;
     }
@@ -886,10 +1096,11 @@ class _PatientBookingSimpleScreenState
         'practitionerId': practitionerId,
         'monthStartMs': startUtc.millisecondsSinceEpoch,
         'monthEndMs': endUtc.millisecondsSinceEpoch,
-        'tz': 'Europe/Prague',
       };
       final apptTypeId = (_selectedAppointmentTypeId ?? '').trim();
       if (apptTypeId.isNotEmpty) monthPayload['appointmentTypeId'] = apptTypeId;
+      final locId = (_selectedLocationId ?? '').trim();
+      if (locId.isNotEmpty) monthPayload['locationId'] = locId;
       final res = await fn.call(monthPayload).timeout(const Duration(seconds: 15));
 
       if (token != _requestToken) return;
@@ -924,14 +1135,14 @@ class _PatientBookingSimpleScreenState
       if (!silent && mounted && token == _requestToken) {
         setState(() {
           _monthAvail = {};
-          _monthAvailError = 'Availability preview unavailable';
+          _monthAvailError = "We couldn't load the calendar. Try again in a moment.";
         });
       }
     } catch (_) {
       if (!silent && mounted && token == _requestToken) {
         setState(() {
           _monthAvail = {};
-          _monthAvailError = 'Availability preview unavailable';
+          _monthAvailError = "We couldn't load the calendar. Try again in a moment.";
         });
       }
     } finally {
@@ -1060,29 +1271,15 @@ class _PatientBookingSimpleScreenState
     );
   }
 
-  Future<String> _createGeneralQuestionnaireToken({
-    required _PatientFormResult patient,
-  }) async {
-    final functions = FirebaseFunctions.instanceFor(region: 'europe-west3');
-    final fn = functions.httpsCallable('createGeneralQuestionnaireLinkFn');
-
-    final res = await fn.call(<String, dynamic>{
-      'clinicId': widget.clinicId.trim(),
+  Map<String, dynamic> _questionnairePrefillForPatient(_PatientFormResult patient) {
+    return {
+      'firstName': patient.firstName,
+      'lastName': patient.lastName,
+      'dobIso': patient.dob.toIso8601String(),
+      'phone': patient.phone,
       'email': patient.email,
-      'expiresInDays': 7,
-    });
-
-    if (res.data is! Map) {
-      throw Exception('Server returned unexpected payload: ${res.data}');
-    }
-
-    final data = Map<String, dynamic>.from(res.data as Map);
-    final token = (data['token'] ?? '').toString().trim();
-    if (token.isEmpty) {
-      throw Exception('Server did not return a token.');
-    }
-
-    return token;
+      'address': patient.address,
+    };
   }
 
   void _closeDialogIfOpen() {
@@ -1091,75 +1288,39 @@ class _PatientBookingSimpleScreenState
     if (nav.canPop()) nav.pop();
   }
 
-  /// ✅ Updated: ask which questionnaire to complete after booking
-  Future<void> _askPreassessmentNextStep(
-    _PatientFormResult patient, {
+  Future<void> _launchQuestionnaireTemplate(
+    QuestionnaireTemplateSummary template, {
+    required _PatientFormResult patient,
     required String bookingRequestId,
+    BuildContext? launchContext,
+    String? clinicId,
   }) async {
-    final result = await showDialog<_IntakeChoice>(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => const _QuestionnaireChoiceDialog(),
+    final ctx = launchContext ?? context;
+    final cid = clinicId ?? widget.clinicId;
+    final nav = Navigator.of(ctx);
+    unawaited(_showPreparingQuestionnaireDialog());
+    // Replace stack with public home so the screen behind the questionnaire is the homepage, not the calendar.
+    nav.pushNamedAndRemoveUntil(
+      AppRoutes.publicHome,
+      (Route<dynamic> r) => false,
+      arguments: <String, dynamic>{'clinicId': cid},
     );
-
-    if (!mounted) return;
-    if (result == null) return;
-
-    await Future.delayed(_fadePause);
-    if (!mounted) return;
-
-    if (result == _IntakeChoice.skip) return;
-
-    if (result == _IntakeChoice.preassessment) {
-      await Navigator.of(context).push(
-        PageRouteBuilder(
-          transitionDuration: _fadeDuration,
-          pageBuilder: (_, __, ___) => _PushNamedAfterFrame(
-            routeName: AppRoutes.preassessmentConsent,
-            arguments: {
-              'clinicId': widget.clinicId,
-              'bookingRequestId': bookingRequestId, // ✅ AUTO-LINK INPUT
-              'prefillPatient': {
-                'firstName': patient.firstName,
-                'lastName': patient.lastName,
-                'dobIso': patient.dob.toIso8601String(),
-                'phone': patient.phone,
-                'email': patient.email,
-                'address': patient.address,
-              },
-            },
-          ),
-          transitionsBuilder: (_, anim, __, child) =>
-              FadeTransition(opacity: anim, child: child),
-        ),
+    // Use navigator's context after stack replace (launchContext may be disposed).
+    final launchCtx = nav.context;
+    try {
+      await QuestionnaireLaunchDispatcher.launch(
+        launchCtx,
+        clinicId: cid,
+        bookingRequestId: bookingRequestId,
+        prefillPatient: _questionnairePrefillForPatient(patient),
+        template: template,
+        navigator: nav,
       );
-      return;
-    }
-
-    if (result == _IntakeChoice.general) {
-      unawaited(_showPreparingQuestionnaireDialog());
-      try {
-        final token =
-            await _createGeneralQuestionnaireToken(patient: patient);
-        _closeDialogIfOpen();
-        if (!mounted) return;
-
-        await Navigator.of(context).push(
-          PageRouteBuilder(
-            transitionDuration: _fadeDuration,
-            pageBuilder: (_, __, ___) => _PushNamedAfterFrame(
-              routeName:
-                  '${AppRoutes.generalQuestionnaireTokenBase}/$token',
-            ),
-            transitionsBuilder: (_, anim, __, child) =>
-                FadeTransition(opacity: anim, child: child),
-          ),
-        );
-      } catch (e) {
-        _closeDialogIfOpen();
-        if (!mounted) return;
-        final msg = e.toString().replaceFirst('Exception: ', '').trim();
-        ScaffoldMessenger.of(context).showSnackBar(
+    } catch (e) {
+      final msg = e.toString().replaceFirst('Exception: ', '').trim();
+      debugPrint('[QUESTIONNAIRE] Launch failed: $msg');
+      if (nav.mounted && nav.overlay != null) {
+        ScaffoldMessenger.maybeOf(nav.overlay!.context)?.showSnackBar(
           SnackBar(
             content: Text(
               msg.isEmpty ? 'Could not start questionnaire.' : msg,
@@ -1167,7 +1328,94 @@ class _PatientBookingSimpleScreenState
           ),
         );
       }
+    } finally {
+      _closeDialogIfOpen();
     }
+  }
+
+  /// Returns true if the stack was replaced (e.g. launched questionnaire with dialogContext); caller should not pop.
+  Future<bool> _continueQuestionnaireFlow(
+    _PatientFormResult patient, {
+    required String bookingRequestId,
+    required QuestionnaireFlowPublicConfig questionnaireFlow,
+    String? selectedLocationId,
+    /// When set, use this context for dialog/launch (e.g. from confirmation screen after pushNamedAndRemoveUntil unmounted this state).
+    BuildContext? dialogContext,
+    String? clinicIdForDialog,
+  }) async {
+    var activeTemplates = questionnaireFlow.enabled
+        ? questionnaireFlow.templates
+        : const <QuestionnaireTemplateSummary>[];
+    final locId = (selectedLocationId ?? '').trim();
+    // #region agent log
+    _debugIngest(
+      'patient_booking_simple_screen.dart:_continueQuestionnaireFlow:entry',
+      'Questionnaire flow entry',
+      {
+        'enabled': questionnaireFlow.enabled,
+        'templatesLength': questionnaireFlow.templates.length,
+        'selectedLocationId': locId.isEmpty ? null : locId,
+      },
+      hypothesisId: 'B',
+    );
+    // #endregion
+    // Filter by location: template with no locationIds (or empty) = all locations; otherwise only if selected location is in list.
+    if (locId.isNotEmpty) {
+      activeTemplates = activeTemplates
+          .where((t) {
+            final ids = t.locationIds;
+            if (ids == null || ids.isEmpty) return true;
+            return ids.contains(locId);
+          })
+          .toList(growable: false);
+    }
+    // #region agent log
+    _debugIngest(
+      'patient_booking_simple_screen.dart:_continueQuestionnaireFlow:afterFilter',
+      'After location filter',
+      {
+        'activeTemplatesLength': activeTemplates.length,
+        'reason': activeTemplates.isEmpty ? 'noTemplatesOrFilteredOut' : null,
+      },
+      hypothesisId: 'B',
+    );
+    // #endregion
+    if (activeTemplates.isEmpty) return false;
+
+    await Future.delayed(_fadePause);
+    final ctx = dialogContext ?? context;
+    if (dialogContext == null && !mounted) return false;
+
+    final launchCtx = dialogContext;
+
+    if (activeTemplates.length == 1) {
+      await _launchQuestionnaireTemplate(
+        activeTemplates.first,
+        patient: patient,
+        bookingRequestId: bookingRequestId,
+        launchContext: launchCtx,
+        clinicId: clinicIdForDialog,
+      );
+      return dialogContext != null;
+    }
+
+    final result = await showDialog<QuestionnaireTemplateSummary>(
+      context: ctx,
+      barrierDismissible: false,
+      builder: (_) => _QuestionnaireSelectorDialog(
+        templates: activeTemplates,
+      ),
+    );
+    if (result == null) return false;
+    if (dialogContext == null && !mounted) return false;
+    await _launchQuestionnaireTemplate(
+      result,
+      patient: patient,
+      bookingRequestId: bookingRequestId,
+      launchContext: launchCtx,
+      clinicId: clinicIdForDialog,
+    );
+    return dialogContext != null;
   }
 
   /// ✅ Callable-only create:
@@ -1183,12 +1431,12 @@ class _PatientBookingSimpleScreenState
     final auth = FirebaseAuth.instance;
     final requesterUid = auth.currentUser?.uid;
     if (requesterUid == null) {
-      throw Exception('Not signed in. Please refresh and try again.');
+      throw Exception("We couldn't complete the booking. Please refresh the page and try again.");
     }
 
     final user = auth.currentUser;
     if (user == null) {
-      throw Exception('Not signed in (anonymous auth missing).');
+      throw Exception("We couldn't complete the booking. Please refresh the page and try again.");
     }
 
     // Ensure callable definitely has context.auth.uid
@@ -1196,11 +1444,11 @@ class _PatientBookingSimpleScreenState
 
     final endLocal = startLocal.add(Duration(minutes: appt.minutes));
 
-    // Practitioner must be selected/resolved
+    // Practitioner must be selected/resolved (including "First available" -> first practitioner)
     await _loadPractitionersIfNeeded();
-    final practitionerId = (_selectedPractitionerId ?? '').trim();
-    if (practitionerId.isEmpty) {
-      throw Exception('Booking not available: Missing practitioner selection.');
+    final practitionerId = _effectivePractitionerId;
+    if (practitionerId == null || practitionerId.isEmpty) {
+      throw Exception("Something went wrong. Please go back and try again.");
     }
 
     final functions = FirebaseFunctions.instanceFor(region: 'europe-west3');
@@ -1215,8 +1463,6 @@ class _PatientBookingSimpleScreenState
 
       'startUtcMs': startLocal.toUtc().millisecondsSinceEpoch,
       'endUtcMs': endLocal.toUtc().millisecondsSinceEpoch,
-
-      'tz': 'Europe/Prague',
       'kind': (appt.kind == BookingKind.newPatient) ? 'newPatient' : 'followUp',
 
       'patient': {
@@ -1237,6 +1483,15 @@ class _PatientBookingSimpleScreenState
       },
 
     };
+
+    final selectedApptTypeId = (_selectedAppointmentTypeId ?? '').trim();
+    if (selectedApptTypeId.isNotEmpty) {
+      payload['appointmentTypeId'] = selectedApptTypeId;
+    }
+    final selectedLocId = (_selectedLocationId ?? '').trim();
+    if (selectedLocId.isNotEmpty) {
+      payload['locationId'] = selectedLocId;
+    }
 
     try {
       final res = await fn.call(payload);
@@ -1271,18 +1526,26 @@ class _PatientBookingSimpleScreenState
       return _bookingRequestsCol.doc(bookingRequestId);
     } on FirebaseFunctionsException catch (e) {
       final msg = (e.message ?? '').trim();
-      final details = e.details;
-
-      final pretty = [
-        'Booking failed',
-        if (e.code.isNotEmpty) '[${e.code}]',
-        if (msg.isNotEmpty) msg,
-        if (details != null) 'details: $details',
-      ].join(' ');
-
-      throw Exception(pretty);
+      // #region agent log
+      if (msg.contains('Selected practitioner cannot provide')) {
+        _debugIngest(
+          'patient_booking_simple_screen.dart:_createBookingRequest:error',
+          'Practitioner cannot provide appointment type',
+          {
+            'practitionerId': practitionerId,
+            'appointmentTypeId': selectedApptTypeId.isEmpty ? null : selectedApptTypeId,
+            'message': msg,
+          },
+          hypothesisId: 'A',
+        );
+      }
+      // #endregion
+      final userMsg = msg.isNotEmpty && msg.length < 100 && !msg.contains('Exception')
+          ? msg
+          : _userFriendlyError(e);
+      throw Exception(userMsg);
     } catch (e) {
-      throw Exception('Booking failed: $e');
+      throw Exception(_userFriendlyError(e));
     }
   }
 
@@ -1393,6 +1656,36 @@ class _PatientBookingSimpleScreenState
         selectedOption = null;
       }
     }
+
+    final repo = context.read<PublicBookingMirrorRepository>();
+    final mirrorData = await repo.getFullMirrorData(widget.clinicId);
+    final rules = mirrorData != null && mirrorData['bookingRules'] is Map
+        ? mirrorData['bookingRules'] as Map<String, dynamic>
+        : null;
+    final requireEmail = rules?['requireEmail'] != false;
+    final requirePhone = rules?['requirePhone'] == true;
+    final cancellationPolicyHours = (rules?['cancellationPolicyHours'] as num?)?.toInt() ?? 24;
+    final confirmationMessage = (rules?['confirmationMessage'] as String?)?.trim();
+    final confirmationMessageOrNull =
+        confirmationMessage != null && confirmationMessage.isNotEmpty ? confirmationMessage : null;
+    final questionnaireFlow =
+        QuestionnaireFlowPublicConfig.fromJson(rules?['questionnaireFlow']);
+
+    // #region agent log
+    _debugIngest(
+      'patient_booking_simple_screen.dart:details-mirror',
+      'Mirror questionnaireFlow parsed',
+      {
+        'enabled': questionnaireFlow.enabled,
+        'templatesLength': questionnaireFlow.templates.length,
+        'templateIds': questionnaireFlow.templates.map((t) => t.templateId).toList(),
+        'hasRulesQuestionnaireFlow': rules?['questionnaireFlow'] != null,
+      },
+      hypothesisId: 'B',
+    );
+    // #endregion
+
+    if (!mounted) return;
     await Navigator.of(context).push<void>(
       MaterialPageRoute(
         builder: (_) => BookingDetailsScreen(
@@ -1401,6 +1694,10 @@ class _PatientBookingSimpleScreenState
           prettyDateTime: _prettyDateTime,
           appointmentTypeOptions: _appointmentTypes,
           initialAppointmentType: selectedOption?.toAppointmentType(),
+          requireEmail: requireEmail,
+          requirePhone: requirePhone,
+          cancellationPolicyHours: cancellationPolicyHours,
+          confirmationMessage: confirmationMessageOrNull,
           onSubmit: (appt, patient) =>
               _submitBookingFromDetails(slot, appt, patient),
           onSuccess: (
@@ -1413,25 +1710,49 @@ class _PatientBookingSimpleScreenState
             final id = path.isNotEmpty
                 ? path.split('/').last
                 : (data['bookingRequestId'] ?? '').toString().trim();
-            Navigator.of(context).pop(); // pop details
-            Navigator.of(context).push<void>(
+            final clinicId = widget.clinicId;
+            final selectedLocId = _selectedLocationId;
+            final nav = Navigator.of(context);
+            nav.pop(); // pop details
+            // Show confirmation + questionnaire options on top of public home (not the calendar).
+            nav.pushNamedAndRemoveUntil(
+              AppRoutes.publicHome,
+              (Route<dynamic> r) => false,
+              arguments: <String, dynamic>{'clinicId': clinicId},
+            );
+            nav.push<void>(
               MaterialPageRoute(
-                builder: (_) => BookingConfirmationScreen(
-                  slotStartLocal: slot.startLocal,
-                  apptType: appt,
-                  bookingRequestId: id,
-                  patient: patient,
-                  clinicId: widget.clinicId,
-                  onBackToBooking: () => Navigator.of(context).pop(),
-                  onContinue: (p, reqId) =>
-                      _askPreassessmentNextStep(p, bookingRequestId: reqId),
-                  onGoHome: () {
-                    Navigator.of(context).pushNamedAndRemoveUntil(
-                      AppRoutes.publicHome,
-                      (r) => false,
-                      arguments: {'clinicId': widget.clinicId},
-                    );
-                  },
+                builder: (_) => Theme(
+                  data: PublicTheme.data,
+                  child: BookingConfirmationScreen(
+                    slotStartLocal: slot.startLocal,
+                    apptType: appt,
+                    bookingRequestId: id,
+                    patient: patient,
+                    clinicId: clinicId,
+                    cancellationPolicyHours: cancellationPolicyHours,
+                    confirmationMessage: confirmationMessageOrNull,
+                    practitionerLabel: _selectedPractitionerLabel(),
+                    locationLabel: () {
+                      final locId = (selectedLocId ?? '').trim();
+                      if (locId.isEmpty) return null;
+                      for (final l in _locations) {
+                        if (l.id == locId) return l.name;
+                      }
+                      return null;
+                    }(),
+                    onBackToBooking: () => nav.pop(),
+                    onContinue: (ctx, p, reqId) =>
+                        _continueQuestionnaireFlow(
+                      p,
+                      bookingRequestId: reqId,
+                      questionnaireFlow: questionnaireFlow,
+                      selectedLocationId: selectedLocId,
+                      dialogContext: ctx,
+                      clinicIdForDialog: clinicId,
+                    ),
+                    onGoHome: () => nav.pop(),
+                  ),
                 ),
               ),
             ).then((_) {
@@ -1482,10 +1803,23 @@ class _PatientBookingSimpleScreenState
                 ),
                 const SizedBox(height: 8),
                 Text(_authError!, textAlign: TextAlign.center),
-                const SizedBox(height: 12),
-                FilledButton(
-                  onPressed: () => Navigator.of(context).maybePop(),
-                  child: const Text('Back'),
+                const SizedBox(height: 20),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    FilledButton(
+                      onPressed: () {
+                        setState(() => _authError = null);
+                        _initAndLoad();
+                      },
+                      child: const Text('Try again'),
+                    ),
+                    const SizedBox(width: 12),
+                    TextButton(
+                      onPressed: () => Navigator.of(context).maybePop(),
+                      child: const Text('Back'),
+                    ),
+                  ],
                 ),
               ],
             ),
@@ -1508,10 +1842,86 @@ class _PatientBookingSimpleScreenState
       );
     }
 
+    if (!_bookingDataReady) {
+      return Scaffold(
+        backgroundColor: AppColors.surface,
+        appBar: AppBar(title: const Text('Book an appointment')),
+        body: Center(
+          child: Card(
+            margin: const EdgeInsets.all(24),
+            child: Padding(
+              padding: const EdgeInsets.all(32),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const SizedBox(
+                    width: 32,
+                    height: 32,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    'Loading booking options…',
+                    style: Theme.of(context).textTheme.bodyLarge,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    // Commit 50: Standardized empty states (title + explanation + optional retry).
+    if (_publicConfig == null) {
+      return _buildEmptyStateScaffold(
+        title: 'Booking not set up',
+        message:
+            'This clinic hasn\'t set up online booking yet. Please contact the clinic directly.',
+      );
+    }
+    if (!_publicConfig!.onlineBookingEnabled) {
+      return _buildEmptyStateScaffold(
+        title: 'Booking unavailable',
+        message:
+            'Online booking is not currently available for this clinic.',
+        onRetry: _loadConfigOnce,
+      );
+    }
+    if (_locations.isEmpty) {
+      return _buildEmptyStateScaffold(
+        title: 'No locations',
+        message: 'No locations available for online booking.',
+        onRetry: () => _loadLocationsIfNeeded(force: true),
+      );
+    }
+    if (_appointmentTypes.isEmpty) {
+      return _buildEmptyStateScaffold(
+        title: 'No appointment types',
+        message: 'No appointment types available for online booking.',
+        onRetry: () => _loadAppointmentTypesIfNeeded(force: true),
+      );
+    }
+    if (_practitioners.isEmpty && _practitionersLoadedOnce) {
+      return _buildEmptyStateScaffold(
+        title: 'No clinicians available',
+        message:
+            'No clinicians are currently available for online booking at this location.',
+        onRetry: _refreshAll,
+      );
+    }
+
     final controlsWidget = KeyedSubtree(
-      key: _clinicianKey,
-      child: _BookingControls(
+      key: const ValueKey('public-booking-v2'),
+      child: KeyedSubtree(
+        key: _clinicianKey,
+        child: _BookingControls(
         selectedDay: _selectedDay,
+        locations: _locations,
+        selectedLocationId: _selectedLocationId,
+        onLocationChanged: _onLocationChanged,
+        loadingLocations: _loadingLocations,
+        locationsError: _locationsError,
         appointmentTypes: _appointmentTypes,
         selectedAppointmentTypeId: _selectedAppointmentTypeId,
         onAppointmentTypeChanged: _onAppointmentTypeChanged,
@@ -1523,10 +1933,12 @@ class _PatientBookingSimpleScreenState
         loadingPractitioners: _loadingPractitioners,
         practitionersError: _practitionersError,
         selectedPractitionerLabel: _selectedPractitionerLabel(),
+        showEarliestBookableHint: _dateOnly(_selectedDay) == _dateOnly(DateTime.now()) && _slots.isNotEmpty,
       ),
+    ),
     );
 
-    final hasClinician = (_selectedPractitionerId ?? '').trim().isNotEmpty;
+    final hasClinician = _effectivePractitionerId != null;
     final monthNoAvailabilityHint = hasClinician &&
             _monthAvail.isNotEmpty &&
             !_currentMonthHasAnyAvailability()
@@ -1559,7 +1971,7 @@ class _PatientBookingSimpleScreenState
       child: _AvailableTimesPanel(
         selectedDay: _selectedDay,
         hasClinician: hasClinician,
-        practitionerId: _selectedPractitionerId,
+        practitionerId: _effectivePractitionerId,
         loadingSlots: _loadingSlots,
         slotsError: _slotsError,
         slots: _slots,
@@ -1571,18 +1983,27 @@ class _PatientBookingSimpleScreenState
         onNextAvailable: _jumpToNextAvailable,
         prettyDayLabel: _prettyLongDate,
         practitionerLabel: _selectedPractitionerLabel(),
+        locationLabel: () {
+          final locId = (_selectedLocationId ?? '').trim();
+          if (locId.isEmpty) return _locations.length > 1 ? 'Any location' : null;
+          for (final l in _locations) {
+            if (l.id == locId) return l.name;
+          }
+          return null;
+        }(),
       ),
     );
 
     return PublicBookingMirrorHealthBanner(
       clinicId: cid,
       child: PublicShell(
-        title: null,
-        subtitle: null,
+        title: 'Choose a time',
+        subtitle: 'Select clinician, then pick a day.',
         showBack: true,
         topRight: PublicContactActions(clinicId: cid, debugWhenEmpty: kDebugMode),
         scrollableCard: false,
         showPoweredBy: false,
+        clinicId: cid,
         child: LayoutBuilder(
         builder: (context, constraints) {
           final isTwoCol =
@@ -1590,10 +2011,7 @@ class _PatientBookingSimpleScreenState
 
           if (isTwoCol) {
             return _TwoColumnBookingPanel(
-              header: const PublicHeader(
-                title: 'Choose a time',
-                subtitle: 'Select clinician, then pick a day.',
-              ),
+              header: const SizedBox.shrink(),
               stepIndicator: const _BookingStepIndicator(step: 1),
               hasClinician: hasClinician,
               visibleMonth: _visibleMonth,
@@ -1643,9 +2061,61 @@ class _PatientBookingSimpleScreenState
   String _selectedPractitionerLabel() {
     final id = (_selectedPractitionerId ?? '').trim();
     if (id.isEmpty) return '';
+    if (id == '__first_available__') return 'First available';
     final match = _practitioners.where((p) => p.id == id).toList(growable: false);
     if (match.isEmpty) return _shortId(id);
     return match.first.displayName;
+  }
+
+  /// Commit 50: Standardized empty state (title, explanation, optional retry).
+  Widget _buildEmptyStateScaffold({
+    required String title,
+    required String message,
+    VoidCallback? onRetry,
+  }) {
+    return Scaffold(
+      backgroundColor: AppColors.surface,
+      appBar: AppBar(title: const Text('Book an appointment')),
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.info_outline,
+                size: 48,
+                color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.5),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                title,
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w600,
+                    ),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 8),
+              Text(
+                message,
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.8),
+                    ),
+                textAlign: TextAlign.center,
+              ),
+              if (onRetry != null) ...[
+                const SizedBox(height: 24),
+                FilledButton.icon(
+                  onPressed: onRetry,
+                  icon: const Icon(Icons.refresh, size: 20),
+                  label: const Text('Try again'),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }
 
@@ -1668,7 +2138,7 @@ String _weekdayShort(DateTime d) => _weekdaysShort[d.weekday - 1];
 String _prettyLongDate(DateTime d) =>
     '${_weekdayShort(d)} ${d.day} ${_monthNames[d.month - 1]} ${d.year}';
 
-/// Step indicator for the booking grid screen (Step 1 of 3).
+/// Step indicator for the booking grid screen (step 1 of 3 with progress bar).
 class _BookingStepIndicator extends StatelessWidget {
   final int step;
 
@@ -1677,18 +2147,36 @@ class _BookingStepIndicator extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final primary = theme.colorScheme.primary;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          'Step $step of 3',
-          style: theme.textTheme.labelSmall?.copyWith(
-            color: Colors.black54,
-          ),
+        Row(
+          children: [
+            Expanded(
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(2),
+                child: LinearProgressIndicator(
+                  value: step / 3,
+                  minHeight: 4,
+                  backgroundColor: theme.colorScheme.surfaceContainerHighest,
+                  valueColor: AlwaysStoppedAnimation<Color>(primary),
+                ),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Text(
+              'Step $step of 3',
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: Colors.black54,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
         ),
-        const SizedBox(height: 4),
+        const SizedBox(height: 6),
         Text(
-          'Type — Details — Confirm',
+          'Service — Location — Practitioner — Date & time',
           style: theme.textTheme.bodySmall?.copyWith(
             color: Colors.black45,
           ),
@@ -1700,6 +2188,11 @@ class _BookingStepIndicator extends StatelessWidget {
 
 class _BookingControls extends StatelessWidget {
   final DateTime selectedDay;
+  final List<_LocationOption> locations;
+  final String? selectedLocationId;
+  final void Function(String?) onLocationChanged;
+  final bool loadingLocations;
+  final String? locationsError;
   final List<_AppointmentTypeOption> appointmentTypes;
   final String? selectedAppointmentTypeId;
   final void Function(String?) onAppointmentTypeChanged;
@@ -1711,9 +2204,16 @@ class _BookingControls extends StatelessWidget {
   final bool loadingPractitioners;
   final String? practitionersError;
   final String selectedPractitionerLabel;
+  /// When true and selected day is today, show "Earliest bookable today: HH:MM". When false, avoid showing that when there are no slots.
+  final bool showEarliestBookableHint;
 
   const _BookingControls({
     required this.selectedDay,
+    required this.locations,
+    required this.selectedLocationId,
+    required this.onLocationChanged,
+    required this.loadingLocations,
+    required this.locationsError,
     required this.appointmentTypes,
     required this.selectedAppointmentTypeId,
     required this.onAppointmentTypeChanged,
@@ -1725,58 +2225,46 @@ class _BookingControls extends StatelessWidget {
     required this.loadingPractitioners,
     required this.practitionersError,
     required this.selectedPractitionerLabel,
+    this.showEarliestBookableHint = false,
   });
+
+  static const double _compactDropdownMaxWidth = 200;
+  static const double _compactBreakpoint = 600;
 
   @override
   Widget build(BuildContext context) {
     final now = DateTime.now();
     final leadCutoff = now.add(const Duration(hours: 1));
+    final theme = Theme.of(context);
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        if (appointmentTypes.isNotEmpty) ...[
-          InputDecorator(
-            decoration: InputDecoration(
-              labelText: 'Appointment type',
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(AppRadius.element),
-              ),
-              isDense: true,
-            ),
-            child: DropdownButtonHideUnderline(
-              child: DropdownButton<String>(
-                isExpanded: true,
-                value: (selectedAppointmentTypeId ?? '').trim().isEmpty ? null : selectedAppointmentTypeId,
-                hint: const Text('Select appointment type'),
-                items: appointmentTypes
-                    .map(
-                      (t) => DropdownMenuItem<String>(
-                        value: t.id,
-                        child: Text(t.name),
-                      ),
-                    )
-                    .toList(),
-                onChanged: loadingAppointmentTypes ? null : onAppointmentTypeChanged,
-              ),
+    Widget locationDropdown() => InputDecorator(
+          decoration: InputDecoration(
+            labelText: 'Location',
+            border: const OutlineInputBorder(),
+            isDense: true,
+          ),
+          child: DropdownButtonHideUnderline(
+            child: DropdownButton<String>(
+              isExpanded: true,
+              alignment: Alignment.centerLeft,
+              value: (selectedLocationId ?? '').isEmpty ? '' : selectedLocationId!,
+              hint: const Text('Any location', overflow: TextOverflow.ellipsis),
+              items: [
+                const DropdownMenuItem(value: '', child: Text('Any location')),
+                ...locations.map((loc) => DropdownMenuItem(
+                      value: loc.id,
+                      child: Text(loc.name, overflow: TextOverflow.ellipsis),
+                    )),
+              ],
+              onChanged:
+                  loadingLocations ? null : (id) => onLocationChanged(id?.isEmpty == true ? null : id),
             ),
           ),
-          if (appointmentTypesError != null)
-            Padding(
-              padding: const EdgeInsets.only(top: 4),
-              child: Text(
-                appointmentTypesError!,
-                softWrap: true,
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: Theme.of(context).colorScheme.error,
-                    ),
-              ),
-            ),
-          const SizedBox(height: 12),
-        ],
-        InputDecorator(
+        );
+
+    Widget typeDropdown() => InputDecorator(
           decoration: InputDecoration(
-            labelText: 'Clinician',
+            labelText: 'Appointment type',
             border: OutlineInputBorder(
               borderRadius: BorderRadius.circular(AppRadius.element),
             ),
@@ -1785,65 +2273,236 @@ class _BookingControls extends StatelessWidget {
           child: DropdownButtonHideUnderline(
             child: DropdownButton<String>(
               isExpanded: true,
-              value: (selectedPractitionerId ?? '').trim().isEmpty
-                  ? null
-                  : selectedPractitionerId,
-              hint: const Text('Select a clinician'),
-              items: practitioners
+              alignment: Alignment.centerLeft,
+              value: (selectedAppointmentTypeId ?? '').trim().isEmpty ? null : selectedAppointmentTypeId,
+              hint: const Text('Select type', overflow: TextOverflow.ellipsis),
+              items: appointmentTypes
                   .map(
-                    (p) => DropdownMenuItem<String>(
-                      value: p.id,
-                      child: p.title != null && p.title!.isNotEmpty
-                          ? Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Text(p.displayName),
-                                Text(
-                                  p.title!,
-                                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                                  ),
-                                ),
-                              ],
-                            )
-                          : Text(p.displayName),
+                    (t) => DropdownMenuItem<String>(
+                      value: t.id,
+                      child: Text(t.name, overflow: TextOverflow.ellipsis),
                     ),
                   )
                   .toList(),
-              onChanged: loadingPractitioners ? null : onPractitionerChanged,
+              onChanged: loadingAppointmentTypes ? null : onAppointmentTypeChanged,
             ),
           ),
-        ),
-        const SizedBox(height: 8),
-        Text(
-          _dateOnlyForBooking(selectedDay) == _dateOnlyForBooking(now)
-              ? 'Earliest bookable today: ${_twoDigits(leadCutoff.hour)}:${_twoDigits(leadCutoff.minute)}'
-              : 'Book at least 1 hour in advance.',
-          style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                color: Theme.of(context).textTheme.bodySmall?.color,
-              ),
-        ),
-        if (loadingPractitioners)
-          const Padding(
-            padding: EdgeInsets.only(top: 10),
-            child: SizedBox(
-              height: 18,
-              width: 18,
-              child: CircularProgressIndicator(strokeWidth: 2),
-            ),
+        );
+
+    Widget clinicianDropdown() {
+      const firstAvailableValue = '__first_available__';
+      final items = <DropdownMenuItem<String>>[
+        if (practitioners.length > 1)
+          const DropdownMenuItem<String>(
+            value: firstAvailableValue,
+            child: Text('First available', overflow: TextOverflow.ellipsis),
           ),
-        if (practitionersError != null)
-          Padding(
-            padding: const EdgeInsets.only(top: 8),
-            child: Text(
-              practitionersError!,
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: Theme.of(context).colorScheme.error,
+        ...practitioners.map(
+          (p) => DropdownMenuItem<String>(
+            value: p.id,
+            child: p.title != null && p.title!.isNotEmpty
+                ? Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(p.displayName, overflow: TextOverflow.ellipsis),
+                      Text(
+                        p.title!,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  )
+                : Text(p.displayName, overflow: TextOverflow.ellipsis),
+          ),
+        ),
+      ];
+      return InputDecorator(
+        decoration: InputDecoration(
+          labelText: 'Clinician',
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(AppRadius.element),
+          ),
+          isDense: true,
+        ),
+        child: DropdownButtonHideUnderline(
+          child: DropdownButton<String>(
+            isExpanded: true,
+            alignment: Alignment.centerLeft,
+            value: (selectedPractitionerId ?? '').trim().isEmpty
+                ? null
+                : selectedPractitionerId,
+            hint: const Text('Select clinician', overflow: TextOverflow.ellipsis),
+            items: items,
+            onChanged: loadingPractitioners ? null : onPractitionerChanged,
+          ),
+        ),
+      );
+    }
+
+    Widget hintText() {
+      final isToday = _dateOnlyForBooking(selectedDay) == _dateOnlyForBooking(now);
+      final showEarliest = showEarliestBookableHint && isToday;
+      return Text(
+        showEarliest
+            ? 'Earliest bookable today: ${_twoDigits(leadCutoff.hour)}:${_twoDigits(leadCutoff.minute)}'
+            : 'Book at least 1 hour in advance.',
+        style: theme.textTheme.labelSmall?.copyWith(
+          color: theme.textTheme.bodySmall?.color,
+        ),
+      );
+    }
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final compact = constraints.maxWidth >= _compactBreakpoint;
+        if (compact) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (locationsError != null)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 6),
+                  child: Text(
+                    locationsError!,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.error,
+                    ),
                   ),
-            ),
-          ),
-      ],
+                ),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  if (appointmentTypes.isNotEmpty) ...[
+                    SizedBox(
+                      width: _compactDropdownMaxWidth,
+                      child: typeDropdown(),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 4),
+                      child: Icon(
+                        Icons.arrow_forward,
+                        size: 18,
+                        color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.7),
+                      ),
+                    ),
+                  ],
+                  if (locations.isNotEmpty) ...[
+                    SizedBox(
+                      width: _compactDropdownMaxWidth,
+                      child: locationDropdown(),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 4),
+                      child: Icon(
+                        Icons.arrow_forward,
+                        size: 18,
+                        color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.7),
+                      ),
+                    ),
+                  ],
+                  SizedBox(
+                    width: _compactDropdownMaxWidth,
+                    child: clinicianDropdown(),
+                  ),
+                ],
+              ),
+              if (appointmentTypesError != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text(
+                    appointmentTypesError!,
+                    softWrap: true,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.error,
+                    ),
+                  ),
+                ),
+              const SizedBox(height: 6),
+              hintText(),
+              if (loadingPractitioners)
+                const Padding(
+                  padding: EdgeInsets.only(top: 6),
+                  child: SizedBox(
+                    height: 18,
+                    width: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                ),
+              if (practitionersError != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: Text(
+                    practitionersError!,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.error,
+                    ),
+                  ),
+                ),
+            ],
+          );
+        }
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (locations.isNotEmpty) ...[
+              if (locationsError != null)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Text(
+                    locationsError!,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.error,
+                    ),
+                  ),
+                ),
+              locationDropdown(),
+              const SizedBox(height: 12),
+            ],
+            if (appointmentTypes.isNotEmpty) ...[
+              typeDropdown(),
+              if (appointmentTypesError != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text(
+                    appointmentTypesError!,
+                    softWrap: true,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.error,
+                    ),
+                  ),
+                ),
+              const SizedBox(height: 12),
+            ],
+            clinicianDropdown(),
+            const SizedBox(height: 8),
+            hintText(),
+            if (loadingPractitioners)
+              const Padding(
+                padding: EdgeInsets.only(top: 10),
+                child: SizedBox(
+                  height: 18,
+                  width: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+              ),
+            if (practitionersError != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text(
+                  practitionersError!,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.error,
+                  ),
+                ),
+              ),
+          ],
+        );
+      },
     );
   }
 }
@@ -1864,6 +2523,7 @@ class _AvailableTimesPanel extends StatelessWidget {
   final VoidCallback? onNextAvailable;
   final String Function(DateTime) prettyDayLabel;
   final String? practitionerLabel;
+  final String? locationLabel;
 
   const _AvailableTimesPanel({
     required this.selectedDay,
@@ -1880,6 +2540,7 @@ class _AvailableTimesPanel extends StatelessWidget {
     this.onNextAvailable,
     required this.prettyDayLabel,
     this.practitionerLabel,
+    this.locationLabel,
   });
 
   static const double slotTileHeight = 58;
@@ -1900,24 +2561,41 @@ class _AvailableTimesPanel extends StatelessWidget {
           child: Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Available times',
-              style: theme.textTheme.titleMedium,
-            ),
-            const SizedBox(height: 4),
-            if (formattedSelectedDate != null)
+        Semantics(
+          liveRegion: true,
+          label: formattedSelectedDate != null
+              ? 'Available times for $formattedSelectedDate'
+              : 'Available times. Select a date.',
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
               Text(
-                formattedSelectedDate,
-                style: theme.textTheme.titleLarge?.copyWith(
-                  fontWeight: FontWeight.w600,
+                'Available times',
+                style: theme.textTheme.titleMedium,
+              ),
+              const SizedBox(height: 4),
+              if (formattedSelectedDate != null)
+                Text(
+                  formattedSelectedDate,
+                  style: theme.textTheme.titleLarge?.copyWith(
+                    fontWeight: FontWeight.w600,
+                  ),
+                )
+              else
+                Text('Select a date'),
+              if (formattedSelectedDate != null) ...[
+                const SizedBox(height: 2),
+                Text(
+                  slots.isEmpty && !loadingSlots && slotsError == null
+                      ? 'No times available'
+                      : 'Choose a time',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurface.withValues(alpha: 0.65),
+                  ),
                 ),
-              )
-            else
-              Text('Select a date'),
-          ],
+              ],
+            ],
+          ),
         ),
         const SizedBox(height: 16),
         if (selectedSlot != null && practitionerLabel != null && practitionerLabel!.isNotEmpty) ...[
@@ -1928,21 +2606,22 @@ class _AvailableTimesPanel extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
-                  '$practitionerLabel · ${prettyTime(selectedSlot!.startLocal)}',
+                  locationLabel != null && locationLabel!.isNotEmpty
+                      ? '$practitionerLabel · ${locationLabel!} · ${prettyTime(selectedSlot!.startLocal)}'
+                      : '$practitionerLabel · ${prettyTime(selectedSlot!.startLocal)}',
                   style: theme.textTheme.bodySmall?.copyWith(
                     color: theme.colorScheme.onSurface.withValues(alpha: 0.8),
                   ),
                 ),
-                if (kIsWeb)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 2),
-                    child: Text(
-                      'Times shown in local time',
-                      style: theme.textTheme.labelSmall?.copyWith(
-                        color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
-                      ),
+                Padding(
+                  padding: const EdgeInsets.only(top: 2),
+                  child: Text(
+                    'Times in clinic timezone',
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
                     ),
                   ),
+                ),
               ],
             ),
           ),
@@ -1961,8 +2640,13 @@ class _AvailableTimesPanel extends StatelessWidget {
   }
 
   Widget _buildBody(BuildContext context) {
+    final bodyKey = ValueKey(
+      '${selectedDay.toIso8601String()}|${practitionerId ?? 'any'}|loading=$loadingSlots|err=${slotsError != null}',
+    );
+
+    Widget content;
     if (!hasClinician) {
-      return Center(
+      content = Center(
         child: Padding(
           padding: const EdgeInsets.all(AppSpacing.screenPadding),
           child: Text(
@@ -1974,12 +2658,10 @@ class _AvailableTimesPanel extends StatelessWidget {
           ),
         ),
       );
-    }
-    if (loadingSlots) {
-      return _LoadingPlaceholderGrid();
-    }
-    if (slotsError != null) {
-      return Center(
+    } else if (loadingSlots) {
+      content = _LoadingPlaceholderGrid();
+    } else if (slotsError != null) {
+      content = Center(
         child: Padding(
           padding: const EdgeInsets.all(AppSpacing.elementGap),
           child: Column(
@@ -2006,45 +2688,111 @@ class _AvailableTimesPanel extends StatelessWidget {
           ),
         ),
       );
-    }
-    if (slots.isEmpty) {
-      return SingleChildScrollView(
+    } else if (slots.isEmpty) {
+      content = SingleChildScrollView(
         child: Center(
           child: Padding(
             padding: const EdgeInsets.all(AppSpacing.screenPadding),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
+                Icon(
+                  Icons.schedule,
+                  size: 40,
+                  color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.4),
+                ),
+                const SizedBox(height: 12),
                 Text(
-                  'No appointments available',
+                  'No times available',
                   textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: Colors.black87,
+                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w600,
+                    color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.87),
                   ),
                 ),
-                const SizedBox(height: 8),
+                const SizedBox(height: 6),
                 Text(
-                  'Try another day or jump to the next available time.',
+                  'No times are available on this day. Try another date.',
                   textAlign: TextAlign.center,
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: Colors.black45,
+                    color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6),
                   ),
                 ),
-                const SizedBox(height: 16),
+                const SizedBox(height: 20),
                 if (onNextAvailable != null)
-                  FilledButton.icon(
-                    onPressed: onNextAvailable,
-                    icon: const Icon(Icons.calendar_today, size: 18),
-                    label: const Text('Next available'),
+                  Semantics(
+                    button: true,
+                    label: 'Jump to next available date with slots',
+                    child: FilledButton.tonalIcon(
+                      onPressed: onNextAvailable,
+                      icon: const Icon(Icons.calendar_today, size: 18),
+                      label: const Text('Next available'),
+                    ),
                   ),
               ],
             ),
           ),
         ),
       );
+    } else {
+      content = Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(bottom: 6),
+            child: Tooltip(
+              message: 'First available time on this day',
+              child: Text(
+                'Earliest available',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6),
+                ),
+              ),
+            ),
+          ),
+          Expanded(
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final width = constraints.maxWidth;
+                final crossAxisCount = width < 260 ? 2 : (width < 520 ? 3 : (width < 900 ? 4 : 5));
+                final childWidth = (width - (crossAxisCount - 1) * gridSpacing) / crossAxisCount;
+                final childAspectRatio = childWidth / slotTileHeight;
+                return SingleChildScrollView(
+                  child: GridView.builder(
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    padding: const EdgeInsets.only(top: 8),
+                    gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: crossAxisCount,
+                      mainAxisSpacing: gridSpacing,
+                      crossAxisSpacing: gridSpacing,
+                      childAspectRatio: childAspectRatio,
+                    ),
+                    itemCount: slots.length,
+                    itemBuilder: (context, i) {
+                      final s = slots[i];
+                      final selected = selectedSlot != null &&
+                          selectedSlot!.startLocal.millisecondsSinceEpoch == s.startLocal.millisecondsSinceEpoch;
+                      return SlotTile(
+                        label: prettyTime(s.startLocal),
+                        corporate: isCorporateDay,
+                        selected: selected,
+                        badge: i == 0 ? 'Earliest' : null,
+                        onTap: () => onSlotTap(s),
+                      );
+                    },
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
+      );
     }
+
     return AnimatedSwitcher(
-      duration: const Duration(milliseconds: 220),
+      duration: const Duration(milliseconds: 200),
       switchInCurve: Curves.easeOut,
       switchOutCurve: Curves.easeIn,
       transitionBuilder: (child, animation) {
@@ -2060,71 +2808,19 @@ class _AvailableTimesPanel extends StatelessWidget {
         );
       },
       child: Container(
-        key: ValueKey(
-            '${selectedDay.toIso8601String()}-${practitionerId ?? 'any'}'),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Padding(
-              padding: const EdgeInsets.only(bottom: 6),
-              child: Tooltip(
-                message: 'First available time on this day',
-                child: Text(
-                  'Earliest available',
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6),
-                  ),
-                ),
-              ),
-            ),
-            Expanded(
-              child: LayoutBuilder(
-          builder: (context, constraints) {
-            final width = constraints.maxWidth;
-            final crossAxisCount = width < 260 ? 2 : (width < 520 ? 3 : (width < 900 ? 4 : 5));
-            final childWidth = (width - (crossAxisCount - 1) * gridSpacing) / crossAxisCount;
-            final childAspectRatio = childWidth / slotTileHeight;
-            return SingleChildScrollView(
-              child: GridView.builder(
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                padding: const EdgeInsets.only(top: 8),
-                gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: crossAxisCount,
-                  mainAxisSpacing: gridSpacing,
-                  crossAxisSpacing: gridSpacing,
-                  childAspectRatio: childAspectRatio,
-                ),
-                itemCount: slots.length,
-                itemBuilder: (context, i) {
-                  final s = slots[i];
-                  final selected = selectedSlot != null &&
-                      selectedSlot!.startLocal.millisecondsSinceEpoch == s.startLocal.millisecondsSinceEpoch;
-                  return SlotTile(
-                    label: prettyTime(s.startLocal),
-                    corporate: isCorporateDay,
-                    selected: selected,
-                    badge: i == 0 ? 'Earliest' : null,
-                    onTap: () => onSlotTap(s),
-                  );
-                },
-              ),
-            );
-          },
-        ),
-            ),
-          ],
-        ),
+        key: bodyKey,
+        child: content,
       ),
     );
   }
 }
 
-/// 6–8 disabled placeholder tiles while loading (or searching next available).
+/// Skeleton placeholder tiles while loading slots (grey rounded rectangles).
 class _LoadingPlaceholderGrid extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final color = theme.colorScheme.surfaceContainerHighest;
     return LayoutBuilder(
       builder: (context, constraints) {
         final width = constraints.maxWidth;
@@ -2141,11 +2837,10 @@ class _LoadingPlaceholderGrid extends StatelessWidget {
             childAspectRatio: childAspectRatio,
           ),
           itemCount: placeholders,
-          itemBuilder: (context, i) => Opacity(
-            opacity: 0.5,
-            child: SlotTile(
-              label: '--:--',
-              disabled: true,
+          itemBuilder: (context, i) => Container(
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.6),
+              borderRadius: BorderRadius.circular(AppRadius.element),
             ),
           ),
         );
@@ -2194,106 +2889,105 @@ class _TwoColumnBookingPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final h = MediaQuery.sizeOf(context).height;
-    // Taller panel so the calendar has more vertical space (needs height more than width).
-    final panelH = (h - 180).clamp(580.0, 820.0);
+    const double calendarPreferredHeight = 320.0;
+    const double slotsMinHeight = 200.0;
+    const double horizontalGap = 24.0;
 
-    return SizedBox(
-      height: panelH,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // 1) Clinician fixed at top (full width)
-          header,
-          const SizedBox(height: 16),
-          stepIndicator,
-          const SizedBox(height: 16),
-          controls,
-          const SizedBox(height: 16),
-          // 2) Below: two columns — left = month calendar (gets remaining space), right = narrow scrollable slots
-          Expanded(
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                return Row(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    // Left: month calendar (Expanded so it gets more room; right column is fixed width)
-                    Expanded(
-                      child: LayoutBuilder(
-                        builder: (context, innerConstraints) {
-                          final calMaxHeight = (innerConstraints.maxHeight - 32).clamp(200.0, double.infinity);
-                          return Column(
-                            mainAxisSize: MainAxisSize.min,
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              if (monthAvailabilityHint != null) ...[
-                                monthAvailabilityHint!,
-                                const SizedBox(height: 8),
-                              ],
-                              ConstrainedBox(
-                                constraints: BoxConstraints(
-                                  minHeight: 320.0.clamp(0.0, calMaxHeight),
-                                  maxWidth: 400,
-                                  maxHeight: calMaxHeight,
-                                ),
+    final mq = MediaQuery.of(context);
+    final topPadding = mq.padding.top + kToolbarHeight;
+    final bottomPadding = mq.padding.bottom;
+    final availableHeight = mq.size.height - topPadding - bottomPadding - 24; // 24 = vertical padding
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 8, bottom: 24),
+      child: SizedBox(
+        height: availableHeight.clamp(400.0, double.infinity),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            header,
+            const SizedBox(height: 8),
+            stepIndicator,
+            const SizedBox(height: 8),
+            controls,
+            if (monthAvailabilityHint != null) ...[
+              const SizedBox(height: 8),
+              monthAvailabilityHint!,
+            ],
+            const SizedBox(height: 12),
+            Expanded(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  SizedBox(
+                    width: 400,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: LayoutBuilder(
+                            builder: (context, c) {
+                              final calHeight = (c.maxHeight - (monthAvailError != null ? 28.0 : 0.0))
+                                  .clamp(200.0, calendarPreferredHeight);
+                              return SizedBox(
+                                height: calHeight,
                                 child: InlineMonthCalendar(
-                                    visibleMonth: visibleMonth,
-                                    selectedDay: selectedDay,
-                                    firstAllowedDay: firstAllowedDay,
-                                    lastAllowedDay: lastAllowedDay,
-                                    onDaySelected: onDaySelected,
-                                    onMonthChanged: onMonthChanged,
-                                    availabilityByYmd: availabilityByYmd,
-                                    loadingAvailability: loadingMonthAvail,
-                                    disableDaysWithoutAvailability: hasClinician,
-                                    maxHeight: calMaxHeight,
-                                    footer: Tooltip(
-                                      message: 'Based on number of available times',
-                                      child: const InlineMonthCalendarLegend(),
-                                    ),
-                                    trailingAction: IconButton(
-                                      tooltip: 'Refresh',
-                                      icon: loadingMonthAvail
-                                          ? const SizedBox(
-                                              height: 24,
-                                              width: 24,
-                                              child: CircularProgressIndicator(strokeWidth: 2),
-                                            )
-                                          : const Icon(Icons.refresh),
-                                      onPressed: loadingMonthAvail
-                                          ? null
-                                          : onRefresh,
-                                    ),
+                                  visibleMonth: visibleMonth,
+                                  selectedDay: selectedDay,
+                                  firstAllowedDay: firstAllowedDay,
+                                  lastAllowedDay: lastAllowedDay,
+                                  onDaySelected: onDaySelected,
+                                  onMonthChanged: onMonthChanged,
+                                  availabilityByYmd: availabilityByYmd,
+                                  loadingAvailability: loadingMonthAvail,
+                                  disableDaysWithoutAvailability: hasClinician,
+                                  maxHeight: calHeight,
+                                  footer: Tooltip(
+                                    message: 'Based on number of available times',
+                                    child: const InlineMonthCalendarLegend(),
+                                  ),
+                                  trailingAction: IconButton(
+                                    tooltip: 'Refresh',
+                                    icon: loadingMonthAvail
+                                        ? const SizedBox(
+                                            height: 24,
+                                            width: 24,
+                                            child: CircularProgressIndicator(strokeWidth: 2),
+                                          )
+                                        : const Icon(Icons.refresh),
+                                    onPressed: loadingMonthAvail ? null : onRefresh,
                                   ),
                                 ),
-                          if (monthAvailError != null) ...[
-                            const SizedBox(height: 6),
-                            Text(
-                              monthAvailError!,
-                              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                color: Theme.of(context).colorScheme.error,
-                              ),
+                              );
+                            },
+                          ),
+                        ),
+                        if (monthAvailError != null) ...[
+                          const SizedBox(height: 6),
+                          Text(
+                            monthAvailError!,
+                            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                              color: Theme.of(context).colorScheme.error,
                             ),
-                          ],
+                          ),
                         ],
-                      );
-                  },
-                ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: horizontalGap),
+                  Expanded(
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(minHeight: slotsMinHeight),
+                      child: slotSection,
+                    ),
+                  ),
+                ],
               ),
-              const SizedBox(width: 24),
-              // Right: _AvailableTimesPanel — give bounded height so inner Expanded doesn't overflow
-              SizedBox(
-                width: PatientBookingSimpleScreen.slotsColMaxWidth,
-                height: constraints.maxHeight,
-                child: slotSection,
-              ),
-            ],
-          );
-        },
-      ),
-    ),
-        ],
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -2343,19 +3037,27 @@ class _SingleColumnBookingPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      controller: scrollController,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const PublicHeader(
-            title: 'Choose a time',
-            subtitle: 'Select clinician, then pick a day.',
-          ),
-          const SizedBox(height: 16),
-          const _BookingStepIndicator(step: 1),
-          const SizedBox(height: 12),
-          controls,
+    final viewportHeight = MediaQuery.sizeOf(context).height;
+    final padding = MediaQuery.paddingOf(context);
+    final maxHeight = viewportHeight - padding.top - padding.bottom - 56;
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final boundedHeight = constraints.maxHeight.isFinite && constraints.maxHeight > 0
+            ? constraints.maxHeight
+            : maxHeight;
+        return SizedBox(
+          height: boundedHeight,
+          child: SingleChildScrollView(
+            controller: scrollController,
+            child: Padding(
+              padding: const EdgeInsets.only(top: 4, bottom: 24),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const _BookingStepIndicator(step: 1),
+                  const SizedBox(height: 8),
+                  controls,
           const SizedBox(height: 16),
           // 2) Calendar — fixed height so full 6-row month is always visible (no "only week" problem)
           if (monthAvailabilityHint != null) ...[
@@ -2376,6 +3078,7 @@ class _SingleColumnBookingPanel extends StatelessWidget {
                 availabilityByYmd: monthAvail,
                 loadingAvailability: loadingMonthAvail,
                 disableDaysWithoutAvailability: hasClinician,
+                maxHeight: _calendarHeightForMobile(context),
                 footer: Tooltip(
                   message: 'Based on number of available times',
                   child: const InlineMonthCalendarLegend(),
@@ -2422,8 +3125,12 @@ class _SingleColumnBookingPanel extends StatelessWidget {
             height: 420,
             child: slotSection,
           ),
-        ],
-      ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 }
@@ -2444,8 +3151,6 @@ double _calendarHeightForMobile(BuildContext context) {
 enum BookingKind { newPatient, followUp }
 
 enum CorporateMode { linkOnly, codeUnlock }
-
-enum _IntakeChoice { skip, preassessment, general }
 
 class _AppointmentType {
   final int minutes;
@@ -2533,6 +3238,13 @@ class _AppointmentTypeOption {
   }
 }
 
+class _LocationOption {
+  final String id;
+  final String name;
+
+  const _LocationOption({required this.id, required this.name});
+}
+
 class _PractitionerOption {
   final String id;
   final String displayName;
@@ -2574,6 +3286,10 @@ class BookingDetailsScreen extends StatefulWidget {
     _AppointmentType appt,
     _PatientFormResult patient,
   ) onSuccess;
+  final bool requireEmail;
+  final bool requirePhone;
+  final int cancellationPolicyHours;
+  final String? confirmationMessage;
 
   const BookingDetailsScreen({
     super.key,
@@ -2584,6 +3300,10 @@ class BookingDetailsScreen extends StatefulWidget {
     this.initialAppointmentType,
     required this.onSubmit,
     required this.onSuccess,
+    this.requireEmail = true,
+    this.requirePhone = false,
+    this.cancellationPolicyHours = 24,
+    this.confirmationMessage,
   });
 
   @override
@@ -2612,41 +3332,65 @@ class _BookingDetailsScreenState extends State<BookingDetailsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final mq = MediaQuery.of(context);
+    final availableHeight = mq.size.height -
+        mq.padding.top -
+        kToolbarHeight -
+        mq.padding.bottom;
+
     return PublicShell(
       showBack: true,
       scrollableCard: true,
       showPoweredBy: false,
       title: null,
       subtitle: null,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          _buildStepIndicator(context),
-          const SizedBox(height: AppSpacing.sectionGap),
-          AnimatedSize(
-            duration: _stepTransitionDuration,
-            curve: Curves.easeOut,
-            alignment: Alignment.topCenter,
-            child: AnimatedSwitcher(
-              duration: _stepTransitionDuration,
-              switchInCurve: Curves.easeOut,
-              switchOutCurve: Curves.easeIn,
-              transitionBuilder: (child, anim) {
-                final fade = FadeTransition(opacity: anim, child: child);
-                final offsetAnim = Tween<Offset>(
-                  begin: const Offset(0, 0.03),
-                  end: Offset.zero,
-                ).animate(CurvedAnimation(parent: anim, curve: Curves.easeOut));
-                return SlideTransition(position: offsetAnim, child: fade);
-              },
-              child: KeyedSubtree(
-                key: ValueKey<int>(_submitting ? 3 : _step),
-                child: _buildStepBody(),
+      clinicId: widget.clinicId,
+      child: SizedBox(
+        height: availableHeight.clamp(400.0, double.infinity),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _buildStepIndicator(context),
+            const SizedBox(height: AppSpacing.sectionGap),
+            Expanded(
+              child: SingleChildScrollView(
+                child: Center(
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 520),
+                    child: AnimatedSize(
+                      duration: _stepTransitionDuration,
+                      curve: Curves.easeOut,
+                      alignment: Alignment.topCenter,
+                      child: AnimatedSwitcher(
+                        duration: _stepTransitionDuration,
+                        switchInCurve: Curves.easeOut,
+                        switchOutCurve: Curves.easeIn,
+                        transitionBuilder: (child, anim) {
+                          final fade = FadeTransition(opacity: anim, child: child);
+                          final offsetAnim = Tween<Offset>(
+                            begin: const Offset(0, 0.03),
+                            end: Offset.zero,
+                          ).animate(
+                            CurvedAnimation(parent: anim, curve: Curves.easeOut),
+                          );
+                          return SlideTransition(
+                            position: offsetAnim,
+                            child: fade,
+                          );
+                        },
+                        child: KeyedSubtree(
+                          key: ValueKey<int>(_submitting ? 3 : _step),
+                          child: _buildStepBody(),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -2666,16 +3410,34 @@ class _BookingDetailsScreenState extends State<BookingDetailsScreen> {
   Widget _buildStepIndicator(BuildContext context) {
     final theme = Theme.of(context);
     final step = _submitting ? 3 : (_step + 1);
+    final primary = theme.colorScheme.primary;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          'Step $step of 3',
-          style: theme.textTheme.labelSmall?.copyWith(
-            color: Colors.black54,
-          ),
+        Row(
+          children: [
+            Expanded(
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(2),
+                child: LinearProgressIndicator(
+                  value: step / 3,
+                  minHeight: 4,
+                  backgroundColor: theme.colorScheme.surfaceContainerHighest,
+                  valueColor: AlwaysStoppedAnimation<Color>(primary),
+                ),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Text(
+              'Step $step of 3',
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: Colors.black54,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
         ),
-        const SizedBox(height: 4),
+        const SizedBox(height: 6),
         Text(
           'Appointment type → Details → Confirm',
           style: theme.textTheme.bodySmall?.copyWith(
@@ -2749,6 +3511,8 @@ class _BookingDetailsScreenState extends State<BookingDetailsScreen> {
   Widget _buildStepPatient() {
     return _PatientFormStep(
       kind: _apptType!.kind,
+      requireEmail: widget.requireEmail,
+      requirePhone: widget.requirePhone,
       onCancel: () => setState(() => _step = 0),
       onContinue: (result) {
         setState(() {
@@ -2799,6 +3563,25 @@ class _BookingDetailsScreenState extends State<BookingDetailsScreen> {
               color: Colors.black54,
             ),
           ),
+          if (widget.cancellationPolicyHours > 0) ...[
+            const SizedBox(height: 12),
+            Text(
+              'Please cancel at least ${widget.cancellationPolicyHours} hours in advance if you cannot attend.',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ],
+          if (widget.confirmationMessage != null &&
+              widget.confirmationMessage!.trim().isNotEmpty) ...[
+            const SizedBox(height: 12),
+            Text(
+              widget.confirmationMessage!.trim(),
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ],
           if (_error != null) ...[
             const SizedBox(height: 16),
             Text(
@@ -2821,6 +3604,10 @@ class _BookingDetailsScreenState extends State<BookingDetailsScreen> {
                   height: AppSizes.buttonHeight,
                   child: FilledButton(
                     onPressed: _confirmTap,
+                    style: FilledButton.styleFrom(
+                      backgroundColor: PublicBookingColors.primaryButton,
+                      foregroundColor: Colors.white,
+                    ),
                     child: const Text('Confirm booking'),
                   ),
                 ),
@@ -2863,7 +3650,7 @@ class _BookingDetailsScreenState extends State<BookingDetailsScreen> {
       if (!mounted) return;
       setState(() {
         _submitting = false;
-        _error = e.toString().replaceFirst('Exception: ', '').trim();
+        _error = _userFriendlyError(e);
       });
     }
   }
@@ -2925,6 +3712,8 @@ class _TypeOptionTile extends StatelessWidget {
 
 class _PatientFormStep extends StatefulWidget {
   final BookingKind kind;
+  final bool requireEmail;
+  final bool requirePhone;
   final VoidCallback onCancel;
   final void Function(_PatientFormResult result) onContinue;
 
@@ -2932,6 +3721,8 @@ class _PatientFormStep extends StatefulWidget {
     required this.kind,
     required this.onCancel,
     required this.onContinue,
+    this.requireEmail = true,
+    this.requirePhone = false,
   });
 
   @override
@@ -2964,12 +3755,13 @@ class _PatientFormStepState extends State<_PatientFormStep> {
   }
 
   bool _valid() {
-    return _firstNameCtrl.text.trim().isNotEmpty &&
-        _lastNameCtrl.text.trim().isNotEmpty &&
-        _dob != null &&
-        _emailCtrl.text.trim().isNotEmpty &&
-        _phoneCtrl.text.trim().isNotEmpty &&
-        _acceptsPolicies;
+    if (!_firstNameCtrl.text.trim().isNotEmpty ||
+        !_lastNameCtrl.text.trim().isNotEmpty ||
+        _dob == null ||
+        !_acceptsPolicies) return false;
+    if (widget.requireEmail && _emailCtrl.text.trim().isEmpty) return false;
+    if (widget.requirePhone && _phoneCtrl.text.trim().isEmpty) return false;
+    return true;
   }
 
   @override
@@ -3019,17 +3811,17 @@ class _PatientFormStepState extends State<_PatientFormStep> {
           const SizedBox(height: 12),
           TextField(
             controller: _phoneCtrl,
-            decoration: const InputDecoration(
-              labelText: 'Phone',
-              border: OutlineInputBorder(),
+            decoration: InputDecoration(
+              labelText: widget.requirePhone ? 'Phone *' : 'Phone',
+              border: const OutlineInputBorder(),
             ),
           ),
           const SizedBox(height: 12),
           TextField(
             controller: _emailCtrl,
-            decoration: const InputDecoration(
-              labelText: 'Email',
-              border: OutlineInputBorder(),
+            decoration: InputDecoration(
+              labelText: widget.requireEmail ? 'Email *' : 'Email',
+              border: const OutlineInputBorder(),
             ),
           ),
           const SizedBox(height: 12),
@@ -3085,10 +3877,19 @@ class _PatientFormStepState extends State<_PatientFormStep> {
                   child: FilledButton(
                     onPressed: () {
                       if (!_valid()) {
+                        final missing = <String>[];
+                        if (widget.requireEmail && _emailCtrl.text.trim().isEmpty) missing.add('email');
+                        if (widget.requirePhone && _phoneCtrl.text.trim().isEmpty) missing.add('phone');
+                        if (_firstNameCtrl.text.trim().isEmpty) missing.add('first name');
+                        if (_lastNameCtrl.text.trim().isEmpty) missing.add('last name');
+                        if (_dob == null) missing.add('date of birth');
+                        if (!_acceptsPolicies) missing.add('policy acceptance');
                         ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
+                          SnackBar(
                             content: Text(
-                              'Please complete all required fields and accept the policies.',
+                              missing.isEmpty
+                                  ? 'Please complete all required fields and accept the policies.'
+                                  : 'Please complete: ${missing.join(", ")}.',
                             ),
                           ),
                         );
@@ -3124,9 +3925,17 @@ class BookingConfirmationScreen extends StatelessWidget {
   final String bookingRequestId;
   final _PatientFormResult patient;
   final String clinicId;
+  final int cancellationPolicyHours;
+  final String? confirmationMessage;
+  final String? practitionerLabel;
+  final String? locationLabel;
   final VoidCallback onBackToBooking;
-  final void Function(_PatientFormResult patient, String bookingRequestId)
-      onContinue;
+  /// Returns true if the flow replaced the stack (e.g. launched questionnaire); then caller must not pop.
+  final Future<bool> Function(
+    BuildContext context,
+    _PatientFormResult patient,
+    String bookingRequestId,
+  ) onContinue;
   final VoidCallback onGoHome;
 
   const BookingConfirmationScreen({
@@ -3139,6 +3948,10 @@ class BookingConfirmationScreen extends StatelessWidget {
     required this.onBackToBooking,
     required this.onContinue,
     required this.onGoHome,
+    this.cancellationPolicyHours = 24,
+    this.confirmationMessage,
+    this.practitionerLabel,
+    this.locationLabel,
   });
 
   static String _prettyDateTime(DateTime d) {
@@ -3149,9 +3962,36 @@ class BookingConfirmationScreen extends StatelessWidget {
     return '$day/$month/${d.year} $hour:$min';
   }
 
+  static Widget _confirmationRow(ThemeData theme, String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 100,
+            child: Text(
+              label,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ),
+          Expanded(
+            child: Text(
+              value,
+              style: theme.textTheme.bodyMedium,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final hasEmail = patient.email.trim().isNotEmpty;
 
     return PublicShell(
       showBack: true,
@@ -3159,6 +3999,7 @@ class BookingConfirmationScreen extends StatelessWidget {
       showPoweredBy: false,
       title: null,
       subtitle: null,
+      clinicId: clinicId,
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -3175,24 +4016,71 @@ class BookingConfirmationScreen extends StatelessWidget {
             ),
             textAlign: TextAlign.center,
           ),
-          const SizedBox(height: 8),
-          Text(
-            '${apptType.label} — ${apptType.priceText}\n'
-            '${_prettyDateTime(slotStartLocal)}',
-            style: theme.textTheme.bodyMedium?.copyWith(
-              color: Colors.black54,
+          const SizedBox(height: 16),
+          Card(
+            margin: EdgeInsets.zero,
+            child: Padding(
+              padding: const EdgeInsets.all(AppSpacing.md),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _confirmationRow(theme, 'Service', apptType.label),
+                  _confirmationRow(theme, 'Date & time', _prettyDateTime(slotStartLocal)),
+                  _confirmationRow(theme, 'Duration', '${apptType.minutes} min'),
+                  if (apptType.priceText.isNotEmpty)
+                    _confirmationRow(theme, 'Price', apptType.priceText),
+                  if (practitionerLabel != null && practitionerLabel!.trim().isNotEmpty)
+                    _confirmationRow(theme, 'Practitioner', practitionerLabel!.trim()),
+                  if (locationLabel != null && locationLabel!.trim().isNotEmpty)
+                    _confirmationRow(theme, 'Location', locationLabel!.trim()),
+                ],
+              ),
             ),
-            textAlign: TextAlign.center,
           ),
+          if (hasEmail) ...[
+            const SizedBox(height: 12),
+            Text(
+              "You'll receive a confirmation by email.",
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ],
+          if (cancellationPolicyHours > 0) ...[
+            const SizedBox(height: 16),
+            Text(
+              'Please cancel at least $cancellationPolicyHours hours in advance if you cannot attend.',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ],
+          if (confirmationMessage != null && confirmationMessage!.trim().isNotEmpty) ...[
+            const SizedBox(height: 16),
+            Text(
+              confirmationMessage!.trim(),
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ],
           const SizedBox(height: 32),
           SizedBox(
             width: double.infinity,
             height: AppSizes.buttonHeight,
             child: FilledButton(
-              onPressed: () {
-                onBackToBooking();
-                onContinue(patient, bookingRequestId);
+              onPressed: () async {
+                final stackReplaced = await onContinue(context, patient, bookingRequestId);
+                if (!stackReplaced) onBackToBooking();
               },
+              style: FilledButton.styleFrom(
+                backgroundColor: PublicBookingColors.primaryButton,
+                foregroundColor: Colors.white,
+              ),
               child: const Text('Continue'),
             ),
           ),
@@ -3223,81 +4111,134 @@ class BookingConfirmationScreen extends StatelessWidget {
 // -----------------------------------------------------------------------------
 // Dialogs / helpers
 // -----------------------------------------------------------------------------
-class _QuestionnaireChoiceDialog extends StatelessWidget {
-  const _QuestionnaireChoiceDialog();
+class _QuestionnaireSelectorDialog extends StatelessWidget {
+  const _QuestionnaireSelectorDialog({
+    required this.templates,
+  });
+
+  final List<QuestionnaireTemplateSummary> templates;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
 
     return AlertDialog(
-      title: const Text('Questionnaire'),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            'Would you like to complete a questionnaire now?',
-          ),
-          const SizedBox(height: 10),
-          Text(
-            'Questionnaires help your clinician understand your goals and symptoms before you arrive.',
-            style: theme.textTheme.bodySmall?.copyWith(
-              height: 1.35,
-              color: Colors.black54,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(20),
+      ),
+      contentPadding: const EdgeInsets.fromLTRB(24, 20, 24, 16),
+      title: Text(
+        'Questionnaire',
+        style: theme.textTheme.titleLarge?.copyWith(
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+      content: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 400),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              'Choose which questionnaire you would like to complete now.',
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: colorScheme.onSurface,
+              ),
             ),
-          ),
-          const SizedBox(height: 16),
-          SizedBox(
-            width: double.infinity,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                OutlinedButton(
-                  onPressed: () =>
-                      Navigator.pop(context, _IntakeChoice.skip),
-                  child: const Text('Skip and continue booking'),
-                ),
-                const SizedBox(height: 8),
-                FilledButton(
-                  onPressed: () =>
-                      Navigator.pop(context, _IntakeChoice.preassessment),
-                  child:
-                      const Text('Specific issue (Preassessment questionnaire)'),
-                ),
-                const SizedBox(height: 8),
-                FilledButton.tonal(
-                  onPressed: () =>
-                      Navigator.pop(context, _IntakeChoice.general),
-                  child: const Text(
-                      'General issue (General questionnaire)'),
-                ),
-              ],
+            const SizedBox(height: 8),
+            Text(
+              'Questionnaires help your clinician understand your goals and symptoms before you arrive.',
+              style: theme.textTheme.bodySmall?.copyWith(
+                height: 1.35,
+                color: colorScheme.onSurfaceVariant,
+              ),
             ),
-          ),
-        ],
+            const SizedBox(height: 24),
+            ...templates.asMap().entries.map(
+              (entry) {
+                final index = entry.key;
+                final template = entry.value;
+                final isPrimary = index == 0;
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: Material(
+                    color: isPrimary
+                        ? colorScheme.primaryContainer
+                        : colorScheme.surfaceContainerHighest,
+                    borderRadius: BorderRadius.circular(12),
+                    child: InkWell(
+                      onTap: () => Navigator.of(context).pop(template),
+                      borderRadius: BorderRadius.circular(12),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 14,
+                        ),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Icon(
+                              index == 0
+                                  ? Icons.description_outlined
+                                  : Icons.assignment_outlined,
+                              size: 22,
+                              color: isPrimary
+                                  ? colorScheme.onPrimaryContainer
+                                  : colorScheme.onSurfaceVariant,
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text(
+                                    template.label,
+                                    style: theme.textTheme.titleSmall?.copyWith(
+                                      fontWeight: FontWeight.w600,
+                                      color: isPrimary
+                                          ? colorScheme.onPrimaryContainer
+                                          : colorScheme.onSurface,
+                                    ),
+                                  ),
+                                  if ((template.description ?? '').trim().isNotEmpty) ...[
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      template.description!,
+                                      style: theme.textTheme.bodySmall?.copyWith(
+                                        color: isPrimary
+                                            ? colorScheme.onPrimaryContainer
+                                                .withValues(alpha: 0.9)
+                                            : colorScheme.onSurfaceVariant,
+                                      ),
+                                    ),
+                                  ],
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+            const SizedBox(height: 8),
+            Center(
+              child: TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                style: TextButton.styleFrom(
+                  foregroundColor: colorScheme.onSurfaceVariant,
+                ),
+                child: const Text('Skip for now'),
+              ),
+            ),
+          ],
+        ),
       ),
     );
-  }
-}
-
-class _PushNamedAfterFrame extends StatelessWidget {
-  final String routeName;
-  final Object? arguments;
-
-  const _PushNamedAfterFrame({
-    required this.routeName,
-    this.arguments,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      Navigator.of(context)
-          .pushReplacementNamed(routeName, arguments: arguments);
-    });
-    return const Scaffold(
-        backgroundColor: Colors.white, body: SizedBox.shrink());
   }
 }
 

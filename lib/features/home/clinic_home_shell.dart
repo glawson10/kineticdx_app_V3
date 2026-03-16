@@ -7,11 +7,10 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../app/clinic_context.dart';
-import '../../debug_session_log.dart';
 import '../../data/repositories/clinic_repository.dart';
 import '../../data/repositories/memberships_repository.dart';
 import '../../models/membership.dart';
-import '../billing/ui/invoices_list_screen.dart';
+import '../billing/ui/accounts_host_screen.dart';
 import '../booking/ui/booking_calendar_screen.dart';
 import '../patients/patient_finder_screen.dart';
 import '../payments/ui/payment_qr_screen.dart';
@@ -114,24 +113,6 @@ class _ClinicHomeShellState extends State<ClinicHomeShell> {
     final clinicId = clinicCtx.clinicId;
     final snap = context.watch<AsyncSnapshot<Membership?>>();
 
-    // #region agent log
-    if (snap.connectionState == ConnectionState.waiting && !snap.hasData) {
-      debugSessionLog(
-        'clinic_home_shell.dart:build',
-        'Shell membership waiting',
-        {'connectionState': snap.connectionState.toString(), 'selectedTab': _selectedTab.name},
-        'H1',
-      );
-    }
-    if (snap.hasData) {
-      debugSessionLog(
-        'clinic_home_shell.dart:build',
-        'Shell membership hasData',
-        {'selectedTab': _selectedTab.name},
-        'H1',
-      );
-    }
-    // #endregion
     if (snap.hasError) {
       if (FirebaseAuth.instance.currentUser == null) {
         return const Scaffold(body: Center(child: Text('Not signed in')));
@@ -238,7 +219,7 @@ String? _titleForTab(ClinicianTab t) {
     case ClinicianTab.exercises:
       return 'Exercises';
     case ClinicianTab.invoices:
-      return 'Invoices';
+      return 'Accounts';
     case ClinicianTab.paymentQr:
       return 'Payment QR';
     case ClinicianTab.settings:
@@ -263,7 +244,7 @@ Widget _childForTab(ClinicianTab t, String clinicId, String? settingsSection) {
     case ClinicianTab.exercises:
       return const Center(child: Text('Exercises (next)'));
     case ClinicianTab.invoices:
-      return const InvoicesListScreen();
+      return const AccountsHostScreen();
     case ClinicianTab.paymentQr:
       return const PaymentQrScreen();
     case ClinicianTab.settings:

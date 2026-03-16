@@ -335,7 +335,7 @@ class _ClinicOpeningHoursScreenState extends State<ClinicOpeningHoursScreen> {
             padding: const EdgeInsets.all(20),
             children: [
               Text(
-                'These hours apply to all locations for public booking and the clinician calendar. Multiple time windows per day are supported.',
+                'Defines the clinic\'s maximum operating hours. Locations and practitioner availability can further restrict bookable times. Multiple time windows per day are supported.',
                 style: theme.textTheme.bodyMedium?.copyWith(
                   color: colorScheme.onSurfaceVariant,
                 ),
@@ -584,11 +584,20 @@ class _LocationsSummaryWidget extends StatelessWidget {
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  'Opening hours above apply to all locations. Manage locations and their visibility in online booking below.',
+                  'Used as the outer operating boundary for all booking. Locations and practitioner schedules may be more restrictive. Set per-location hours in Locations → select a location → Opening hours.',
                   style: theme.textTheme.bodySmall?.copyWith(
                     color: colorScheme.onSurfaceVariant,
                   ),
                 ),
+                if (activeLocations.length > 1) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    '${activeLocations.length} locations. Each can have its own opening hours.',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 12),
                 if (activeLocations.isEmpty)
                   Text(

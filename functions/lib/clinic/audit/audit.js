@@ -147,13 +147,15 @@ async function writeAuditEvent(db, clinicId, event) {
 }
 async function writeSettingsAuditEvent(db, clinicId, eventType, actorUserId, entityPath, entityId, changes) {
     const ref = db.collection("clinics").doc(clinicId).collection("audit").doc();
+    // Firestore does not accept undefined; strip it from nested changes
+    const cleanChanges = removeUndefined((changes !== null && changes !== void 0 ? changes : {}));
     await ref.set({
         clinicId,
         eventType,
         actorUserId: (actorUserId !== null && actorUserId !== void 0 ? actorUserId : "").toString().trim(),
         entityPath,
         entityId,
-        changes: changes !== null && changes !== void 0 ? changes : {},
+        changes: cleanChanges,
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 }

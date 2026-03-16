@@ -3,6 +3,7 @@ import { onCall, HttpsError } from "firebase-functions/v2/https";
 import { getFirestore } from "firebase-admin/firestore";
 
 import { requireActiveMemberWithPerm } from "../authz";
+import { legacyFlowIdToRegistry } from "./flowRegistry";
 
 // -----------------------------------------------------------------------------
 // Engines
@@ -111,10 +112,13 @@ export const generateIntakeSummaryFn = onCall(
     }
 
     const flowId = String(flow.flowId ?? "").trim();
+    const snapshotEngine = String(intake?.summaryEngine ?? "").trim();
+    const legacy = legacyFlowIdToRegistry(flowId, intake?.flowVersion ?? flow?.flowVersion);
+    const summaryEngine = snapshotEngine || legacy?.summaryEngine || flowId;
 
     let summary: any;
 
-    switch (flowId) {
+    switch (summaryEngine) {
       case "ankle": {
         const raw = await computeAnkleResult(answers);
         const rawForSummary = normalizeAnkleForSummary(raw);
@@ -178,9 +182,24 @@ export const generateIntakeSummaryFn = onCall(
         break;
       }
 
+      case "generalVisit": {
+        const reason = answers?.generalVisit?.goals?.reasonForVisit?.v ?? answers?.["generalVisit.goals.reasonForVisit"]?.v ?? "";
+        const narrative = typeof reason === "string" && reason.trim()
+          ? `Reason for visit: ${reason.trim()}`
+          : "General visit questionnaire completed. No specific reason for visit captured.";
+        summary = {
+          narrative,
+          triage: { status: "green", reasons: [] },
+          topDifferentials: [],
+          objectiveTests: [],
+        };
+        break;
+      }
+
       default:
-        throw new HttpsError("invalid-argument", `Unsupported flowId: ${flowId}`, {
+        throw new HttpsError("invalid-argument", `Unsupported summaryEngine: ${summaryEngine}`, {
           flowId,
+          summaryEngine,
         });
     }
 

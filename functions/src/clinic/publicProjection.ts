@@ -333,6 +333,7 @@ export type PublicBookingContactProjection = {
   whatsapp: string;
   email: string;
   phone: string;
+  address: string;
 };
 
 export type PublicBookingProjection = {
@@ -348,6 +349,8 @@ export type PublicBookingProjection = {
 
   bookingRules: AnyMap;
   slotMinutes: number;
+  /** When false, public booking is disabled; landing can show "Booking temporarily unavailable". */
+  onlineBookingEnabled: boolean;
 
   services: PublicBookingServiceProjection[];
 
@@ -521,6 +524,7 @@ function readClinicProfileLike(clinicDoc: AnyMap): AnyMap {
     websiteUrl: pick("websiteUrl"),
     landingUrl: pick("landingUrl"),
     whatsapp: pick("whatsapp"),
+    address: pick("address"),
   };
 }
 
@@ -544,7 +548,23 @@ export function buildPublicBookingProjection(args: {
     ? args.publicBookingSettingsDoc
     : {};
 
-  const bookingRules = isObj(settings.bookingRules) ? settings.bookingRules : {};
+  const baseRules = isObj(settings.bookingRules) ? settings.bookingRules : {};
+  const bookingRules: AnyMap = {
+    ...baseRules,
+    requireEmail: baseRules.requireEmail !== false && settings.requireEmail !== false,
+    requirePhone: baseRules.requirePhone === true || settings.requirePhone === true,
+    cancellationPolicyHours:
+      typeof baseRules.cancellationPolicyHours === "number"
+        ? baseRules.cancellationPolicyHours
+        : (typeof settings.cancellationPolicyHours === "number" ? settings.cancellationPolicyHours : 24),
+    confirmationMessage:
+      typeof baseRules.confirmationMessage === "string"
+        ? baseRules.confirmationMessage
+        : (typeof settings.confirmationMessage === "string" ? settings.confirmationMessage : null),
+  };
+  if (isObj(settings.questionnaireFlow)) {
+    bookingRules.questionnaireFlow = settings.questionnaireFlow;
+  }
   const bookingStructure = isObj(settings.bookingStructure)
     ? settings.bookingStructure
     : {};
@@ -594,7 +614,10 @@ export function buildPublicBookingProjection(args: {
     whatsapp: safeStr(c.whatsapp),
     email: safeStr(c.email),
     phone: safeStr(c.phone),
+    address: safeStr(c.address),
   };
+
+  const onlineBookingEnabled = settings.onlineBookingEnabled !== false;
 
   return {
     clinicId: safeStr(args.clinicId),
@@ -609,6 +632,7 @@ export function buildPublicBookingProjection(args: {
 
     bookingRules,
     slotMinutes,
+    onlineBookingEnabled,
 
     services,
     practitioners,

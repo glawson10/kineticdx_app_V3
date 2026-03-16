@@ -16,7 +16,6 @@ import 'package:provider/provider.dart';
 
 import '../../app/clinic_context.dart';
 import '../../data/repositories/memberships_repository.dart';
-import '../../debug_session_log.dart';
 import 'permission_denied_empty_state.dart';
 
 /// Duration after which to show "Retry" when session has not loaded.
@@ -88,24 +87,6 @@ class _PermGateState extends State<PermGate> {
   @override
   Widget build(BuildContext context) {
     final clinicCtx = context.watch<ClinicContext>();
-
-    // #region agent log
-    if (!clinicCtx.hasSession) {
-      debugSessionLog(
-        'perm_gate.dart:build',
-        'PermGate no session',
-        {'requiredPerm': widget.requiredPerm},
-        'H2',
-      );
-    } else {
-      debugSessionLog(
-        'perm_gate.dart:build',
-        'PermGate has session',
-        {'requiredPerm': widget.requiredPerm},
-        'H2',
-      );
-    }
-    // #endregion
 
     if (clinicCtx.hasSession) {
       _cancelTimeoutTimer();

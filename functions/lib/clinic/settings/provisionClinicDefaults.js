@@ -37,6 +37,7 @@ exports.onClinicCreatedProvisionDefaults = void 0;
 const admin = __importStar(require("firebase-admin"));
 const firestore_1 = require("firebase-functions/v2/firestore");
 const logger_1 = require("firebase-functions/logger");
+const roleTemplates_1 = require("../roleTemplates");
 if (!admin.apps.length)
     admin.initializeApp();
 const db = admin.firestore();
@@ -105,38 +106,12 @@ exports.onClinicCreatedProvisionDefaults = (0, firestore_1.onDocumentCreated)({
     const memberRef = db.doc(`clinics/${clinicId}/members/${createdByUid}`);
     const memberSnap = await memberRef.get();
     if (!memberSnap.exists) {
-        const ownerPermissions = {
-            // Settings / staff
-            "settings.read": true,
-            "settings.write": true,
-            "members.read": true,
-            "members.manage": true,
-            "roles.manage": true,
-            // Schedule
-            "schedule.read": true,
-            "schedule.write": true,
-            // Patients / clinical
-            "patients.read": true,
-            "patients.write": true,
-            "clinical.read": true,
-            "clinical.write": true,
-            // Notes
-            "notes.read": true,
-            "notes.write.any": true,
-            "notes.write.own": true,
-            // Services / registries / resources
-            "services.manage": true,
-            "registries.manage": true,
-            "resources.manage": true,
-            // Audit
-            "audit.read": true,
-        };
         await memberRef.set({
             active: true,
             status: "active",
             roleId: "owner",
             invitedEmail: createdByEmail, // optional (nice for UI)
-            permissions: ownerPermissions,
+            permissions: (0, roleTemplates_1.ownerRolePermissions)(),
             createdAt: now,
             updatedAt: now,
             createdByUid: createdByUid,

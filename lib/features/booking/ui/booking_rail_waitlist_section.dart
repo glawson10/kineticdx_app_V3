@@ -13,12 +13,15 @@ class BookingRailWaitlistSection extends StatelessWidget {
   final String clinicId;
   final OnBookWaitlistEntry? onBookEntry;
   final VoidCallback? onAddTap;
+  /// Custom message when the waitlist is empty (e.g. for tools panel).
+  final String? emptyMessage;
 
   const BookingRailWaitlistSection({
     super.key,
     required this.clinicId,
     this.onBookEntry,
     this.onAddTap,
+    this.emptyMessage,
   });
 
   @override
@@ -73,7 +76,7 @@ class BookingRailWaitlistSection extends StatelessWidget {
               return Padding(
                 padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
                 child: Text(
-                  'No waitlist entries. Tap Add to add a patient.',
+                  emptyMessage ?? 'No waitlist entries. Tap Add to add a patient.',
                   style: theme.textTheme.bodySmall?.copyWith(
                     color: theme.colorScheme.onSurfaceVariant,
                   ),

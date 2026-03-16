@@ -1,5 +1,10 @@
-import { HttpsError } from "firebase-functions/v2/https";
+import { asObject } from "./common";
+import { createInvoice } from "./createInvoice";
 
-export async function createInvoiceDraft(_request: { auth?: { uid?: string }; data?: unknown }) {
-  throw new HttpsError("unimplemented", "createInvoiceDraft not implemented");
+export async function createInvoiceDraft(request: { auth?: { uid?: string }; data?: unknown }) {
+  const data = asObject(request.data);
+  return createInvoice({
+    auth: request.auth,
+    data: { ...data, status: "draft" },
+  });
 }

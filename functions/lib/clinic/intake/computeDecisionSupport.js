@@ -5,6 +5,7 @@ exports.computeDecisionSupport = void 0;
 const https_1 = require("firebase-functions/v2/https");
 const firestore_1 = require("firebase-admin/firestore");
 const authz_1 = require("../authz");
+const flowRegistry_1 = require("./flowRegistry");
 // Engines...
 const ankleAdapter_1 = require("./scoring/adapters/ankleAdapter");
 const buildAnkleSummary_1 = require("./scoring/builders/buildAnkleSummary");
@@ -140,7 +141,7 @@ async function computeAnkleResult(answers) {
     return (_a = result === null || result === void 0 ? void 0 : result.clinicianSummary) !== null && _a !== void 0 ? _a : result;
 }
 exports.computeDecisionSupport = (0, https_1.onCall)({ region: "europe-west3" }, async (req) => {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p, _q, _r, _s, _t, _u, _v;
     const db = (0, firestore_1.getFirestore)();
     const clinicId = safeStr((_a = req.data) === null || _a === void 0 ? void 0 : _a.clinicId).trim();
     const intakeSessionId = safeStr((_b = req.data) === null || _b === void 0 ? void 0 : _b.intakeSessionId).trim();
@@ -175,9 +176,24 @@ exports.computeDecisionSupport = (0, https_1.onCall)({ region: "europe-west3" },
             });
         }
         const flowId = safeStr(flow.flowId);
+        const snapshotClinicalProfileId = safeStr(intake.clinicalProfileId);
+        const snapshotSupportsDifferential = intake.supportsDifferentialHypothesis === true;
+        const legacy = (0, flowRegistry_1.legacyFlowIdToRegistry)(flowId, (_c = intake.flowVersion) !== null && _c !== void 0 ? _c : flow.flowVersion);
+        const profile = snapshotClinicalProfileId
+            ? (0, flowRegistry_1.getClinicalProfile)(snapshotClinicalProfileId)
+            : legacy
+                ? (0, flowRegistry_1.getClinicalProfile)(legacy.clinicalProfileId)
+                : null;
+        const supportsDifferentialHypothesis = profile != null
+            ? profile.supportsDifferentialHypothesis
+            : (_d = (snapshotSupportsDifferential || (legacy === null || legacy === void 0 ? void 0 : legacy.supportsDifferentialHypothesis))) !== null && _d !== void 0 ? _d : true;
+        const summaryEngine = safeStr(intake.summaryEngine) ||
+            (legacy === null || legacy === void 0 ? void 0 : legacy.summaryEngine) ||
+            (profile === null || profile === void 0 ? void 0 : profile.summaryEngine) ||
+            flowId;
         let summary;
-        let engineDispatch = flowId;
-        switch (flowId) {
+        let engineDispatch = summaryEngine;
+        switch (summaryEngine) {
             case "ankle": {
                 const raw = await computeAnkleResult(answers);
                 summary = (0, buildAnkleSummary_1.buildAnkleSummary)(raw, answers);
@@ -188,7 +204,7 @@ exports.computeDecisionSupport = (0, https_1.onCall)({ region: "europe-west3" },
                 const legacyAnswers = (0, cervicalAdapter_1.buildCervicalLegacyAnswers)(answers);
                 const rawResult = await (0, processCervicalAssessment_1.processCervicalAssessmentCore)(legacyAnswers);
                 // Extract raw summary if wrapped
-                const raw = (_c = rawResult === null || rawResult === void 0 ? void 0 : rawResult.clinicianSummary) !== null && _c !== void 0 ? _c : rawResult;
+                const raw = (_e = rawResult === null || rawResult === void 0 ? void 0 : rawResult.clinicianSummary) !== null && _e !== void 0 ? _e : rawResult;
                 summary = (0, buildCervicalSummary_1.buildCervicalSummary)(raw, answers);
                 engineDispatch = "cervical";
                 break;
@@ -197,7 +213,7 @@ exports.computeDecisionSupport = (0, https_1.onCall)({ region: "europe-west3" },
                 const legacyAnswers = (0, elbowAdapter_1.buildElbowLegacyAnswers)(answers);
                 const rawResult = await (0, processElbowAssessment_1.processElbowAssessmentCore)(legacyAnswers);
                 // Extract raw summary if wrapped
-                const raw = (_d = rawResult === null || rawResult === void 0 ? void 0 : rawResult.clinicianSummary) !== null && _d !== void 0 ? _d : rawResult;
+                const raw = (_f = rawResult === null || rawResult === void 0 ? void 0 : rawResult.clinicianSummary) !== null && _f !== void 0 ? _f : rawResult;
                 summary = (0, buildElbowSummary_1.buildElbowSummary)(raw, answers);
                 engineDispatch = "elbow";
                 break;
@@ -206,7 +222,7 @@ exports.computeDecisionSupport = (0, https_1.onCall)({ region: "europe-west3" },
                 const legacyAnswers = (0, hipAdapter_1.buildHipLegacyAnswers)(answers);
                 const rawResult = await (0, processHipAssessment_1.processHipAssessmentCore)(legacyAnswers);
                 // Extract raw summary if wrapped
-                const raw = (_e = rawResult === null || rawResult === void 0 ? void 0 : rawResult.clinicianSummary) !== null && _e !== void 0 ? _e : rawResult;
+                const raw = (_g = rawResult === null || rawResult === void 0 ? void 0 : rawResult.clinicianSummary) !== null && _g !== void 0 ? _g : rawResult;
                 summary = (0, buildHipSummary_1.buildHipSummary)(raw, answers);
                 engineDispatch = "hip";
                 break;
@@ -215,7 +231,7 @@ exports.computeDecisionSupport = (0, https_1.onCall)({ region: "europe-west3" },
                 const legacyAnswers = (0, kneeAdapter_1.buildKneeLegacyAnswers)(answers);
                 const rawResult = await (0, processKneeAssessment_1.processKneeAssessmentCore)(legacyAnswers);
                 // Extract raw summary if wrapped
-                const raw = (_f = rawResult === null || rawResult === void 0 ? void 0 : rawResult.clinicianSummary) !== null && _f !== void 0 ? _f : rawResult;
+                const raw = (_h = rawResult === null || rawResult === void 0 ? void 0 : rawResult.clinicianSummary) !== null && _h !== void 0 ? _h : rawResult;
                 summary = (0, buildKneeSummary_1.buildKneeSummary)(raw, answers);
                 engineDispatch = "knee";
                 break;
@@ -231,7 +247,7 @@ exports.computeDecisionSupport = (0, https_1.onCall)({ region: "europe-west3" },
                 const rawForScorer = (0, shoulderAdapter_1.buildShoulderRawForScorer)(answers);
                 const rawResult = await (0, processShoulderAssessment_1.processShoulderAssessmentCore)(rawForScorer);
                 // Extract raw summary if wrapped
-                const raw = (_g = rawResult === null || rawResult === void 0 ? void 0 : rawResult.clinicianSummary) !== null && _g !== void 0 ? _g : rawResult;
+                const raw = (_j = rawResult === null || rawResult === void 0 ? void 0 : rawResult.clinicianSummary) !== null && _j !== void 0 ? _j : rawResult;
                 summary = (0, buildShoulderSummary_1.buildShoulderSummary)(raw, answers);
                 engineDispatch = "shoulder";
                 break;
@@ -240,7 +256,7 @@ exports.computeDecisionSupport = (0, https_1.onCall)({ region: "europe-west3" },
                 const legacyAnswers = (0, thoracicAdapter_1.buildThoracicLegacyAnswers)(answers);
                 const rawResult = await (0, processThoracicAssessment_1.processThoracicAssessmentCore)(legacyAnswers);
                 // Thoracic returns { ok: true, summary } shape
-                const raw = (_h = rawResult === null || rawResult === void 0 ? void 0 : rawResult.summary) !== null && _h !== void 0 ? _h : rawResult;
+                const raw = (_k = rawResult === null || rawResult === void 0 ? void 0 : rawResult.summary) !== null && _k !== void 0 ? _k : rawResult;
                 summary = (0, buildThoracicSummary_1.buildThoracicSummary)(raw, answers);
                 engineDispatch = "thoracic";
                 break;
@@ -249,28 +265,48 @@ exports.computeDecisionSupport = (0, https_1.onCall)({ region: "europe-west3" },
                 const legacyAnswers = (0, wristAdapter_1.buildWristLegacyAnswers)(answers);
                 const rawResult = await (0, processWristAssessment_1.processWristAssessmentCore)(legacyAnswers);
                 // Extract raw summary if wrapped
-                const raw = (_j = rawResult === null || rawResult === void 0 ? void 0 : rawResult.clinicianSummary) !== null && _j !== void 0 ? _j : rawResult;
+                const raw = (_l = rawResult === null || rawResult === void 0 ? void 0 : rawResult.clinicianSummary) !== null && _l !== void 0 ? _l : rawResult;
                 summary = (0, buildWristSummary_1.buildWristSummary)(raw, answers);
                 engineDispatch = "wrist";
                 break;
             }
+            case "generalVisit": {
+                const reason = (_s = (_q = (_p = (_o = (_m = answers === null || answers === void 0 ? void 0 : answers.generalVisit) === null || _m === void 0 ? void 0 : _m.goals) === null || _o === void 0 ? void 0 : _o.reasonForVisit) === null || _p === void 0 ? void 0 : _p.v) !== null && _q !== void 0 ? _q : (_r = answers === null || answers === void 0 ? void 0 : answers["generalVisit.goals.reasonForVisit"]) === null || _r === void 0 ? void 0 : _r.v) !== null && _s !== void 0 ? _s : "";
+                const narrative = typeof reason === "string" && reason.trim()
+                    ? `Reason for visit: ${reason.trim()}`
+                    : "General visit questionnaire completed.";
+                summary = {
+                    narrative,
+                    triage: { status: "green", reasons: [] },
+                    topDifferentials: [],
+                    objectiveTests: [],
+                };
+                engineDispatch = "generalVisit";
+                break;
+            }
             default:
-                throw new https_1.HttpsError("invalid-argument", `Unsupported flowId: ${flowId}`, { flowId });
+                throw new https_1.HttpsError("invalid-argument", `Unsupported summaryEngine: ${summaryEngine}`, { flowId, summaryEngine });
         }
         const mapped = mapSummaryToDecisionSupport(summary);
+        const diagnosticHypotheses = supportsDifferentialHypothesis
+            ? mapped.diagnosticHypotheses
+            : [];
+        const recommendedTests = supportsDifferentialHypothesis
+            ? mapped.recommendedTests
+            : [];
         const doc = {
             status: "ready",
-            engine: `${flowId}_engine`,
+            engine: `${summaryEngine}_engine`,
             engineDispatch,
             region: flowId,
             rulesetVersion: "layerB_v1",
             generatedAt: firestore_1.FieldValue.serverTimestamp(),
             computedFromAnswerCount: Object.keys(answers !== null && answers !== void 0 ? answers : {}).length,
             summaryKeys: mapped.summaryKeys,
-            topDifferentialsCount: mapped.topDifferentialsCount,
-            objectiveTestsCount: mapped.objectiveTestsCount,
-            diagnosticHypotheses: mapped.diagnosticHypotheses,
-            recommendedTests: mapped.recommendedTests,
+            topDifferentialsCount: supportsDifferentialHypothesis ? mapped.topDifferentialsCount : 0,
+            objectiveTestsCount: recommendedTests.length,
+            diagnosticHypotheses,
+            recommendedTests,
         };
         const dsRef = db
             .collection("clinics")
@@ -282,7 +318,9 @@ exports.computeDecisionSupport = (0, https_1.onCall)({ region: "europe-west3" },
             ok: true,
             status: "ready",
             flowId,
+            summaryEngine,
             engineDispatch,
+            supportsDifferentialHypothesis,
             hypothesesCount: doc.diagnosticHypotheses.length,
             testsCount: doc.recommendedTests.length,
         };
@@ -298,7 +336,7 @@ exports.computeDecisionSupport = (0, https_1.onCall)({ region: "europe-west3" },
                     .doc(intakeSessionId)
                     .set({
                     status: "error",
-                    error: safeStr((_k = e === null || e === void 0 ? void 0 : e.message) !== null && _k !== void 0 ? _k : "Decision support failed"),
+                    error: safeStr((_t = e === null || e === void 0 ? void 0 : e.message) !== null && _t !== void 0 ? _t : "Decision support failed"),
                     generatedAt: firestore_1.FieldValue.serverTimestamp(),
                 }, { merge: true });
             }
@@ -308,9 +346,9 @@ exports.computeDecisionSupport = (0, https_1.onCall)({ region: "europe-west3" },
         }
         if (e instanceof https_1.HttpsError)
             throw e;
-        throw new https_1.HttpsError("internal", safeStr((_l = e === null || e === void 0 ? void 0 : e.message) !== null && _l !== void 0 ? _l : "Decision support failed"), {
+        throw new https_1.HttpsError("internal", safeStr((_u = e === null || e === void 0 ? void 0 : e.message) !== null && _u !== void 0 ? _u : "Decision support failed"), {
             name: e === null || e === void 0 ? void 0 : e.name,
-            stack: safeStr((_m = e === null || e === void 0 ? void 0 : e.stack) !== null && _m !== void 0 ? _m : "").split("\n").slice(0, 12).join("\n"),
+            stack: safeStr((_v = e === null || e === void 0 ? void 0 : e.stack) !== null && _v !== void 0 ? _v : "").split("\n").slice(0, 12).join("\n"),
         });
     }
 });

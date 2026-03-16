@@ -53,8 +53,8 @@ export async function syncMyDisplayName(req: CallableRequest<Input>) {
   const db = admin.firestore();
 
   // ✅ Membership docs (canonical + legacy)
-  const canonRef = db.collection("clinics").doc(clinicId).collection("memberships").doc(uid);
-  const legacyRef = db.collection("clinics").doc(clinicId).collection("members").doc(uid);
+  const canonRef = db.collection("clinics").doc(clinicId).collection("members").doc(uid);
+  const legacyRef = db.collection("clinics").doc(clinicId).collection("memberships").doc(uid);
 
   const [canonSnap, legacySnap] = await Promise.all([canonRef.get(), legacyRef.get()]);
 

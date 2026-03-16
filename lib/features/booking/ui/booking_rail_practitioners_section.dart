@@ -8,6 +8,7 @@ import 'package:provider/provider.dart';
 
 import '../../../data/repositories/staff_repository.dart';
 import '../../../ui/design_tokens.dart';
+import '../data/bookable_clinician_resolver.dart';
 import '../data/booking_calendar_prefs.dart';
 
 /// Callback with updated prefs and the effective visible/ordered lists (merged with staff).
@@ -43,9 +44,8 @@ class _BookingRailPractitionersSectionState
   List<String>? _lastEmittedVisible;
   List<String>? _lastEmittedOrder;
 
-  /// Reuse same stream for same clinicId so StreamBuilder does not cancel/resubscribe (avoids Firestore "Unexpected state" on web).
-  Stream<List<MemberDocSnapshot>>? _cachedMembersStream;
-  String? _cachedMembersStreamClinicId;
+  Stream<ResolvedClinicianList>? _cachedResolvedStream;
+  String? _cachedResolvedStreamClinicId;
 
   @override
   void initState() {
@@ -64,40 +64,21 @@ class _BookingRailPractitionersSectionState
     }
   }
 
-  static bool _isActiveLike(Map<String, dynamic> data) {
-    final status = (data['status'] ?? '').toString().trim();
-    if (status == 'suspended') return false;
-    if (status == 'invited') return false;
-    final active = data['active'];
-    if (active is bool) return active;
-    return true;
-  }
-
-  static String _label(MemberDocSnapshot d) {
-    final data = d.data();
-    final name = (data['displayName'] ?? '').toString().trim();
-    if (name.isNotEmpty) return name;
-    final email = (data['invitedEmail'] ?? data['email'] ?? '').toString().trim();
-    if (email.isNotEmpty) return email;
-    return d.id.length <= 10 ? d.id : '${d.id.substring(0, 10)}…';
-  }
-
-  /// Merge: all active staff, apply order (prefs then append missing), apply visibility.
   void _emitEffective(
-    List<MemberDocSnapshot> staff,
+    List<ResolvedClinician> staff,
     PractitionerVisibilityPrefs prefs,
   ) {
     final orderIds = prefs.orderPractitionerIds;
     final visibleSet = prefs.visiblePractitionerIds.isEmpty
         ? null
         : prefs.visiblePractitionerIds.toSet();
-    final idToDoc = {for (final d in staff) d.id: d};
+    final idToClinic = {for (final c in staff) c.uid: c};
     final ordered = <String>[];
     for (final id in orderIds) {
-      if (idToDoc.containsKey(id)) ordered.add(id);
+      if (idToClinic.containsKey(id)) ordered.add(id);
     }
-    for (final d in staff) {
-      if (!ordered.contains(d.id)) ordered.add(d.id);
+    for (final c in staff) {
+      if (!ordered.contains(c.uid)) ordered.add(c.uid);
     }
     var visible = visibleSet == null
         ? ordered
@@ -109,7 +90,6 @@ class _BookingRailPractitionersSectionState
         _listEquals(ordered, _lastEmittedOrder)) return;
     _lastEmittedVisible = visible;
     _lastEmittedOrder = ordered;
-    // Defer so we never call parent setState during build (StreamBuilder).
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       widget.onPrefsChanged(prefs, visible, ordered);
@@ -128,9 +108,11 @@ class _BookingRailPractitionersSectionState
     if (!mounted) return;
     setState(() => _prefs = prefs);
     final staffRepo = context.read<StaffRepository>();
-    final docs = await staffRepo.watchMembershipsWithFallback(widget.clinicId).first;
-    final active = docs.where((d) => _isActiveLike(d.data())).toList();
-    _emitEffective(active, prefs);
+    final resolved = await watchBookableClinicians(
+      staffRepo: staffRepo,
+      clinicId: widget.clinicId,
+    ).first;
+    _emitEffective(resolved.all, prefs);
   }
 
   void _selectAll(List<String> orderedIds) {
@@ -175,36 +157,43 @@ class _BookingRailPractitionersSectionState
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final staffRepo = context.read<StaffRepository>();
-    final Stream<List<MemberDocSnapshot>> membersStream;
-    if (_cachedMembersStreamClinicId == widget.clinicId &&
-        _cachedMembersStream != null) {
-      membersStream = _cachedMembersStream!;
+
+    final Stream<ResolvedClinicianList> resolvedStream;
+    if (_cachedResolvedStreamClinicId == widget.clinicId &&
+        _cachedResolvedStream != null) {
+      resolvedStream = _cachedResolvedStream!;
     } else {
-      membersStream = staffRepo.watchMembershipsWithFallback(widget.clinicId);
-      _cachedMembersStream = membersStream;
-      _cachedMembersStreamClinicId = widget.clinicId;
+      resolvedStream = watchBookableClinicians(
+        staffRepo: staffRepo,
+        clinicId: widget.clinicId,
+      );
+      _cachedResolvedStream = resolvedStream;
+      _cachedResolvedStreamClinicId = widget.clinicId;
     }
 
-    return StreamBuilder<List<MemberDocSnapshot>>(
-      stream: membersStream,
+    return StreamBuilder<ResolvedClinicianList>(
+      stream: resolvedStream,
       builder: (context, snap) {
-        final docs = snap.data ?? const [];
-        final active = docs.where((d) => _isActiveLike(d.data())).toList();
+        if (snap.hasError) {
+          debugPrint('[BookingRailPractitionersSection] stream error: ${snap.error}');
+        }
+        final allClinicians = snap.data?.all ?? const [];
         final orderIds = _prefs.orderPractitionerIds;
         final visibleSet = _prefs.visiblePractitionerIds.isEmpty
             ? null
             : _prefs.visiblePractitionerIds.toSet();
-        final idToDoc = {for (final d in active) d.id: d};
+        final idToClinician = {for (final c in allClinicians) c.uid: c};
         final orderedIds = <String>[];
         for (final id in orderIds) {
-          if (idToDoc.containsKey(id)) orderedIds.add(id);
+          if (idToClinician.containsKey(id)) orderedIds.add(id);
         }
-        for (final d in active) {
-          if (!orderedIds.contains(d.id)) orderedIds.add(d.id);
+        for (final c in allClinicians) {
+          if (!orderedIds.contains(c.uid)) orderedIds.add(c.uid);
         }
-        final orderedDocs = orderedIds.map((id) => idToDoc[id]!).toList();
+        final orderedClinicians =
+            orderedIds.map((id) => idToClinician[id]!).toList();
 
-        if (orderedDocs.isEmpty) {
+        if (orderedClinicians.isEmpty) {
           return Padding(
             padding: const EdgeInsets.all(12),
             child: Text(
@@ -216,7 +205,7 @@ class _BookingRailPractitionersSectionState
           );
         }
 
-        _emitEffective(active, _prefs);
+        _emitEffective(allClinicians, _prefs);
 
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -254,15 +243,14 @@ class _BookingRailPractitionersSectionState
                     buildDefaultDragHandles: false,
                     shrinkWrap: true,
                     physics: const NeverScrollableScrollPhysics(),
-                    itemCount: orderedDocs.length,
+                    itemCount: orderedClinicians.length,
                     onReorder: (oldIndex, newIndex) =>
                         _reorder(oldIndex, newIndex, orderedIds),
                     itemBuilder: (context, index) {
-                      final d = orderedDocs[index];
-                      final id = d.id;
-                      final visible = visibleSet == null || visibleSet.contains(id);
+                      final c = orderedClinicians[index];
+                      final visible = visibleSet == null || visibleSet.contains(c.uid);
                       return Card(
-                        key: ValueKey(id),
+                        key: ValueKey(c.uid),
                         margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(12),
@@ -278,14 +266,14 @@ class _BookingRailPractitionersSectionState
                             ),
                           ),
                           title: Text(
-                            _label(d),
+                            c.displayName,
                             overflow: TextOverflow.ellipsis,
                             style: theme.textTheme.bodyMedium,
                           ),
                           trailing: Checkbox(
                             value: visible,
                             onChanged: (v) => _toggleOne(
-                              id,
+                              c.uid,
                               visible,
                               orderedIds,
                             ),
@@ -297,15 +285,14 @@ class _BookingRailPractitionersSectionState
                 : Flexible(
                     child: ReorderableListView.builder(
                 buildDefaultDragHandles: false,
-                itemCount: orderedDocs.length,
+                itemCount: orderedClinicians.length,
                 onReorder: (oldIndex, newIndex) =>
                     _reorder(oldIndex, newIndex, orderedIds),
                 itemBuilder: (context, index) {
-                  final d = orderedDocs[index];
-                  final id = d.id;
-                  final visible = visibleSet == null || visibleSet.contains(id);
+                  final c = orderedClinicians[index];
+                  final visible = visibleSet == null || visibleSet.contains(c.uid);
                   return Card(
-                    key: ValueKey(id),
+                    key: ValueKey(c.uid),
                     margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12),
@@ -321,14 +308,14 @@ class _BookingRailPractitionersSectionState
                         ),
                       ),
                       title: Text(
-                        _label(d),
+                        c.displayName,
                         overflow: TextOverflow.ellipsis,
                         style: theme.textTheme.bodyMedium,
                       ),
                       trailing: Checkbox(
                         value: visible,
                         onChanged: (v) => _toggleOne(
-                          id,
+                          c.uid,
                           visible,
                           orderedIds,
                         ),

@@ -18,6 +18,9 @@ type CreateBookingRequestInput = {
   tz?: string;        // e.g. "Europe/Prague"
   kind?: string;      // "new" | "followup" | etc
 
+  appointmentTypeId?: string;
+  locationId?: string;
+
   patient: {
     firstName: string;
     lastName: string;
@@ -161,6 +164,11 @@ export const createBookingRequestFn = onCall(
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       source: "publicBookingCallable",
     };
+
+    const appointmentTypeId = safeStr((input as any).appointmentTypeId);
+    if (appointmentTypeId) requestDoc.appointmentTypeId = appointmentTypeId;
+    const locationId = safeStr((input as any).locationId);
+    if (locationId) requestDoc.locationId = locationId;
 
     const ref = db.collection(`clinics/${clinicId}/bookingRequests`).doc();
 

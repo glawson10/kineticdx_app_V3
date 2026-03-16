@@ -5,6 +5,7 @@ import 'dart:math' as math;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../../../app/callable_error_mapping.dart';
@@ -21,6 +22,8 @@ import '../../../data/repositories/locations_repository.dart';
 import '../../../data/repositories/services_repository.dart';
 import '../../../data/repositories/staff_repository.dart';
 import '../../../data/repositories/waitlist_repository.dart';
+import '../../../data/repositories/billing_repository.dart';
+import '../../billing/models/billing_models.dart';
 import '../../../models/appointment.dart';
 import '../../../models/calendar_display_settings.dart';
 import '../../../models/clinic_location.dart';
@@ -29,19 +32,26 @@ import '../../../models/service.dart';
 import '../../../models/waitlist_entry.dart';
 import 'draggable_appointment_block.dart';
 import 'calendar_display_settings_screen.dart';
+import 'calendar_view_segmented_control.dart';
+import 'calendar_clinician_menu_button.dart';
+import 'calendar_display_menu_button.dart';
+import 'calendar_help_menu_button.dart';
+import 'calendar_tool_rail.dart';
+import 'calendar_tools_panel.dart';
+import 'calendar_settings_sheet.dart';
+import 'calendar_shortcuts_dialog.dart';
+import 'calendar_help_dialogs.dart';
+import '../data/bookable_clinician_resolver.dart';
+import '../data/calendar_ui_state.dart';
 import 'booking_rail_date_navigator.dart';
 import 'booking_rail_practitioners_section.dart';
 import 'booking_rail_waitlist_section.dart';
 import 'new_booking_form.dart';
 
-import '../../../debug_session_log.dart';
-import '../../../shared/ui/overlay_left_drawer.dart';
-import '../../../shared/ui/sticky_tab_button.dart';
-import '../../shell/shell_overlay_scope.dart';
-
 import '../data/booking_calendar_prefs.dart'
     show
         loadBookingRailCollapsed,
+        loadEnableKeyboardShortcuts,
         loadMiniCalendarExpanded,
         loadPractitionerVisibilityPrefs,
         PractitionerVisibilityPrefs,
@@ -108,6 +118,10 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
   late DateTime _weekStart; // first day shown
   bool _fitWeek = false;
   bool _hideCancelled = false;
+  bool _showAdminBlocks = true;
+  CalendarDensityMode _densityMode = CalendarDensityMode.comfortable;
+  CalendarToolsSection _activeToolsSection = CalendarToolsSection.overview;
+  bool _enableKeyboardShortcuts = true;
 
   /// View mode: 1 = 1 Day, 3 = 3 Days, 5 = Work Week, 7 = 7 Days
   int _viewModeDays = 7;
@@ -117,6 +131,9 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
 
   // ✅ Practitioner filter
   String? _selectedPractitionerId; // null = all
+
+  // ✅ Location filter (calendar toolbar)
+  String? _selectedLocationId; // null = all locations
 
   // Cache for weekly hours future to prevent multiple calls on rebuilds
   Future<_WeeklyHours>? _cachedWeeklyHoursFuture;
@@ -196,6 +213,12 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
     _loadRailCollapsed();
     _loadMiniCalendarExpanded();
     _loadPractitionerPrefs();
+    _loadKeyboardShortcutsPref();
+  }
+
+  Future<void> _loadKeyboardShortcutsPref() async {
+    final enabled = await loadEnableKeyboardShortcuts();
+    if (mounted) setState(() => _enableKeyboardShortcuts = enabled);
   }
 
   Future<void> _loadMiniCalendarExpanded() async {
@@ -216,6 +239,7 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
   void _setCalendarToolsOpen(bool open) {
     _calendarToolsOpenNotifier.value = open;
     saveBookingRailCollapsed(!open);
+    setState(() {});
   }
 
   @override
@@ -362,6 +386,7 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
           _weekStart = _weekStart.subtract(Duration(days: _viewModeDays));
         }
         _didInitialAutoJump = true;
+        _hasUserChosenViewModeThisSession = true;
       });
 
   void _nextPeriod() => setState(() {
@@ -371,6 +396,7 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
           _weekStart = _weekStart.add(Duration(days: _viewModeDays));
         }
         _didInitialAutoJump = true;
+        _hasUserChosenViewModeThisSession = true;
       });
 
   void _goCurrentWeek() => setState(() {
@@ -403,7 +429,66 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
         _weekStart = _startOfWeek(picked);
       }
       _didInitialAutoJump = true;
+      _hasUserChosenViewModeThisSession = true;
     });
+  }
+
+  KeyEventResult _handleCalendarKeyEvent(FocusNode node, KeyEvent event) {
+    if (!_enableKeyboardShortcuts) return KeyEventResult.ignored;
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    final ctx = node.context;
+    if (ctx == null || !ctx.mounted) return KeyEventResult.ignored;
+    final primary = FocusManager.instance.primaryFocus;
+    if (primary?.context?.findAncestorWidgetOfExactType<TextField>() != null) {
+      return KeyEventResult.ignored;
+    }
+    final key = event.logicalKey;
+    if (key == LogicalKeyboardKey.keyT) {
+      _goCurrentWeek();
+      return KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.arrowLeft) {
+      _prevPeriod();
+      return KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.arrowRight) {
+      _nextPeriod();
+      return KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.digit1) {
+      setState(() {
+        _hasUserChosenViewModeThisSession = true;
+        _viewModeDays = 1;
+      });
+      return KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.digit3) {
+      setState(() {
+        _hasUserChosenViewModeThisSession = true;
+        _viewModeDays = 3;
+      });
+      return KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.digit7) {
+      setState(() {
+        _hasUserChosenViewModeThisSession = true;
+        _viewModeDays = 7;
+      });
+      return KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.keyM) {
+      setState(() {
+        _hasUserChosenViewModeThisSession = true;
+        _viewModeDays = 30;
+        _weekStart = DateTime(_weekStart.year, _weekStart.month, 1);
+      });
+      return KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.question) {
+      CalendarShortcutsDialog.show(ctx);
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
   }
 
   void _toggleFitWeek() {
@@ -425,7 +510,7 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
     final visibleIds = _visiblePractitionerIds;
     final orderIds = _orderPractitionerIds;
 
-    final bodyContent = _buildBody(
+    final calendarBody = _buildBody(
       context,
       clinicId,
       visiblePractitionerIds: visibleIds,
@@ -434,52 +519,75 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
 
     if (!widget.standaloneScaffold) {
       if (isWide) {
-        final screenWidth = MediaQuery.sizeOf(context).width;
-        final drawerWidth = screenWidth >= 900
-            ? 360.0
-            : (screenWidth * 0.85).clamp(260.0, 360.0);
-        final shellRight = ShellOverlayScope.getShellRightEdge(context);
-        final viewHeight = MediaQuery.sizeOf(context).height;
-        final tabGroupHeight =
-            StickyTabButton.restingHeight * 2 + 4; // shell + gap + calendar
-        final tabTopOffset = (viewHeight - tabGroupHeight) / 2 +
-            StickyTabButton.restingHeight +
-            4;
-
-        return Stack(
-          clipBehavior: Clip.hardEdge,
-          children: [
-            Positioned.fill(child: RepaintBoundary(child: bodyContent)),
-            ValueListenableBuilder<bool>(
-              valueListenable: _calendarToolsOpenNotifier,
-              builder: (context, isOpen, _) {
-                final tabLeft = isOpen ? shellRight + drawerWidth : shellRight;
-                return OverlayLeftDrawer(
-                  isOpen: isOpen,
-                  width: drawerWidth,
-                  topOffset: 0,
-                  drawerLeftOffset: shellRight,
-                  tabTopOffset: tabTopOffset,
-                  tabLeftOffset: tabLeft,
-                  showScrim: true,
-                  onScrimTap: () => _setCalendarToolsOpen(false),
-                  tab: StickyTabButton(
-                    icon: Icons.calendar_month,
-                    iconSize: 20,
-                    useDarkerStyle: true,
-                    onTap: () {
-                      _setCalendarToolsOpen(!isOpen);
-                    },
-                    tooltip: 'Calendar tools',
-                  ),
-                  child: _buildCalendarToolsPanel(context, clinicId),
-                );
-              },
-            ),
-          ],
+        return Focus(
+          autofocus: true,
+          onKeyEvent: _handleCalendarKeyEvent,
+          child: ValueListenableBuilder<bool>(
+            valueListenable: _calendarToolsOpenNotifier,
+            builder: (context, isPanelOpen, _) {
+              return Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  CalendarToolRail(
+                  isPanelOpen: isPanelOpen,
+                  activeSection: _activeToolsSection,
+                  onSectionSelected: (section) {
+                    setState(() => _activeToolsSection = section);
+                    _setCalendarToolsOpen(true);
+                  },
+                ),
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 220),
+                  curve: Curves.easeInOut,
+                  width: isPanelOpen ? CalendarToolsPanel.width : 0,
+                  decoration: const BoxDecoration(),
+                  clipBehavior: Clip.hardEdge,
+                  child: isPanelOpen
+                      ? CalendarToolsPanel(
+                          clinicId: clinicId,
+                          currentFocus: _weekStart,
+                          onDateSelected: (date) => setState(() {
+                            _weekStart = _startOfWeek(date);
+                            _viewModeDays = 7;
+                            _didInitialAutoJump = true;
+                          }),
+                          practitionerPrefs: _practitionerPrefs,
+                          onPractitionerPrefsChanged: (prefs, visibleIds, orderIds) {
+                            setState(() {
+                              _practitionerPrefs = prefs;
+                              _visiblePractitionerIds = visibleIds;
+                              _orderPractitionerIds = orderIds;
+                            });
+                          },
+                          onBookWaitlistEntry: (entry) {
+                            setState(() => _pendingWaitlistEntry = entry);
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text(
+                                    'Click an empty slot to book ${entry.displayLabel}'),
+                                duration: const Duration(seconds: 4),
+                              ),
+                            );
+                          },
+                          onClose: () => _setCalendarToolsOpen(false),
+                          activeSection: _activeToolsSection,
+                          miniCalendarExpanded: _miniCalendarExpandedNotifier.value,
+                          onMiniCalendarExpandedChanged: (v) {
+                            _miniCalendarExpandedNotifier.value = v;
+                            saveMiniCalendarExpanded(v);
+                            setState(() {});
+                          },
+                        )
+                      : null,
+                ),
+                Expanded(child: RepaintBoundary(child: calendarBody)),
+              ],
+            );
+          },
+        ),
         );
       }
-      return bodyContent;
+      return calendarBody;
     }
 
     return Scaffold(
@@ -588,16 +696,6 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
       );
     }
 
-    // #region agent log
-    if (!hasSession) {
-      debugSessionLog(
-        'booking_calendar_screen.dart:_buildBody',
-        'Calendar no session',
-        {'hasClinic': clinicCtx.hasClinic},
-        'H4',
-      );
-    }
-    // #endregion
     if (!hasSession) {
       return const Center(child: CircularProgressIndicator());
     }
@@ -809,7 +907,7 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
                       if (apptSnap.hasError) {
                         return _FatalPanel(
                           title: 'Failed to load appointments',
-                          message: '${apptSnap.error}',
+                          message: _appointmentLoadErrorMessage(apptSnap.error),
                         );
                       }
                       final allAppts = apptSnap.data ?? const <Appointment>[];
@@ -828,6 +926,16 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
                                     .contains(a.practitionerId))
                             .toList();
                       }
+                      if (!_showAdminBlocks) {
+                        appts = appts.where((a) => !a.isAdmin).toList();
+                      }
+                      if (_selectedLocationId != null &&
+                          _selectedLocationId!.trim().isNotEmpty) {
+                        appts = appts
+                            .where((a) =>
+                                (a.locationId ?? '').trim() == _selectedLocationId)
+                            .toList();
+                      }
                       final calendarDisplayRepo =
                           context.read<CalendarDisplaySettingsRepository>();
                       Stream<CalendarDisplaySettings> displayStream;
@@ -840,24 +948,34 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
                         _cachedDisplaySettingsStream = displayStream;
                         _cachedDisplaySettingsClinicId = clinicId;
                       }
-                      return StreamBuilder<CalendarDisplaySettings>(
-                        stream: displayStream,
-                        initialData: CalendarDisplaySettings.defaults,
-                        builder: (context, displaySnap) {
-                          final displaySettings = displaySnap.data ??
-                              CalendarDisplaySettings.defaults;
-                          return Column(
-                            children: [
-                              _CalendarHeader(
-                                clinicId: clinicId,
-                                weekStartLabel: _fmtMonthStart(_weekStart),
-                                value: _selectedPractitionerId,
-                                onChanged: (v) {
-                                  setState(() {
-                                    _selectedPractitionerId = v;
-                                    _didInitialAutoJump = true;
-                                  });
-                                },
+                      return StreamBuilder<List<ClinicLocation>>(
+                        stream: context
+                            .read<LocationsRepository>()
+                            .watchLocations(clinicId),
+                        builder: (context, locSnap) {
+                          final locations = locSnap.data ?? [];
+                          return StreamBuilder<CalendarDisplaySettings>(
+                            stream: displayStream,
+                            initialData: CalendarDisplaySettings.defaults,
+                            builder: (context, displaySnap) {
+                              final displaySettings = displaySnap.data ??
+                                  CalendarDisplaySettings.defaults;
+                              return Column(
+                                children: [
+                                  _CalendarHeader(
+                                    clinicId: clinicId,
+                                    weekStartLabel: _fmtMonthStart(_weekStart),
+                                    value: _selectedPractitionerId,
+                                    onChanged: (v) {
+                                      setState(() {
+                                        _selectedPractitionerId = v;
+                                        _didInitialAutoJump = true;
+                                      });
+                                    },
+                                    selectedLocationId: _selectedLocationId,
+                                    onLocationChanged: (v) =>
+                                        setState(() => _selectedLocationId = v),
+                                    locations: locations,
                                 visiblePractitionerIds: visiblePractitionerIds,
                                 orderPractitionerIds: orderPractitionerIds,
                                 onPrev: _prevPeriod,
@@ -887,27 +1005,67 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
                                         !displaySettings.hidePatientNames
                                   });
                                 },
+                                onOpenShortcuts: () => CalendarShortcutsDialog.show(context),
+                                onOpenDragResizeTips: () => CalendarHelpDialogs.showDragResizeTips(context),
+                                onOpenRepeatingHelp: () => CalendarHelpDialogs.showRepeatingHelp(context),
+                                onOpenLegend: () => CalendarHelpDialogs.showLegend(context),
                                 onOpenSettings: () async {
-                                  final repo = context.read<
-                                      CalendarDisplaySettingsRepository>();
-                                  final saved = await Navigator.of(context)
-                                      .push<CalendarDisplaySettings>(
-                                    MaterialPageRoute(
-                                      builder: (_) =>
-                                          CalendarDisplaySettingsScreen(
-                                        clinicId: clinicId,
-                                        initial: displaySettings,
-                                        repo: repo,
-                                      ),
-                                    ),
+                                  await CalendarSettingsSheet.show(
+                                    context,
+                                    onOpenShortcuts: () => CalendarShortcutsDialog.show(context),
+                                    onOpenDisplaySettings: () async {
+                                      final repo = context
+                                          .read<CalendarDisplaySettingsRepository>();
+                                      final saved =
+                                          await Navigator.of(context).push<
+                                              CalendarDisplaySettings>(
+                                        MaterialPageRoute(
+                                          builder: (_) =>
+                                              CalendarDisplaySettingsScreen(
+                                            clinicId: clinicId,
+                                            initial: displaySettings,
+                                            repo: repo,
+                                          ),
+                                        ),
+                                      );
+                                      if (saved != null && mounted) {
+                                        repo.clearDisplaySettingsCache();
+                                        setState(() {});
+                                      }
+                                    },
                                   );
-                                  if (saved != null && mounted) {
-                                    repo.clearDisplaySettingsCache();
+                                  if (mounted) {
+                                    await _loadKeyboardShortcutsPref();
                                     setState(() {});
                                   }
                                 },
                                 condensedHeader:
                                     displaySettings.condensedHeader,
+                                showAdminBlocks: _showAdminBlocks,
+                                onShowAdminBlocksChanged: (v) =>
+                                    setState(() => _showAdminBlocks = v),
+                                showClosedShading:
+                                    displaySettings.showClosedDayLabel,
+                                onShowClosedShadingChanged: (v) async {
+                                  final repo = context.read<
+                                      CalendarDisplaySettingsRepository>();
+                                  await repo.updateSettings(
+                                      clinicId, {'showClosedDayLabel': v});
+                                  if (mounted) setState(() {});
+                                },
+                                densityMode: _densityMode,
+                                onDensityChanged: (v) =>
+                                    setState(() => _densityMode = v),
+                                showWeekend: displaySettings.showWeekends,
+                                onShowWeekendChanged: (v) async {
+                                  final repo = context.read<
+                                      CalendarDisplaySettingsRepository>();
+                                  await repo.updateSettings(
+                                      clinicId, {'showWeekends': v});
+                                  if (mounted) setState(() {});
+                                },
+                                showToolsPanel: _calendarToolsOpenNotifier.value,
+                                onShowToolsPanelChanged: _setCalendarToolsOpen,
                               ),
                               const _DevPermissionHintBanner(),
                               Expanded(
@@ -926,6 +1084,8 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
                       );
                     },
                   );
+                },
+              );
                 }
 
                 final weekEnd = _weekStart.add(const Duration(days: 7));
@@ -954,11 +1114,7 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
                     if (apptSnap.hasError) {
                       return _FatalPanel(
                         title: 'Failed to load appointments',
-                        message: '${apptSnap.error}\n\n'
-                            'Check Firestore appointment fields:\n'
-                            '• appointments.startAt and appointments.endAt must be Timestamp\n'
-                            '• migration may also include legacy fields start/end.\n\n'
-                            'Also confirm your Firestore rules allow schedule.read for this user.',
+                        message: _appointmentLoadErrorMessage(apptSnap.error),
                       );
                     }
 
@@ -990,6 +1146,16 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
                               visiblePractitionerIds.contains(a.practitionerId))
                           .toList();
                     }
+                    if (!_showAdminBlocks) {
+                      appts = appts.where((a) => !a.isAdmin).toList();
+                    }
+                    if (_selectedLocationId != null &&
+                        _selectedLocationId!.trim().isNotEmpty) {
+                      appts = appts
+                          .where((a) =>
+                              (a.locationId ?? '').trim() == _selectedLocationId)
+                          .toList();
+                    }
 
                     final calendarDisplayRepo =
                         context.read<CalendarDisplaySettingsRepository>();
@@ -1003,53 +1169,60 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
                       _cachedDisplaySettingsStream = weekDisplayStream;
                       _cachedDisplaySettingsClinicId = clinicId;
                     }
-                    return StreamBuilder<CalendarDisplaySettings>(
-                      stream: weekDisplayStream,
-                      initialData: CalendarDisplaySettings.defaults,
-                      builder: (context, displaySnap) {
-                        final displaySettings = displaySnap.data ??
-                            CalendarDisplaySettings.defaults;
-                        if (!_hasUserChosenViewModeThisSession &&
-                            displaySnap.hasData) {
-                          final s = displaySnap.data!;
-                          WidgetsBinding.instance.addPostFrameCallback((_) {
-                            if (!mounted || _hasUserChosenViewModeThisSession)
-                              return;
-                            setState(() {
-                              _viewModeDays = _defaultViewToDays(s.defaultView);
-                              _weekStart = _startOfWeekWith(
-                                  DateTime.now(), s.weekStartsOn);
-                              if (_viewModeDays == 30) {
-                                _weekStart = DateTime(
-                                    _weekStart.year, _weekStart.month, 1);
-                              }
-                            });
-                          });
-                        }
-                        final gridStartHour = displaySettings.displayStartHour;
-                        final gridEndHour = displaySettings.displayEndHour;
-                        final adminGridMinutes =
-                            displaySettings.minutesPerBlock;
-                        final baseSlotHeight = displaySettings.slotHeightPx;
-                        final effectiveHeaderHeight =
-                            displaySettings.condensedHeader
-                                ? 40.0
-                                : _headerHeight;
-                        final effectiveDaysCount = (_viewModeDays == 7 &&
-                                !displaySettings.showWeekends)
-                            ? 5
-                            : _viewModeDays;
-                        final effectiveStart = (_viewModeDays == 7 &&
-                                !displaySettings.showWeekends &&
-                                displaySettings.weekStartsOn == 'sunday')
-                            ? _weekStart.add(const Duration(days: 1))
-                            : _weekStart;
-                        final effectiveDays = List.generate(effectiveDaysCount,
-                            (i) => effectiveStart.add(Duration(days: i)));
+                    return StreamBuilder<List<ClinicLocation>>(
+                      stream: context
+                          .read<LocationsRepository>()
+                          .watchLocations(clinicId),
+                      builder: (context, locSnap) {
+                        final locations = locSnap.data ?? [];
+                        return StreamBuilder<CalendarDisplaySettings>(
+                          stream: weekDisplayStream,
+                          initialData: CalendarDisplaySettings.defaults,
+                          builder: (context, displaySnap) {
+                            final displaySettings = displaySnap.data ??
+                                CalendarDisplaySettings.defaults;
+                            if (!_hasUserChosenViewModeThisSession &&
+                                displaySnap.hasData) {
+                              final s = displaySnap.data!;
+                              WidgetsBinding.instance.addPostFrameCallback((_) {
+                                if (!mounted || _hasUserChosenViewModeThisSession) {
+                                  return;
+                                }
+                                setState(() {
+                                  _viewModeDays = _defaultViewToDays(s.defaultView);
+                                  _weekStart = _startOfWeekWith(
+                                      DateTime.now(), s.weekStartsOn);
+                                  if (_viewModeDays == 30) {
+                                    _weekStart = DateTime(
+                                        _weekStart.year, _weekStart.month, 1);
+                                  }
+                                });
+                              });
+                            }
+                            final gridStartHour = displaySettings.displayStartHour;
+                            final gridEndHour = displaySettings.displayEndHour;
+                            final adminGridMinutes =
+                                displaySettings.minutesPerBlock;
+                            final baseSlotHeight = _densityMode.slotHeightPx;
+                            final effectiveHeaderHeight =
+                                displaySettings.condensedHeader
+                                    ? 40.0
+                                    : _headerHeight;
+                            final effectiveDaysCount = (_viewModeDays == 7 &&
+                                    !displaySettings.showWeekends)
+                                ? 5
+                                : _viewModeDays;
+                            final effectiveStart = (_viewModeDays == 7 &&
+                                    !displaySettings.showWeekends &&
+                                    displaySettings.weekStartsOn == 'sunday')
+                                ? _weekStart.add(const Duration(days: 1))
+                                : _weekStart;
+                            final effectiveDays = List.generate(effectiveDaysCount,
+                                (i) => effectiveStart.add(Duration(days: i)));
 
-                        return LayoutBuilder(
-                          builder: (context, c) {
-                            final isWide = c.maxWidth >= 900;
+                            return LayoutBuilder(
+                              builder: (context, c) {
+                                final isWide = c.maxWidth >= 900;
                             final availableWidth = c.maxWidth;
                             final availableHeight = c.maxHeight;
 
@@ -1115,6 +1288,10 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
                                   visiblePractitionerIds:
                                       visiblePractitionerIds,
                                   orderPractitionerIds: orderPractitionerIds,
+                                  selectedLocationId: _selectedLocationId,
+                                  onLocationChanged: (v) =>
+                                      setState(() => _selectedLocationId = v),
+                                  locations: locations,
                                   onPrev: _prevPeriod,
                                   onNext: _nextPeriod,
                                   onPickDate: _pickDate,
@@ -1144,25 +1321,66 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
                                           !displaySettings.hidePatientNames
                                     });
                                   },
+                                  onOpenShortcuts: () => CalendarShortcutsDialog.show(context),
+                                  onOpenDragResizeTips: () => CalendarHelpDialogs.showDragResizeTips(context),
+                                  onOpenRepeatingHelp: () => CalendarHelpDialogs.showRepeatingHelp(context),
+                                  onOpenLegend: () => CalendarHelpDialogs.showLegend(context),
                                   onOpenSettings: () async {
-                                    final repo = context.read<
-                                        CalendarDisplaySettingsRepository>();
-                                    final saved = await Navigator.of(context)
-                                        .push<CalendarDisplaySettings>(
-                                      MaterialPageRoute(
-                                        builder: (_) =>
-                                            CalendarDisplaySettingsScreen(
-                                          clinicId: clinicId,
-                                          initial: displaySettings,
-                                          repo: repo,
-                                        ),
-                                      ),
+                                    await CalendarSettingsSheet.show(
+                                      context,
+                                      onOpenShortcuts: () => CalendarShortcutsDialog.show(context),
+                                      onOpenDisplaySettings: () async {
+                                        final repo = context.read<
+                                            CalendarDisplaySettingsRepository>();
+                                        final saved =
+                                            await Navigator.of(context).push<
+                                                CalendarDisplaySettings>(
+                                          MaterialPageRoute(
+                                            builder: (_) =>
+                                                CalendarDisplaySettingsScreen(
+                                              clinicId: clinicId,
+                                              initial: displaySettings,
+                                              repo: repo,
+                                            ),
+                                          ),
+                                        );
+                                        if (saved != null && mounted) {
+                                          repo.clearDisplaySettingsCache();
+                                          setState(() {});
+                                        }
+                                      },
                                     );
-                                    if (saved != null && mounted) {
-                                      repo.clearDisplaySettingsCache();
+                                    if (mounted) {
+                                      await _loadKeyboardShortcutsPref();
                                       setState(() {});
                                     }
                                   },
+                                  showAdminBlocks: _showAdminBlocks,
+                                  onShowAdminBlocksChanged: (v) =>
+                                      setState(() => _showAdminBlocks = v),
+                                  showClosedShading:
+                                      displaySettings.showClosedDayLabel,
+                                  onShowClosedShadingChanged: (v) async {
+                                    final repo = context.read<
+                                        CalendarDisplaySettingsRepository>();
+                                    await repo.updateSettings(
+                                        clinicId, {'showClosedDayLabel': v});
+                                    if (mounted) setState(() {});
+                                  },
+                                  densityMode: _densityMode,
+                                  onDensityChanged: (v) =>
+                                      setState(() => _densityMode = v),
+                                  showWeekend: displaySettings.showWeekends,
+                                  onShowWeekendChanged: (v) async {
+                                    final repo = context.read<
+                                        CalendarDisplaySettingsRepository>();
+                                    await repo.updateSettings(
+                                        clinicId, {'showWeekends': v});
+                                    if (mounted) setState(() {});
+                                  },
+                                  showToolsPanel:
+                                      _calendarToolsOpenNotifier.value,
+                                  onShowToolsPanelChanged: _setCalendarToolsOpen,
                                 ),
 
                                 const _DevPermissionHintBanner(),
@@ -1293,6 +1511,14 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
                                                       serviceIdToColorHex: null,
                                                       showFinancialIndicators:
                                                           displaySettings.showFinancialIndicators,
+                                                      locationLabel: () {
+                                                        final id = a.locationId?.trim();
+                                                        if (id == null || id.isEmpty) return null;
+                                                        for (final l in locations) {
+                                                          if (l.id == id) return l.name;
+                                                        }
+                                                        return null;
+                                                      }(),
                                                       weekStart: _weekStart,
                                                       daysCount:
                                                           effectiveDaysCount,
@@ -1507,13 +1733,15 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
                           },
                         ); // StreamBuilder<CalendarDisplaySettings>
                       },
-                    );
-                  },
-                );
-              },
-            );
-          },
-        );
+                    ); // StreamBuilder<List<ClinicLocation>>
+                },
+              );
+            },
+          );
+                },
+              );
+            },
+          );
       },
     );
   }
@@ -1712,6 +1940,45 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
               noteId: null,
             ),
           ),
+        );
+      }
+      return;
+    }
+
+    if (action == 'create_invoice') {
+      final patientId = appt.patientId.trim();
+      if (patientId.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Cannot create invoice: appointment has no patient.')),
+        );
+        return;
+      }
+      final repo = context.read<BillingRepository>();
+      try {
+        await repo.createInvoiceFromAppointment(
+          clinicId: clinicId,
+          appointmentId: appt.id,
+          patientId: patientId,
+          lineItems: [
+            InvoiceLine(
+              type: 'service',
+              itemId: appt.serviceId.trim().isEmpty ? 'service' : appt.serviceId.trim(),
+              description: appt.serviceName.trim().isEmpty ? 'Appointment service' : appt.serviceName.trim(),
+              quantity: 1,
+              unitPrice: 0,
+              taxRate: 0,
+              total: 0,
+            ),
+          ],
+        );
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Draft invoice created from appointment.')),
+        );
+      } on FirebaseFunctionsException catch (e) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Create invoice failed: ${e.message ?? e.code}')),
         );
       }
       return;
@@ -2018,6 +2285,13 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
                 leading: const Icon(Icons.note_add_outlined),
                 title: const Text('Create note'),
                 onTap: () => Navigator.pop(context, 'create_note'),
+              ),
+            if (appt.patientId.trim().isNotEmpty && canWriteSchedule)
+              ListTile(
+                leading: const Icon(Icons.request_quote_outlined),
+                title: const Text('Create invoice'),
+                subtitle: const Text('Create draft invoice from this appointment'),
+                onTap: () => Navigator.pop(context, 'create_invoice'),
               ),
             if (canWriteSchedule) ...[
               const Divider(height: 1),
@@ -2363,8 +2637,7 @@ class _BookingCalendarScreenState extends State<BookingCalendarScreen>
   }
 }
 
-/// Revised calendar header: 56px, left block (title + clinician) + right cluster (date, view, actions).
-/// Zone B + C form one right-anchored cluster (no floating center).
+/// Four-zone calendar header: Left (prev, label, next, Today) | Center (view segments) | Right-middle (menus) | Right (Settings).
 class _CalendarHeader extends StatelessWidget {
   final String clinicId;
   final String weekStartLabel;
@@ -2386,6 +2659,23 @@ class _CalendarHeader extends StatelessWidget {
   final List<String> visiblePractitionerIds;
   final List<String> orderPractitionerIds;
   final bool condensedHeader;
+  final VoidCallback? onOpenShortcuts;
+  final VoidCallback? onOpenDragResizeTips;
+  final VoidCallback? onOpenRepeatingHelp;
+  final VoidCallback? onOpenLegend;
+  final bool showAdminBlocks;
+  final ValueChanged<bool>? onShowAdminBlocksChanged;
+  final bool showClosedShading;
+  final ValueChanged<bool>? onShowClosedShadingChanged;
+  final CalendarDensityMode densityMode;
+  final ValueChanged<CalendarDensityMode>? onDensityChanged;
+  final bool showWeekend;
+  final ValueChanged<bool>? onShowWeekendChanged;
+  final bool showToolsPanel;
+  final ValueChanged<bool>? onShowToolsPanelChanged;
+  final String? selectedLocationId;
+  final ValueChanged<String?>? onLocationChanged;
+  final List<ClinicLocation> locations;
 
   const _CalendarHeader({
     required this.clinicId,
@@ -2408,18 +2698,35 @@ class _CalendarHeader extends StatelessWidget {
     this.visiblePractitionerIds = const [],
     this.orderPractitionerIds = const [],
     this.condensedHeader = false,
+    this.onOpenShortcuts,
+    this.onOpenDragResizeTips,
+    this.onOpenRepeatingHelp,
+    this.onOpenLegend,
+    this.showAdminBlocks = true,
+    this.onShowAdminBlocksChanged,
+    this.showClosedShading = true,
+    this.onShowClosedShadingChanged,
+    this.densityMode = CalendarDensityMode.comfortable,
+    this.onDensityChanged,
+    this.showWeekend = true,
+    this.onShowWeekendChanged,
+    this.showToolsPanel = false,
+    this.onShowToolsPanelChanged,
+    this.selectedLocationId,
+    this.onLocationChanged,
+    this.locations = const [],
   });
 
   static const double _headerHeight = 56;
   static const double _headerHeightCondensed = 40;
   static const double _zonePadding = 24;
   static const double _dividerOpacity = 0.25;
+  static const double _controlHeight = 32;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
-    final isNarrow = MediaQuery.sizeOf(context).width < 700;
     final isTablet = MediaQuery.sizeOf(context).width < 900;
 
     final dividerColor = scheme.outline.withValues(alpha: _dividerOpacity);
@@ -2436,45 +2743,132 @@ class _CalendarHeader extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          // Zone A — Title + clinician (left anchored)
-          Expanded(
-            child: Padding(
-              padding: const EdgeInsets.only(left: _zonePadding),
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: _ZoneA(
-                  clinicId: clinicId,
-                  value: value,
-                  onChanged: onChanged,
-                  theme: theme,
-                  compact: isNarrow,
-                  visiblePractitionerIds: visiblePractitionerIds,
-                  orderPractitionerIds: orderPractitionerIds,
+          // Zone 1 — Left: Prev, period label, Next, Today (fixed size)
+          Padding(
+            padding: const EdgeInsets.only(left: _zonePadding),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                IconButton(
+                  tooltip: 'Previous period',
+                  onPressed: onPrev,
+                  icon: const Icon(Icons.chevron_left),
+                  style: IconButton.styleFrom(
+                    minimumSize: const Size(_controlHeight, _controlHeight),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    visualDensity: VisualDensity.compact,
+                  ),
                 ),
+                const SizedBox(width: 8),
+                InkWell(
+                  onTap: onPickDate,
+                  borderRadius: BorderRadius.circular(6),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                    child: Text(
+                      weekStartLabel,
+                      style: theme.textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w600,
+                        color: scheme.onSurface,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                IconButton(
+                  tooltip: 'Next period',
+                  onPressed: onNext,
+                  icon: const Icon(Icons.chevron_right),
+                  style: IconButton.styleFrom(
+                    minimumSize: const Size(_controlHeight, _controlHeight),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    visualDensity: VisualDensity.compact,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                TextButton.icon(
+                  onPressed: onCurrentWeek,
+                  icon: const Icon(Icons.today, size: 18),
+                  label: const Text('Today'),
+                  style: TextButton.styleFrom(
+                    minimumSize: const Size(0, _controlHeight),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    visualDensity: VisualDensity.compact,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 24),
+          // Zone 2 + 3 + 4: single flexible area that scrolls horizontally when tight (no overflow)
+          Flexible(
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              clipBehavior: Clip.none,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  CalendarViewSegmentedControl(
+                    value: calendarViewSegmentValues.contains(viewModeDays) ? viewModeDays : 7,
+                    onChanged: onViewModeChanged,
+                    collapseToDropdown: isTablet,
+                  ),
+                  const SizedBox(width: 16),
+                  CalendarClinicianMenuButton(
+                    clinicId: clinicId,
+                    value: value,
+                    onChanged: onChanged,
+                    visiblePractitionerIds: visiblePractitionerIds,
+                    orderPractitionerIds: orderPractitionerIds,
+                  ),
+                  if (locations.length > 1) ...[
+                    const SizedBox(width: 12),
+                    _LocationFilterDropdown(
+                      locations: locations,
+                      value: selectedLocationId,
+                      onChanged: onLocationChanged ?? (_) {},
+                      theme: theme,
+                    ),
+                  ],
+                  CalendarDisplayMenuButton(
+                    hideCancelled: hideCancelled,
+                    onHideCancelledChanged: (_) => onToggleHideCancelled(),
+                    showAdminBlocks: showAdminBlocks,
+                    onShowAdminBlocksChanged: onShowAdminBlocksChanged ?? (_) {},
+                    showClosedShading: showClosedShading,
+                    onShowClosedShadingChanged: onShowClosedShadingChanged ?? (_) {},
+                    densityMode: densityMode,
+                    onDensityChanged: onDensityChanged ?? (_) {},
+                    showWeekend: showWeekend,
+                    onShowWeekendChanged: onShowWeekendChanged ?? (_) {},
+                    showToolsPanel: showToolsPanel,
+                    onShowToolsPanelChanged: onShowToolsPanelChanged ?? (_) {},
+                    fitWeek: fitWeek,
+                    onFitWeekChanged: (_) => onToggleFit(),
+                  ),
+                  CalendarHelpMenuButton(
+                    onOpenShortcuts: onOpenShortcuts ?? () {},
+                    onOpenDragResizeTips: onOpenDragResizeTips,
+                    onOpenRepeatingHelp: onOpenRepeatingHelp,
+                    onOpenLegend: onOpenLegend,
+                  ),
+                  const SizedBox(width: 8),
+                  IconButton(
+                    tooltip: 'Calendar settings',
+                    onPressed: onOpenSettings,
+                    icon: const Icon(Icons.settings_outlined),
+                    style: IconButton.styleFrom(
+                      minimumSize: const Size(_controlHeight, _controlHeight),
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      visualDensity: VisualDensity.compact,
+                    ),
+                  ),
+                  const SizedBox(width: _zonePadding),
+                ],
               ),
             ),
           ),
-          const SizedBox(width: 16),
-          // Right cluster: date nav | view segments | actions (right anchored)
-          _RightCluster(
-            weekStartLabel: weekStartLabel,
-            onPrev: onPrev,
-            onNext: onNext,
-            onPickDate: onPickDate,
-            viewModeDays: viewModeDays,
-            onViewModeChanged: onViewModeChanged,
-            fitWeek: fitWeek,
-            onToggleFit: onToggleFit,
-            hideCancelled: hideCancelled,
-            onToggleHideCancelled: onToggleHideCancelled,
-            hidePatientNames: hidePatientNames,
-            onToggleHidePatientNames: onToggleHidePatientNames,
-            onOpenSettings: onOpenSettings,
-            theme: theme,
-            collapseToDropdown: isTablet,
-            dividerColor: dividerColor,
-          ),
-          const SizedBox(width: _zonePadding),
         ],
       ),
     );
@@ -3028,7 +3422,62 @@ class _ViewModeDropdown extends StatelessWidget {
   }
 }
 
-class _PractitionerInlineDropdown extends StatelessWidget {
+class _LocationFilterDropdown extends StatelessWidget {
+  final List<ClinicLocation> locations;
+  final String? value;
+  final ValueChanged<String?> onChanged;
+  final ThemeData theme;
+
+  const _LocationFilterDropdown({
+    required this.locations,
+    required this.value,
+    required this.onChanged,
+    required this.theme,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final active = locations.where((l) => l.active).toList();
+    final safeValue = value != null && value!.trim().isNotEmpty &&
+        active.any((l) => l.id == value)
+        ? value
+        : null;
+    return InputDecorator(
+      decoration: InputDecoration(
+        labelText: 'Location',
+        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(8),
+          borderSide: BorderSide(
+            color: theme.colorScheme.outline.withValues(alpha: 0.5),
+          ),
+        ),
+      ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<String?>(
+          value: safeValue,
+          isExpanded: true,
+          hint: const Text('All locations'),
+          style: theme.textTheme.bodyMedium?.copyWith(
+            fontWeight: FontWeight.w500,
+            color: theme.colorScheme.onSurface,
+          ),
+          items: [
+            const DropdownMenuItem<String?>(value: null, child: Text('All locations')),
+            ...active.map((loc) => DropdownMenuItem<String?>(
+              value: loc.id,
+              child: Text(loc.name, overflow: TextOverflow.ellipsis),
+            )),
+          ],
+          onChanged: onChanged,
+        ),
+      ),
+    );
+  }
+}
+
+class _PractitionerInlineDropdown extends StatefulWidget {
   final String clinicId;
   final String? value;
   final ValueChanged<String?> onChanged;
@@ -3051,96 +3500,73 @@ class _PractitionerInlineDropdown extends StatelessWidget {
     this.orderPractitionerIds = const [],
   });
 
-  bool _isActiveLike(Map<String, dynamic> data) {
-    final status = (data['status'] ?? '').toString().trim();
-    if (status == 'suspended') return false;
-    if (status == 'invited') return false;
+  @override
+  State<_PractitionerInlineDropdown> createState() =>
+      _PractitionerInlineDropdownState();
+}
 
-    final active = data['active'];
-    if (active is bool) return active;
+class _PractitionerInlineDropdownState
+    extends State<_PractitionerInlineDropdown> {
+  Stream<ResolvedClinicianList>? _stream;
+  String? _streamClinicId;
 
-    return true;
-  }
-
-  String _labelFor(MemberDocSnapshot d) {
-    final data = d.data();
-    final name = (data['displayName'] ?? '').toString().trim();
-    if (name.isNotEmpty) return name;
-
-    final email =
-        (data['invitedEmail'] ?? data['email'] ?? '').toString().trim();
-    if (email.isNotEmpty) return email;
-
-    return d.id.length <= 10 ? d.id : '${d.id.substring(0, 10)}…';
+  Stream<ResolvedClinicianList> _getStream() {
+    if (_streamClinicId == widget.clinicId && _stream != null) return _stream!;
+    final staffRepo = context.read<StaffRepository>();
+    _stream = watchBookableClinicians(
+      staffRepo: staffRepo,
+      clinicId: widget.clinicId,
+    );
+    _streamClinicId = widget.clinicId;
+    return _stream!;
   }
 
   @override
   Widget build(BuildContext context) {
-    // ✅ Use StaffRepository with fallback to query both members and memberships collections (from Provider so stream cache is shared).
-    final staffRepo = context.read<StaffRepository>();
-    final membersStream = staffRepo.watchMembershipsWithFallback(clinicId);
-
     return ConstrainedBox(
       constraints: BoxConstraints(
-        minWidth: headerStyle ? 240 : (compact ? 160 : 240),
-        maxWidth: headerStyle ? 240 : (compact ? 220 : 320),
-        minHeight: headerStyle ? 32 : 0,
-        maxHeight: headerStyle ? 32 : double.infinity,
+        minWidth: widget.headerStyle ? 240 : (widget.compact ? 160 : 240),
+        maxWidth: widget.headerStyle ? 240 : (widget.compact ? 220 : 320),
+        minHeight: widget.headerStyle ? 32 : 0,
+        maxHeight: widget.headerStyle ? 32 : double.infinity,
       ),
-      child: StreamBuilder<List<MemberDocSnapshot>>(
-        stream: membersStream,
+      child: StreamBuilder<ResolvedClinicianList>(
+        stream: _getStream(),
         builder: (context, snap) {
-          final docs = snap.data ?? const [];
+          if (snap.hasError) {
+            debugPrint('[_PractitionerInlineDropdown] stream error: ${snap.error}');
+          }
+          var practitioners = snap.data?.all ?? const [];
 
-          final practitioners = <MemberDocSnapshot>[];
-          final seen = <String>{};
-
-          for (final d in docs) {
-            if (!seen.add(d.id)) continue;
-            final data = d.data();
-            if (!_isActiveLike(data)) continue;
-            practitioners.add(d);
+          if (widget.visiblePractitionerIds.isNotEmpty) {
+            final visibleSet = widget.visiblePractitionerIds.toSet();
+            final filtered = practitioners
+                .where((c) => visibleSet.contains(c.uid))
+                .toList();
+            if (filtered.isNotEmpty) practitioners = filtered;
           }
 
-          if (visiblePractitionerIds.isNotEmpty) {
-            final visibleSet = visiblePractitionerIds.toSet();
-            practitioners.removeWhere((d) => !visibleSet.contains(d.id));
-            if (practitioners.isEmpty && docs.isNotEmpty) {
-              practitioners.clear();
-              final added = <String>{};
-              for (final d in docs) {
-                if (!_isActiveLike(d.data())) continue;
-                if (!added.add(d.id)) continue;
-                practitioners.add(d);
-              }
-            }
-          }
-          if (orderPractitionerIds.isNotEmpty) {
+          if (widget.orderPractitionerIds.isNotEmpty) {
             final orderIndex = {
-              for (var i = 0; i < orderPractitionerIds.length; i++)
-                orderPractitionerIds[i]: i
+              for (var i = 0; i < widget.orderPractitionerIds.length; i++)
+                widget.orderPractitionerIds[i]: i
             };
-            practitioners.sort((a, b) {
-              final ai = orderIndex[a.id] ?? 9999;
-              final bi = orderIndex[b.id] ?? 9999;
-              if (ai != bi) return ai.compareTo(bi);
-              final an = (a.data()['displayName'] ?? '').toString();
-              final bn = (b.data()['displayName'] ?? '').toString();
-              return an.compareTo(bn);
-            });
-          } else {
-            practitioners.sort((a, b) {
-              final an = (a.data()['displayName'] ?? '').toString();
-              final bn = (b.data()['displayName'] ?? '').toString();
-              return an.compareTo(bn);
-            });
+            practitioners = List.of(practitioners)
+              ..sort((a, b) {
+                final ai = orderIndex[a.uid] ?? 9999;
+                final bi = orderIndex[b.uid] ?? 9999;
+                if (ai != bi) return ai.compareTo(bi);
+                return a.displayName.compareTo(b.displayName);
+              });
           }
 
-          final allowedIds = practitioners.map((d) => d.id).toSet();
+          final allowedIds = practitioners.map((c) => c.uid).toSet();
           final safeValue =
-              (value != null && allowedIds.contains(value)) ? value : null;
+              (widget.value != null && allowedIds.contains(widget.value))
+                  ? widget.value
+                  : null;
 
-          final decoration = headerStyle
+          final decoration = widget.headerStyle
               ? InputDecoration(
                   labelText: 'Clinician',
                   hintText: 'All clinicians',
@@ -3154,12 +3580,13 @@ class _PractitionerInlineDropdown extends StatelessWidget {
                   enabledBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(8),
                     borderSide: BorderSide(
-                      color: theme.colorScheme.outline.withValues(alpha: 0.5),
+                      color: widget.theme.colorScheme.outline
+                          .withValues(alpha: 0.5),
                     ),
                   ),
                 )
               : InputDecoration(
-                  labelText: compact ? null : 'Clinician',
+                  labelText: widget.compact ? null : 'Clinician',
                   hintText: 'All',
                   contentPadding:
                       const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -3168,9 +3595,9 @@ class _PractitionerInlineDropdown extends StatelessWidget {
           return DropdownButtonFormField<String?>(
             value: safeValue,
             isExpanded: true,
-            style: theme.textTheme.bodyMedium?.copyWith(
+            style: widget.theme.textTheme.bodyMedium?.copyWith(
               fontWeight: FontWeight.w500,
-              color: theme.colorScheme.onSurface,
+              color: widget.theme.colorScheme.onSurface,
             ),
             decoration: decoration,
             items: [
@@ -3178,20 +3605,20 @@ class _PractitionerInlineDropdown extends StatelessWidget {
                 value: null,
                 child: Text(
                   'All clinicians',
-                  style: theme.textTheme.bodyMedium,
+                  style: widget.theme.textTheme.bodyMedium,
                 ),
               ),
-              for (final d in practitioners)
+              for (final c in practitioners)
                 DropdownMenuItem<String?>(
-                  value: d.id,
+                  value: c.uid,
                   child: Text(
-                    _labelFor(d),
+                    c.displayName,
                     overflow: TextOverflow.ellipsis,
-                    style: theme.textTheme.bodyMedium,
+                    style: widget.theme.textTheme.bodyMedium,
                   ),
                 ),
             ],
-            onChanged: onChanged,
+            onChanged: widget.onChanged,
           );
         },
       ),
@@ -4196,43 +4623,92 @@ class _WeekGrid extends StatelessWidget {
                 Container(
                   width: dayWidth,
                   height: headerHeight,
-                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                   alignment: Alignment.centerLeft,
                   decoration: BoxDecoration(
                     border: Border(
-                      bottom: BorderSide(color: Colors.grey.shade300),
+                      bottom: BorderSide(
+                          color: Theme.of(context).colorScheme.outline.withValues(alpha: 0.2)),
                     ),
+                    color: _isToday(d)
+                        ? Theme.of(context)
+                            .colorScheme
+                            .primaryContainer
+                            .withValues(alpha: 0.25)
+                        : null,
                   ),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          _dayLabel(d),
-                          style:
-                              Theme.of(context).textTheme.titleSmall?.copyWith(
-                                    fontWeight: _isToday(d)
-                                        ? FontWeight.w700
-                                        : FontWeight.w500,
-                                    color: _isToday(d)
-                                        ? Theme.of(context).colorScheme.primary
-                                        : null,
+                  child: FittedBox(
+                    alignment: Alignment.centerLeft,
+                    fit: BoxFit.scaleDown,
+                    child: LayoutBuilder(
+                      builder: (context, constraints) {
+                        final isClosed = showClosedDayLabel &&
+                            !weeklyHours.isOpen(_WeeklyHours.dayKeyFromDate(d));
+                        final theme = Theme.of(context);
+                        final dayStyle = theme.textTheme.labelMedium?.copyWith(
+                              fontWeight: _isToday(d)
+                                  ? FontWeight.w700
+                                  : FontWeight.w500,
+                              color: _isToday(d)
+                                  ? theme.colorScheme.primary
+                                  : theme.colorScheme.onSurface,
+                            );
+                        final dateStyle = theme.textTheme.bodySmall?.copyWith(
+                              fontWeight: _isToday(d)
+                                  ? FontWeight.w600
+                                  : FontWeight.w400,
+                              color: _isToday(d)
+                                  ? theme.colorScheme.primary
+                                  : theme.colorScheme.onSurfaceVariant,
+                            );
+                        return Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              _dayAbbrev(d),
+                              style: dayStyle,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            if (isClosed)
+                              Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text(
+                                    _dayDate(d),
+                                    style: dateStyle,
+                                    overflow: TextOverflow.ellipsis,
                                   ),
-                        ),
-                      ),
-                      if (showClosedDayLabel &&
-                          !weeklyHours.isOpen(_WeeklyHours.dayKeyFromDate(d)))
-                        Text(
-                          'Closed',
-                          style:
-                              Theme.of(context).textTheme.bodySmall?.copyWith(
-                                    color: Theme.of(context)
-                                        .colorScheme
-                                        .error
-                                        .withValues(alpha: 0.8),
-                                    fontWeight: FontWeight.w600,
+                                  const SizedBox(width: 4),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 4, vertical: 1),
+                                    decoration: BoxDecoration(
+                                      color: theme.colorScheme.errorContainer
+                                          .withValues(alpha: 0.8),
+                                      borderRadius: BorderRadius.circular(4),
+                                    ),
+                                    child: Text(
+                                      'Closed',
+                                      style: theme.textTheme.labelSmall?.copyWith(
+                                        color: theme.colorScheme.onErrorContainer,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
                                   ),
-                        ),
-                    ],
+                                ],
+                              )
+                            else
+                              Text(
+                                _dayDate(d),
+                                style: dateStyle,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                          ],
+                        );
+                      },
+                    ),
                   ),
                 ),
             ],
@@ -4245,13 +4721,11 @@ class _WeekGrid extends StatelessWidget {
                   for (var c = 0; c < days.length; c++)
                     SizedBox(
                       width: dayWidth,
-                      child: GestureDetector(
-                        behavior: HitTestBehavior.opaque,
+                      child: _EmptySlotCell(
                         onTap: () {
                           final day = days[c];
                           final minsFromStart = r * slotMinutes;
                           final cellStartMins = startHour * 60 + minsFromStart;
-
                           final slotStart = DateTime(
                             day.year,
                             day.month,
@@ -4259,22 +4733,14 @@ class _WeekGrid extends StatelessWidget {
                             cellStartMins ~/ 60,
                             cellStartMins % 60,
                           );
-
                           onTapSlot(slotStart);
                         },
-                        child: Container(
-                          decoration: BoxDecoration(
-                            border: Border(
-                              right: BorderSide(color: Colors.grey.shade300),
-                              bottom: BorderSide(color: Colors.grey.shade300),
-                            ),
-                          ),
-                          foregroundDecoration: _cellClosedOverlayIfNeeded(
-                            context: context,
-                            day: days[c],
-                            cellStartMins: startHour * 60 + r * slotMinutes,
-                          ),
+                        closedDecoration: _cellClosedOverlayIfNeeded(
+                          context: context,
+                          day: days[c],
+                          cellStartMins: startHour * 60 + r * slotMinutes,
                         ),
+                        borderColor: Colors.grey.shade300,
                       ),
                     ),
                 ],
@@ -4318,10 +4784,73 @@ class _WeekGrid extends StatelessWidget {
 
   bool _isToday(DateTime d) => DateUtils.isSameDay(d, DateTime.now());
 
-  String _dayLabel(DateTime d) {
+  String _dayAbbrev(DateTime d) {
     const names = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-    final w = names[(d.weekday - 1) % 7];
-    return '$w ${d.day}/${d.month}';
+    return names[(d.weekday - 1) % 7];
+  }
+
+  String _dayDate(DateTime d) {
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    return '${d.day} ${months[d.month - 1]}';
+  }
+}
+
+/// Empty slot cell with hover affordance: subtle tint and "+ Add booking" on hover.
+class _EmptySlotCell extends StatefulWidget {
+  const _EmptySlotCell({
+    required this.onTap,
+    this.closedDecoration,
+    this.borderColor,
+  });
+
+  final VoidCallback onTap;
+  final BoxDecoration? closedDecoration;
+  final Color? borderColor;
+
+  @override
+  State<_EmptySlotCell> createState() => _EmptySlotCellState();
+}
+
+class _EmptySlotCellState extends State<_EmptySlotCell> {
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final border = widget.borderColor ?? theme.colorScheme.outline.withValues(alpha: 0.3);
+
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: widget.onTap,
+        child: Container(
+          decoration: BoxDecoration(
+            border: Border(
+              right: BorderSide(color: border),
+              bottom: BorderSide(color: border),
+            ),
+            color: _hovered
+                ? theme.colorScheme.primaryContainer.withValues(alpha: 0.2)
+                : null,
+            borderRadius: _hovered ? BorderRadius.circular(2) : null,
+          ),
+          foregroundDecoration: widget.closedDecoration,
+          child: _hovered
+              ? Center(
+                  child: Text(
+                    '+ Add booking',
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: theme.colorScheme.primary.withValues(alpha: 0.9),
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                )
+              : null,
+        ),
+      ),
+    );
   }
 }
 
@@ -5450,6 +5979,20 @@ class _WaitlistMatchesDialog extends StatelessWidget {
 // ---------------------------------------------------------------------------
 // Fatal panel
 // ---------------------------------------------------------------------------
+
+/// User-facing message for appointment load errors. Hides index/console URLs
+/// so end users never see "create index" instructions; admins deploy indexes
+/// via firestore.indexes.json.
+String _appointmentLoadErrorMessage(Object? error) {
+  if (error is FirebaseException &&
+      error.code == 'failed-precondition' &&
+      (error.message?.toLowerCase().contains('index') ?? false)) {
+    return 'Calendar is still preparing. This usually finishes within a few '
+        'minutes. Please try again or refresh the page.\n\n'
+        'If the problem continues, contact your administrator.';
+  }
+  return 'Unable to load the calendar. Please try again or contact support.';
+}
 
 class _FatalPanel extends StatelessWidget {
   final String title;

@@ -32,7 +32,7 @@ const List<ShellNavItem> shellNavItems = [
   ShellNavItem(tab: ClinicianTab.patients, label: 'Patients', icon: Icons.people, group: 'Primary'),
   ShellNavItem(tab: ClinicianTab.preassess, label: 'Pre-Assessments', icon: Icons.assignment, group: 'Primary'),
   ShellNavItem(tab: ClinicianTab.exercises, label: 'Exercises', icon: Icons.fitness_center, group: 'Primary'),
-  ShellNavItem(tab: ClinicianTab.invoices, label: 'Invoices', icon: Icons.request_quote, group: 'Finance'),
+  ShellNavItem(tab: ClinicianTab.invoices, label: 'Accounts', icon: Icons.request_quote, group: 'Finance'),
   ShellNavItem(tab: ClinicianTab.paymentQr, label: 'Payment QR', icon: Icons.qr_code_2, group: 'Finance'),
   ShellNavItem(tab: ClinicianTab.settings, label: 'Clinic Settings', icon: Icons.settings, group: 'Admin'),
   ShellNavItem(tab: ClinicianTab.publicPortal, label: 'Public Portal', icon: Icons.public, group: 'Admin'),

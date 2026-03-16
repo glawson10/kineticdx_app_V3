@@ -132,4 +132,9 @@ class CalendarDisplaySettings {
       'clientNameSeparateLine': clientNameSeparateLine,
     };
   }
+
+  /// Patch payload for the update callable. Uses canonical field names only (e.g. slotMinutes, not minutesPerBlock).
+  Map<String, dynamic> toPatchMap() {
+    return toMap();
+  }
 }

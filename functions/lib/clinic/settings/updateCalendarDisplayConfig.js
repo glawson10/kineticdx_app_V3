@@ -50,6 +50,7 @@ const ALLOWED_KEYS = new Set([
     "displayStartHour",
     "displayEndHour",
     "minutesPerBlock",
+    "slotMinutes",
     "slotHeightPx",
     "timePickerIncrement",
     "showCurrentTimeIndicator",
@@ -90,13 +91,14 @@ function validatePatch(patch) {
     if (startHour !== undefined && endHour !== undefined && endHour <= startHour) {
         throw new https_1.HttpsError("invalid-argument", "displayEndHour must be greater than displayStartHour.");
     }
-    if (raw.minutesPerBlock !== undefined) {
-        const v = (0, validators_1.assertIntRange)(raw.minutesPerBlock, "minutesPerBlock", { min: 5, max: 60 });
+    const slotMinutesRaw = raw.slotMinutes !== undefined ? raw.slotMinutes : raw.minutesPerBlock;
+    if (slotMinutesRaw !== undefined) {
+        const v = (0, validators_1.assertIntRange)(slotMinutesRaw, "slotMinutes", { min: 5, max: 60 });
         if (v != null) {
             if (!VALID_MINUTES_PER_BLOCK.has(v)) {
-                throw new https_1.HttpsError("invalid-argument", "minutesPerBlock must be one of: 5, 10, 15, 20, 30, 60.");
+                throw new https_1.HttpsError("invalid-argument", "slotMinutes must be one of: 5, 10, 15, 20, 30, 60.");
             }
-            out.minutesPerBlock = v;
+            out.slotMinutes = v;
         }
     }
     if (raw.slotHeightPx !== undefined) {

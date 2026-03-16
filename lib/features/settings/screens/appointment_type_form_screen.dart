@@ -9,6 +9,8 @@ import 'package:provider/provider.dart';
 import '../../../app/callable_error_mapping.dart';
 import '../../../data/repositories/appointment_types_repository.dart';
 import '../../../data/repositories/locations_repository.dart';
+import '../../../data/repositories/staff_repository.dart';
+import '../../../features/booking/data/bookable_clinician_resolver.dart';
 import '../../../models/appointment_type.dart';
 import '../../../models/clinic_location.dart';
 
@@ -39,7 +41,9 @@ class _AppointmentTypeFormScreenState extends State<AppointmentTypeFormScreen> {
   final _colorHexController = TextEditingController();
   bool _active = true;
   bool _showInOnlineBooking = false;
+  bool _telehealth = false;
   List<String> _allowedLocationIds = [];
+  List<String> _allowedPractitionerIds = [];
   bool _saving = false;
   String? _error;
 
@@ -59,7 +63,9 @@ class _AppointmentTypeFormScreenState extends State<AppointmentTypeFormScreen> {
       _colorHexController.text = t.colorHex ?? '';
       _active = t.active;
       _showInOnlineBooking = t.showInOnlineBooking;
+      _telehealth = t.telehealth;
       _allowedLocationIds = List.from(t.allowedLocationIds);
+      _allowedPractitionerIds = List.from(t.allowedPractitionerIds);
       return;
     }
     _durationController.text = '30';
@@ -132,7 +138,9 @@ class _AppointmentTypeFormScreenState extends State<AppointmentTypeFormScreen> {
         'colorHex': colorHex.isEmpty ? null : (colorHex.startsWith('#') ? colorHex : '#$colorHex'),
         'active': _active,
         'showInOnlineBooking': _showInOnlineBooking,
+        'telehealth': _telehealth,
         'allowedLocationIds': _allowedLocationIds.isEmpty ? null : _allowedLocationIds,
+        'allowedPractitionerIds': _allowedPractitionerIds.isEmpty ? null : _allowedPractitionerIds,
       };
       await repo.upsert(widget.clinicId, appointmentTypeId: widget.type?.id, patch: patch);
       if (!mounted) return;
@@ -145,7 +153,11 @@ class _AppointmentTypeFormScreenState extends State<AppointmentTypeFormScreen> {
       if (mounted) {
         setState(() {
           _saving = false;
-          _error = messageForCallableError(e, fallback: 'Failed to save appointment type.');
+          _error = messageForCallableError(
+            e,
+            fallback: 'Failed to save appointment type.',
+            logHint: 'settingsUpsertAppointmentType',
+          );
         });
       }
     } catch (e) {
@@ -263,6 +275,12 @@ class _AppointmentTypeFormScreenState extends State<AppointmentTypeFormScreen> {
               value: _showInOnlineBooking,
               onChanged: (v) => setState(() => _showInOnlineBooking = v),
             ),
+            SwitchListTile(
+              title: const Text('Telehealth'),
+              subtitle: const Text('This appointment type can be offered as a remote/telehealth session.'),
+              value: _telehealth,
+              onChanged: (v) => setState(() => _telehealth = v),
+            ),
             const SizedBox(height: 16),
             const Text('Allowed locations', style: TextStyle(fontWeight: FontWeight.w500)),
             const SizedBox(height: 4),
@@ -296,6 +314,50 @@ class _AppointmentTypeFormScreenState extends State<AppointmentTypeFormScreen> {
                             _allowedLocationIds = List.from(_allowedLocationIds)..add(loc.id);
                           } else {
                             _allowedLocationIds = List.from(_allowedLocationIds)..remove(loc.id);
+                          }
+                        });
+                      },
+                    );
+                  }).toList(),
+                );
+              },
+            ),
+            const SizedBox(height: 16),
+            const Text('Allowed practitioners', style: TextStyle(fontWeight: FontWeight.w500)),
+            const SizedBox(height: 4),
+            const Text(
+              'Leave empty for all practitioners. Or restrict this type to specific practitioners.',
+              style: TextStyle(fontSize: 12, color: Colors.grey),
+            ),
+            const SizedBox(height: 8),
+            StreamBuilder<ResolvedClinicianList>(
+              stream: watchBookableClinicians(
+                staffRepo: context.read<StaffRepository>(),
+                clinicId: widget.clinicId,
+              ),
+              builder: (context, snap) {
+                final clinicians = snap.data?.all ?? [];
+                if (clinicians.isEmpty) {
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    child: Text(
+                      'No practitioners. Add staff in Settings → Staff.',
+                      style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                    ),
+                  );
+                }
+                return Column(
+                  children: clinicians.map((c) {
+                    final selected = _allowedPractitionerIds.contains(c.uid);
+                    return CheckboxListTile(
+                      title: Text(c.displayName.isNotEmpty ? c.displayName : c.uid),
+                      value: selected,
+                      onChanged: (v) {
+                        setState(() {
+                          if (v == true) {
+                            _allowedPractitionerIds = List.from(_allowedPractitionerIds)..add(c.uid);
+                          } else {
+                            _allowedPractitionerIds = List.from(_allowedPractitionerIds)..remove(c.uid);
                           }
                         });
                       },

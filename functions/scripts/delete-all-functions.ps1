@@ -36,6 +36,7 @@ $functions = @(
   "rebuildPublicBookingMirrorFn",
   "settingsUpdateCommunicationSettings",
   "settingsUpsertPractitionerAvailability",
+  "settingsDeletePractitionerAvailability",
   "settingsUpsertPractitionerOverride",
   "settingsDeletePractitionerOverride",
   "setMembershipStatusFn",

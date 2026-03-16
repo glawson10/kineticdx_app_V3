@@ -3,10 +3,13 @@
 // Public token entry for the General Questionnaire.
 // Resolves token -> intakeSessionId via Cloud Function and starts the flow.
 
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../domain/answer_value.dart';
+import '../domain/intake_schema.dart';
 import '../state/intake_draft_controller.dart';
 import './intake_flow_host.dart';
 
@@ -37,6 +40,61 @@ class _GeneralQuestionnaireTokenScreenState
       if (!mounted) return;
       _boot();
     });
+  }
+
+  DateTime? _parseDob(dynamic dobIso) {
+    if (dobIso == null) return null;
+    final s = dobIso.toString().trim();
+    if (s.isEmpty) return null;
+    try {
+      return DateTime.parse(s);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  void _applyPrefill(
+    IntakeDraftController draft,
+    Map<String, dynamic> prefill,
+  ) {
+    final firstName = (prefill['firstName'] ?? '').toString().trim();
+    final lastName = (prefill['lastName'] ?? '').toString().trim();
+    final email = (prefill['email'] ?? '').toString().trim();
+    final phone = (prefill['phone'] ?? '').toString().trim();
+    final address = (prefill['address'] ?? '').toString().trim();
+    final dob = _parseDob(prefill['dobIso']);
+    final existing = draft.session.patientDetails;
+
+    draft.setPatientDetails(
+      PatientDetailsBlock(
+        firstName: firstName.isNotEmpty ? firstName : existing.firstName,
+        lastName: lastName.isNotEmpty ? lastName : existing.lastName,
+        dateOfBirth:
+            dob != null ? Timestamp.fromDate(dob) : existing.dateOfBirth,
+        email: email.isNotEmpty ? email : existing.email,
+        phone: phone.isNotEmpty ? phone : existing.phone,
+        isProxy: existing.isProxy,
+        proxyName: existing.proxyName,
+        proxyRelationship: existing.proxyRelationship,
+        confirmedAt: null,
+      ),
+    );
+
+    if (firstName.isNotEmpty) {
+      draft.setAnswer('patient.firstName', AnswerValue.text(firstName));
+    }
+    if (lastName.isNotEmpty) {
+      draft.setAnswer('patient.lastName', AnswerValue.text(lastName));
+    }
+    if (email.isNotEmpty) {
+      draft.setAnswer('patient.email', AnswerValue.text(email));
+    }
+    if (phone.isNotEmpty) {
+      draft.setAnswer('patient.phone', AnswerValue.text(phone));
+    }
+    if (address.isNotEmpty) {
+      draft.setAnswer('patient.address', AnswerValue.text(address));
+    }
   }
 
   String _friendlyFunctionsError(FirebaseFunctionsException e) {
@@ -95,6 +153,19 @@ class _GeneralQuestionnaireTokenScreenState
       final clinicId = (data['clinicId'] ?? '').toString().trim();
       final sessionId = (data['intakeSessionId'] ?? '').toString().trim();
       final flowId = (data['flowId'] ?? '').toString().trim();
+      final flowVersion = data['flowVersion'] is int ? data['flowVersion'] as int : 1;
+      final bookingRequestId =
+          (data['bookingRequestId'] ?? '').toString().trim();
+      final prefillPatient =
+          data['prefillPatient'] is Map
+              ? Map<String, dynamic>.from(data['prefillPatient'] as Map)
+              : const <String, dynamic>{};
+      final flowDefinitionId = (data['flowDefinitionId'] ?? '').toString().trim();
+      final clinicalProfileId = (data['clinicalProfileId'] ?? '').toString().trim();
+      final summaryEngine = (data['summaryEngine'] ?? '').toString().trim();
+      final decisionSupportProfile = (data['decisionSupportProfile'] ?? '').toString().trim();
+      final supportsDifferentialHypothesis = data['supportsDifferentialHypothesis'] == true;
+      final templateId = (data['templateId'] ?? '').toString().trim();
 
       if (clinicId.isEmpty) {
         throw Exception('Server did not return a clinicId.');
@@ -105,10 +176,24 @@ class _GeneralQuestionnaireTokenScreenState
 
       if (!mounted) return;
 
+      final flowSnapshot = IntakeFlowSnapshot(
+        templateId: templateId.isEmpty ? null : templateId,
+        flowDefinitionId: flowDefinitionId.isEmpty ? null : flowDefinitionId,
+        clinicalProfileId: clinicalProfileId.isEmpty ? null : clinicalProfileId,
+        flowId: flowId.isEmpty ? null : flowId,
+        flowVersion: flowVersion,
+        summaryEngine: summaryEngine.isEmpty ? null : summaryEngine,
+        decisionSupportProfile: decisionSupportProfile.isEmpty ? null : decisionSupportProfile,
+        supportsDifferentialHypothesis: supportsDifferentialHypothesis,
+      );
+
       _navigateToFlowHost(
         clinicId: clinicId,
         sessionId: sessionId,
         flowIdOverride: flowId.isNotEmpty ? flowId : 'generalVisit',
+        flowSnapshot: flowSnapshot,
+        bookingRequestId: bookingRequestId,
+        prefillPatient: prefillPatient,
       );
     } on FirebaseFunctionsException catch (e) {
       if (!mounted) return;
@@ -133,6 +218,9 @@ class _GeneralQuestionnaireTokenScreenState
     required String clinicId,
     required String sessionId,
     required String flowIdOverride,
+    required IntakeFlowSnapshot flowSnapshot,
+    required String bookingRequestId,
+    required Map<String, dynamic> prefillPatient,
   }) {
     if (_navigated) return;
     _navigated = true;
@@ -146,6 +234,11 @@ class _GeneralQuestionnaireTokenScreenState
             create: (_) {
               final draft = IntakeDraftController(clinicId: clinicId);
               draft.setSessionId(sessionId);
+              draft.setFlowIdOverride(flowIdOverride);
+              draft.setFlowSnapshot(flowSnapshot);
+              if (prefillPatient.isNotEmpty) {
+                _applyPrefill(draft, prefillPatient);
+              }
               return draft;
             },
             child: IntakeFlowHost(
@@ -153,6 +246,12 @@ class _GeneralQuestionnaireTokenScreenState
                 'clinicId': clinicId,
                 'intakeSessionId': sessionId,
                 'flowIdOverride': flowIdOverride,
+                'flowDefinitionId': flowSnapshot.flowDefinitionId,
+                'clinicalProfileId': flowSnapshot.clinicalProfileId,
+                if (bookingRequestId.isNotEmpty)
+                  'bookingRequestId': bookingRequestId,
+                if (prefillPatient.isNotEmpty)
+                  'prefillPatient': prefillPatient,
               },
             ),
           ),

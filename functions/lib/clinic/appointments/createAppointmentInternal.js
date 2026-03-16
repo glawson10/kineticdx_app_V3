@@ -339,17 +339,46 @@ async function createAppointmentInternalImpl(db, input) {
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         updatedByUid: actorUid,
     };
-    try {
-        await apptRef.set(payload);
-    }
-    catch (err) {
-        logger_1.logger.error("createAppointmentInternal: apptRef.set failed", {
-            clinicId,
-            kind,
-            err: (_d = err === null || err === void 0 ? void 0 : err.message) !== null && _d !== void 0 ? _d : String(err),
-            stack: err === null || err === void 0 ? void 0 : err.stack,
+    // Commit 47: Overlap check and write in one transaction so two concurrent requests cannot double-book.
+    if (kind !== "admin" && practitionerId) {
+        const col = db.collection(`clinics/${clinicId}/appointments`);
+        await db.runTransaction(async (tx) => {
+            var _a, _b, _c;
+            const query = col
+                .where("practitionerId", "==", practitionerId)
+                .where("endAt", ">", startTs);
+            const snap = await tx.get(query);
+            const startMs = startTs.toMillis();
+            const endMs = endTs.toMillis();
+            for (const doc of snap.docs) {
+                const data = doc.data();
+                const status = ((_a = data === null || data === void 0 ? void 0 : data.status) !== null && _a !== void 0 ? _a : "").toString().toLowerCase();
+                if (status === "cancelled")
+                    continue;
+                const sMs = toMillisSafe((_b = data === null || data === void 0 ? void 0 : data.startAt) !== null && _b !== void 0 ? _b : data === null || data === void 0 ? void 0 : data.start);
+                const eMs = toMillisSafe((_c = data === null || data === void 0 ? void 0 : data.endAt) !== null && _c !== void 0 ? _c : data === null || data === void 0 ? void 0 : data.end);
+                if (sMs == null || eMs == null)
+                    continue;
+                if (sMs < endMs && eMs > startMs) {
+                    throw new https_1.HttpsError("failed-precondition", "slot_no_longer_available");
+                }
+            }
+            tx.set(apptRef, payload);
         });
-        throw new https_1.HttpsError("internal", (_e = err === null || err === void 0 ? void 0 : err.message) !== null && _e !== void 0 ? _e : "Failed to write appointment.", { original: err === null || err === void 0 ? void 0 : err.message });
+    }
+    else {
+        try {
+            await apptRef.set(payload);
+        }
+        catch (err) {
+            logger_1.logger.error("createAppointmentInternal: apptRef.set failed", {
+                clinicId,
+                kind,
+                err: (_d = err === null || err === void 0 ? void 0 : err.message) !== null && _d !== void 0 ? _d : String(err),
+                stack: err === null || err === void 0 ? void 0 : err.stack,
+            });
+            throw new https_1.HttpsError("internal", (_e = err === null || err === void 0 ? void 0 : err.message) !== null && _e !== void 0 ? _e : "Failed to write appointment.", { original: err === null || err === void 0 ? void 0 : err.message });
+        }
     }
     return { success: true, appointmentId: apptRef.id };
 }

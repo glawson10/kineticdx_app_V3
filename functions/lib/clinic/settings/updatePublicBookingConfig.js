@@ -44,8 +44,77 @@ const https_1 = require("firebase-functions/v2/https");
 const permissions_1 = require("../permissions");
 const audit_1 = require("../audit/audit");
 const validators_1 = require("./validators");
+const questionnaireTemplates_1 = require("../questionnaires/questionnaireTemplates");
 const db = admin.firestore();
 const FV = admin.firestore.FieldValue;
+const DAY_KEYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+function safeStr(v) {
+    return typeof v === "string" ? v.trim() : "";
+}
+function hmToMinutes(hm) {
+    const m = /^(\d{2}):(\d{2})$/.exec(hm.trim());
+    if (!m)
+        return NaN;
+    const hh = Number(m[1]);
+    const mm = Number(m[2]);
+    if (!Number.isFinite(hh) || !Number.isFinite(mm))
+        return NaN;
+    if (hh < 0 || hh > 23 || mm < 0 || mm > 59)
+        return NaN;
+    return hh * 60 + mm;
+}
+function normalizeIntervals(raw) {
+    const out = [];
+    const list = Array.isArray(raw) ? raw : [];
+    for (const it of list) {
+        const item = it;
+        const start = safeStr(item === null || item === void 0 ? void 0 : item.start);
+        const end = safeStr(item === null || item === void 0 ? void 0 : item.end);
+        if (!start || !end)
+            continue;
+        const a = hmToMinutes(start);
+        const b = hmToMinutes(end);
+        if (!Number.isFinite(a) || !Number.isFinite(b))
+            continue;
+        if (b <= a)
+            continue;
+        out.push({ start, end });
+    }
+    out.sort((x, y) => hmToMinutes(x.start) - hmToMinutes(y.start));
+    for (let i = 1; i < out.length; i++) {
+        const prev = out[i - 1];
+        const cur = out[i];
+        if (hmToMinutes(cur.start) < hmToMinutes(prev.end)) {
+            throw new https_1.HttpsError("invalid-argument", "Overlapping intervals are not allowed.");
+        }
+    }
+    return out;
+}
+function normalizeWeeklyHours(raw) {
+    const obj = raw && typeof raw === "object" ? raw : {};
+    const out = Object.fromEntries(DAY_KEYS.map((k) => [k, []]));
+    for (const k of DAY_KEYS) {
+        out[k] = normalizeIntervals(obj[k]);
+    }
+    return out;
+}
+function normalizeWeeklyMeta(raw) {
+    const base = { corporateOnly: false, requiresCorporateCode: false, locationLabel: "" };
+    const out = Object.fromEntries(DAY_KEYS.map((k) => [k, { ...base }]));
+    const obj = raw && typeof raw === "object" ? raw : {};
+    for (const k of DAY_KEYS) {
+        const m = obj[k];
+        if (!m || typeof m !== "object")
+            continue;
+        const day = m;
+        out[k] = {
+            corporateOnly: day.corporateOnly === true,
+            requiresCorporateCode: day.requiresCorporateCode === true,
+            locationLabel: safeStr(day.locationLabel),
+        };
+    }
+    return out;
+}
 const ALLOWED_KEYS = new Set([
     "slotStepMinutes",
     "minNoticeMinutes",
@@ -55,7 +124,10 @@ const ALLOWED_KEYS = new Set([
     "allowNewPatients",
     "cancellationPolicyHours",
     "weeklyHours",
+    "weeklyHoursMeta",
     "confirmationMessage",
+    "onlineBookingEnabled",
+    "questionnaireFlow",
 ]);
 const VALID_SLOT_STEPS = new Set([5, 10, 15, 20, 30, 60]);
 function validatePatch(patch) {
@@ -88,7 +160,7 @@ function validatePatch(patch) {
         if (v != null)
             out.cancellationPolicyHours = v;
     }
-    const booleanFields = ["requirePhone", "requireEmail", "allowNewPatients"];
+    const booleanFields = ["requirePhone", "requireEmail", "allowNewPatients", "onlineBookingEnabled"];
     for (const field of booleanFields) {
         if (raw[field] !== undefined) {
             const v = (0, validators_1.assertBoolean)(raw[field], field);
@@ -102,11 +174,17 @@ function validatePatch(patch) {
     }
     if (raw.weeklyHours !== undefined) {
         if (raw.weeklyHours !== null && typeof raw.weeklyHours === "object") {
-            out.weeklyHours = raw.weeklyHours;
+            out.weeklyHours = normalizeWeeklyHours(raw.weeklyHours);
         }
         else if (raw.weeklyHours === null) {
             out.weeklyHours = null;
         }
+    }
+    if (raw.weeklyHoursMeta !== undefined && raw.weeklyHoursMeta !== null && typeof raw.weeklyHoursMeta === "object") {
+        out.weeklyHoursMeta = normalizeWeeklyMeta(raw.weeklyHoursMeta);
+    }
+    if (raw.questionnaireFlow !== undefined) {
+        out.questionnaireFlow = (0, questionnaireTemplates_1.validateQuestionnaireFlow)(raw.questionnaireFlow);
     }
     return out;
 }

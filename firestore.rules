@@ -50,6 +50,31 @@ service cloud.firestore {
         && (authMemberData(clinicId).permissions[p] == true);
     }
 
+    // Billing permission compatibility: keep legacy keys while normalizing.
+    function hasAnyPerm(clinicId, keys) {
+      return isActiveMember(clinicId)
+        && ("permissions" in authMemberData(clinicId))
+        && keys.size() > 0
+        && (
+          (keys[0] != null && authMemberData(clinicId).permissions[keys[0]] == true)
+          || (keys.size() > 1 && keys[1] != null && authMemberData(clinicId).permissions[keys[1]] == true)
+          || (keys.size() > 2 && keys[2] != null && authMemberData(clinicId).permissions[keys[2]] == true)
+          || (keys.size() > 3 && keys[3] != null && authMemberData(clinicId).permissions[keys[3]] == true)
+        );
+    }
+
+    function hasBillingRead(clinicId) {
+      return hasAnyPerm(clinicId, ["manageBilling", "billing.manage", "billing.read", "viewFinancialReports"]);
+    }
+
+    function hasBillingWrite(clinicId) {
+      return hasAnyPerm(clinicId, ["manageBilling", "billing.manage", "billing.write", "settings.write"]);
+    }
+
+    function hasRefundPermission(clinicId) {
+      return hasAnyPerm(clinicId, ["issueRefunds", "billing.refunds", "billing.manage", "manageBilling"]);
+    }
+
     // ─────────────────────────────
     // USERS (global)
     // ─────────────────────────────
@@ -91,7 +116,8 @@ service cloud.firestore {
         allow create, update, delete: if hasPerm(clinicId, "settings.write")
             && docId != "calendarDisplay"
             && docId != "publicBooking"
-            && docId != "communication";
+            && docId != "communication"
+            && docId != "locationDisplay";
       }
 
       // Notes settings (Phase 5)
@@ -384,48 +410,89 @@ match /closures/{closureId} {
       // BILLING (function-authoritative)
       // Paths: clinics/{clinicId}/billing/_/{collection}/{doc} (placeholder _ for subcollections)
       // ─────────────────────────────
+      match /taxes/{taxId} {
+        allow read: if hasBillingRead(clinicId);
+        allow write: if false;
+      }
+
+      match /paymentTypes/{paymentTypeId} {
+        allow read: if hasBillingRead(clinicId);
+        allow write: if false;
+      }
+
+      match /billableItems/{itemId} {
+        allow read: if hasBillingRead(clinicId);
+        allow write: if false;
+      }
+
+      match /products/{productId} {
+        allow read: if hasBillingRead(clinicId);
+        allow write: if false;
+      }
+
+      match /invoices/{invoiceId} {
+        allow read: if hasBillingRead(clinicId);
+        allow write: if false;
+      }
+
+      match /payments/{paymentId} {
+        allow read: if hasBillingRead(clinicId);
+        allow write: if false;
+      }
+
+      match /creditNotes/{creditNoteId} {
+        allow read: if hasBillingRead(clinicId);
+        allow write: if false;
+      }
+
+      match /refunds/{refundId} {
+        allow read: if hasBillingRead(clinicId) || hasRefundPermission(clinicId);
+        allow write: if false;
+      }
+
+      // Backward-compatible legacy billing tree.
       match /billing/_/settings/{docId} {
-        allow read: if hasPerm(clinicId, "manageBilling");
+        allow read: if hasBillingRead(clinicId);
         allow write: if false; // Function-only
       }
 
       match /billing/_/meta/{docId} {
-        allow read: if hasPerm(clinicId, "manageBilling") || hasPerm(clinicId, "viewFinancialReports");
+        allow read: if hasBillingRead(clinicId);
         allow write: if false;
       }
 
       match /billing/_/charges/{chargeId} {
-        allow read: if hasPerm(clinicId, "manageBilling") || hasPerm(clinicId, "viewFinancialReports");
+        allow read: if hasBillingRead(clinicId);
         allow write: if false; // Function-only
       }
 
       match /billing/_/invoices/{invoiceId} {
-        allow read: if hasPerm(clinicId, "manageBilling") || hasPerm(clinicId, "viewFinancialReports");
+        allow read: if hasBillingRead(clinicId);
         allow write: if false; // Function-only
       }
 
       match /billing/_/payments/{paymentId} {
-        allow read: if hasPerm(clinicId, "manageBilling") || hasPerm(clinicId, "viewFinancialReports");
+        allow read: if hasBillingRead(clinicId);
         allow write: if false; // Function-only
       }
 
       match /billing/_/creditNotes/{creditNoteId} {
-        allow read: if hasPerm(clinicId, "manageBilling") || hasPerm(clinicId, "viewFinancialReports");
+        allow read: if hasBillingRead(clinicId);
         allow write: if false; // Function-only
       }
 
       match /billing/_/refunds/{refundId} {
-        allow read: if hasPerm(clinicId, "manageBilling") || hasPerm(clinicId, "issueRefunds") || hasPerm(clinicId, "viewFinancialReports");
+        allow read: if hasBillingRead(clinicId) || hasRefundPermission(clinicId);
         allow write: if false; // Function-only
       }
 
       match /billing/_/invoicees/{invoiceeId} {
-        allow read: if hasPerm(clinicId, "manageBilling") || hasPerm(clinicId, "viewFinancialReports");
+        allow read: if hasBillingRead(clinicId);
         allow write: if false; // Function-only (or allow if needed)
       }
 
       match /billing/_/audit/{eventId} {
-        allow read: if hasPerm(clinicId, "manageBilling") || hasPerm(clinicId, "viewFinancialReports");
+        allow read: if hasBillingRead(clinicId);
         allow write: if false; // Function-only
       }
 

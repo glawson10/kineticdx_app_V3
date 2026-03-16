@@ -17,11 +17,13 @@ import 'auth_gate.dart';
 import 'clinic_context.dart';
 import 'clinic_session_scope.dart';
 import 'app_routes.dart';
+import '../ui/design_tokens.dart';
 
 import '../data/repositories/appointment_types_repository.dart';
 import '../data/repositories/appointments_repository.dart';
 import '../data/repositories/public_booking_settings_repository.dart';
 import '../data/repositories/public_booking_mirror_repository.dart';
+import '../data/repositories/questionnaire_templates_repository.dart';
 import '../data/repositories/calendar_display_settings_repository.dart';
 import '../data/repositories/memberships_repository.dart';
 import '../data/repositories/services_repository.dart';
@@ -30,6 +32,7 @@ import '../data/repositories/clinic_policies_settings_repository.dart';
 import '../data/repositories/communication_settings_repository.dart';
 import '../data/repositories/location_display_repository.dart';
 import '../data/repositories/locations_repository.dart';
+import '../data/repositories/billing_repository.dart';
 
 // Staff repos
 import '../data/repositories/staff_repository.dart';
@@ -37,9 +40,11 @@ import '../data/repositories/staff_profile_repository.dart';
 import '../data/repositories/practitioner_availability_repository.dart';
 import '../data/repositories/practitioner_overrides_repository.dart';
 import '../data/repositories/waitlist_repository.dart';
+import '../features/booking/data/questionnaire_template_catalog_service.dart';
 
 // Public UI
 import '../features/public/ui/intro_screen.dart';
+import '../features/public/ui/manage_appointment_placeholder_screen.dart';
 import '../features/public/ui/price_list_screen.dart';
 import '../features/public/ui/patient_booking_simple_screen.dart';
 
@@ -99,6 +104,7 @@ class MyApp extends StatelessWidget {
   String? _generalTokenFromUri(Uri uri) {
     // Support either:
     // - /q/general/<token>
+    // - /q/launch/<token>
     // - /q/general/<token>/   (trailing slash)
     // - //q/general/<token>   (double slash in generated links)
     // - /q/general?token=<token> or /q/general?t=<token> (fallback)
@@ -115,7 +121,8 @@ class MyApp extends StatelessWidget {
 
     // Keep it strict: match the LAST 3 non-empty segments exactly.
     final n = segments.length;
-    if (segments[n - 3] == 'q' && segments[n - 2] == 'general') {
+    if (segments[n - 3] == 'q' &&
+        (segments[n - 2] == 'general' || segments[n - 2] == 'launch')) {
       final token = segments[n - 1].trim();
       return token.isEmpty ? null : token;
     }
@@ -317,6 +324,7 @@ class MyApp extends StatelessWidget {
     if (path == AppRoutes.publicIntro ||
         path == AppRoutes.publicHome ||
         path == AppRoutes.priceList ||
+        path == AppRoutes.manageAppointment ||
         _isBookingAliasPath(path) ||
         path == AppRoutes.preassessmentConsent ||
         path == AppRoutes.intakeStart ||
@@ -407,7 +415,10 @@ class MyApp extends StatelessWidget {
           if (clinicId != null && clinicId.isNotEmpty) {
             return MaterialPageRoute(
               settings: settings,
-              builder: (_) => const PublicHomeScreen(),
+              builder: (_) => Theme(
+                data: PublicTheme.data,
+                child: const PublicHomeScreen(),
+              ),
             );
           }
 
@@ -429,7 +440,10 @@ class MyApp extends StatelessWidget {
         {
           return MaterialPageRoute(
             settings: settings,
-            builder: (_) => const PublicHomeScreen(),
+            builder: (_) => Theme(
+              data: PublicTheme.data,
+              child: const PublicHomeScreen(),
+            ),
           );
         }
 
@@ -437,7 +451,10 @@ class MyApp extends StatelessWidget {
         {
           return MaterialPageRoute(
             settings: settings,
-            builder: (_) => const PublicHomeScreen(),
+            builder: (_) => Theme(
+              data: PublicTheme.data,
+              child: const PublicHomeScreen(),
+            ),
           );
         }
 
@@ -448,9 +465,23 @@ class MyApp extends StatelessWidget {
 
           return MaterialPageRoute(
             settings: settings,
-            builder: (_) => PriceListScreen(
-              clinicId: clinicId,
-              corporateCode: corp,
+            builder: (_) => Theme(
+              data: PublicTheme.data,
+              child: PriceListScreen(
+                clinicId: clinicId,
+                corporateCode: corp,
+              ),
+            ),
+          );
+        }
+
+      case AppRoutes.manageAppointment:
+        {
+          return MaterialPageRoute(
+            settings: settings,
+            builder: (_) => Theme(
+              data: PublicTheme.data,
+              child: const ManageAppointmentPlaceholderScreen(),
             ),
           );
         }
@@ -460,18 +491,23 @@ class MyApp extends StatelessWidget {
           final clinicId = _clinicIdFor(settings, routeUri);
           return MaterialPageRoute(
             settings: settings,
-            builder: (_) => PreassessmentConsentEntryScreen(
-              fallbackClinicId: clinicId,
+            builder: (_) => Theme(
+              data: PublicTheme.data,
+              child: PreassessmentConsentEntryScreen(
+                fallbackClinicId: clinicId,
+              ),
             ),
           );
         }
 
       case AppRoutes.intakeStart:
         {
-          // IntakeStartScreen reads query params itself (?c & ?t)
           return MaterialPageRoute(
             settings: settings,
-            builder: (_) => const intake.IntakeStartScreen(),
+            builder: (_) => Theme(
+              data: PublicTheme.data,
+              child: const intake.IntakeStartScreen(),
+            ),
           );
         }
 
@@ -495,8 +531,11 @@ class MyApp extends StatelessWidget {
           if (generalToken != null) {
             return MaterialPageRoute(
               settings: settings,
-              builder: (_) => GeneralQuestionnaireTokenScreen(
-                token: generalToken,
+              builder: (_) => Theme(
+                data: PublicTheme.data,
+                child: GeneralQuestionnaireTokenScreen(
+                  token: generalToken,
+                ),
               ),
             );
           }
@@ -517,10 +556,13 @@ class MyApp extends StatelessWidget {
 
             return MaterialPageRoute(
               settings: settings,
-              builder: (_) => PatientBookingSimpleScreen(
-                clinicId: clinicId!.trim(),
-                clinicianId: clinicianId,
-                initialCorporateCodeFromUrl: corp,
+              builder: (_) => Theme(
+                data: PublicTheme.data,
+                child: PatientBookingSimpleScreen(
+                  clinicId: clinicId!.trim(),
+                  clinicianId: clinicianId,
+                  initialCorporateCodeFromUrl: corp,
+                ),
               ),
             );
           }
@@ -575,6 +617,13 @@ class MyApp extends StatelessWidget {
         Provider<PublicBookingMirrorRepository>(
             create: (_) =>
                 PublicBookingMirrorRepository(FirebaseFirestore.instance)),
+        Provider<QuestionnaireTemplatesRepository>(
+            create: (_) =>
+                QuestionnaireTemplatesRepository(FirebaseFirestore.instance)),
+        Provider<QuestionnaireTemplateCatalogService>(
+            create: (context) => QuestionnaireTemplateCatalogService(
+                  context.read<QuestionnaireTemplatesRepository>(),
+                )),
         Provider<CalendarDisplaySettingsRepository>(
             create: (_) => CalendarDisplaySettingsRepository()),
         Provider<ServicesRepository>(create: (_) => ServicesRepository()),
@@ -586,6 +635,8 @@ class MyApp extends StatelessWidget {
         Provider<LocationDisplayRepository>(
             create: (_) => LocationDisplayRepository(FirebaseFirestore.instance)),
         Provider<LocationsRepository>(create: (_) => LocationsRepository()),
+        Provider<BillingRepository>(
+            create: (_) => BillingRepository(FirebaseFirestore.instance)),
         Provider<StaffRepository>(create: (_) => StaffRepository()),
         Provider<StaffProfileRepository>(
             create: (_) => StaffProfileRepository()),

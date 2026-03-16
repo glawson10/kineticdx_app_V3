@@ -134,7 +134,7 @@ function validatePatch(patch) {
     };
 }
 async function upsertPractitionerAvailability(request) {
-    var _a, _b, _c, _d, _e, _f, _g;
+    var _a;
     if (!((_a = request.auth) === null || _a === void 0 ? void 0 : _a.uid)) {
         throw new https_1.HttpsError("unauthenticated", "Sign in required.");
     }
@@ -157,6 +157,18 @@ async function upsertPractitionerAvailability(request) {
     }
     const uid = request.auth.uid;
     await (0, permissions_1.requireClinicPermission)(db, clinicId, uid, "settings.write");
+    try {
+        return await upsertPractitionerAvailabilityImpl(db, clinicId, practitionerId, uid, availabilityId, isCreate, validated);
+    }
+    catch (e) {
+        if (e instanceof https_1.HttpsError)
+            throw e;
+        const message = e instanceof Error ? e.message : String(e);
+        throw new https_1.HttpsError("internal", message || "Failed to save availability rule.");
+    }
+}
+async function upsertPractitionerAvailabilityImpl(db, clinicId, practitionerId, uid, availabilityId, isCreate, validated) {
+    var _a, _b, _c, _d, _e, _f;
     const colRef = db
         .collection("clinics")
         .doc(clinicId)
@@ -169,10 +181,10 @@ async function upsertPractitionerAvailability(request) {
         const doc = {
             locationId: validated.locationId,
             startDate: validated.startDate,
-            endDate: (_b = validated.endDate) !== null && _b !== void 0 ? _b : null,
+            endDate: (_a = validated.endDate) !== null && _a !== void 0 ? _a : null,
             recurrenceRule: validated.recurrenceRule,
             blocks: validated.blocks,
-            description: (_c = validated.description) !== null && _c !== void 0 ? _c : null,
+            description: (_b = validated.description) !== null && _b !== void 0 ? _b : null,
             active: validated.active,
             createdAt: now,
             updatedAt: now,
@@ -188,20 +200,20 @@ async function upsertPractitionerAvailability(request) {
     if (!snap.exists) {
         throw new https_1.HttpsError("not-found", "Availability not found.");
     }
-    const beforeActive = (_d = snap.data()) === null || _d === void 0 ? void 0 : _d.active;
+    const beforeActive = (_c = snap.data()) === null || _c === void 0 ? void 0 : _c.active;
     const updateData = {
         locationId: validated.locationId,
         startDate: validated.startDate,
-        endDate: (_e = validated.endDate) !== null && _e !== void 0 ? _e : null,
+        endDate: (_d = validated.endDate) !== null && _d !== void 0 ? _d : null,
         recurrenceRule: validated.recurrenceRule,
         blocks: validated.blocks,
-        description: (_f = validated.description) !== null && _f !== void 0 ? _f : null,
+        description: (_e = validated.description) !== null && _e !== void 0 ? _e : null,
         active: validated.active,
         updatedAt: now,
     };
     await ref.update(updateData);
     const entityPath = `clinics/${clinicId}/practitioners/${practitionerId}/availability/${availabilityId}`;
-    const prev = (_g = snap.data()) !== null && _g !== void 0 ? _g : {};
+    const prev = (_f = snap.data()) !== null && _f !== void 0 ? _f : {};
     const keysExceptActive = ["locationId", "startDate", "endDate", "recurrenceRule", "blocks", "description"];
     const onlyActiveChanged = beforeActive !== validated.active &&
         keysExceptActive.every((k) => JSON.stringify(prev[k]) === JSON.stringify(updateData[k]));
@@ -214,12 +226,10 @@ async function upsertPractitionerAvailability(request) {
         });
     }
     else {
-        await (0, audit_1.writeSettingsAuditEvent)(db, clinicId, "settings.availability.updated", uid, entityPath, availabilityId, {
-            ...updateData,
-            updatedAt: undefined,
-        });
+        const { updatedAt: _unused, ...changesForAudit } = updateData;
+        await (0, audit_1.writeSettingsAuditEvent)(db, clinicId, "settings.availability.updated", uid, entityPath, availabilityId, changesForAudit);
     }
     await (0, mirrorPractitionerAvailabilityToLegacy_1.mirrorPractitionerAvailabilityToLegacy)(clinicId, practitionerId);
-    return { ok: true, availabilityId };
+    return { ok: true, availabilityId: availabilityId };
 }
 //# sourceMappingURL=upsertPractitionerAvailability.js.map

@@ -262,6 +262,55 @@ class IntakeTriageBlock {
   }
 }
 
+/// PA-P3: Snapshot of template/flow/clinical profile for registry-driven dispatch.
+/// Carried on draft and submitted session.
+class IntakeFlowSnapshot {
+  final String? templateId;
+  final String? flowDefinitionId;
+  final String? clinicalProfileId;
+  final String? flowId;
+  final int? flowVersion;
+  final String? summaryEngine;
+  final String? decisionSupportProfile;
+  final bool supportsDifferentialHypothesis;
+
+  const IntakeFlowSnapshot({
+    this.templateId,
+    this.flowDefinitionId,
+    this.clinicalProfileId,
+    this.flowId,
+    this.flowVersion,
+    this.summaryEngine,
+    this.decisionSupportProfile,
+    this.supportsDifferentialHypothesis = false,
+  });
+
+  Map<String, dynamic> toMap() => {
+        if (templateId != null && templateId!.isNotEmpty) 'templateId': templateId,
+        if (flowDefinitionId != null && flowDefinitionId!.isNotEmpty) 'flowDefinitionId': flowDefinitionId,
+        if (clinicalProfileId != null && clinicalProfileId!.isNotEmpty) 'clinicalProfileId': clinicalProfileId,
+        if (flowId != null && flowId!.isNotEmpty) 'flowId': flowId,
+        if (flowVersion != null) 'flowVersion': flowVersion,
+        if (summaryEngine != null && summaryEngine!.isNotEmpty) 'summaryEngine': summaryEngine,
+        if (decisionSupportProfile != null && decisionSupportProfile!.isNotEmpty) 'decisionSupportProfile': decisionSupportProfile,
+        'supportsDifferentialHypothesis': supportsDifferentialHypothesis,
+      };
+
+  static IntakeFlowSnapshot fromMap(Map<String, dynamic>? m) {
+    if (m == null) return const IntakeFlowSnapshot();
+    return IntakeFlowSnapshot(
+      templateId: (m['templateId'] as String?)?.trim(),
+      flowDefinitionId: (m['flowDefinitionId'] as String?)?.trim(),
+      clinicalProfileId: (m['clinicalProfileId'] as String?)?.trim(),
+      flowId: (m['flowId'] as String?)?.trim(),
+      flowVersion: m['flowVersion'] is int ? m['flowVersion'] as int : null,
+      summaryEngine: (m['summaryEngine'] as String?)?.trim(),
+      decisionSupportProfile: (m['decisionSupportProfile'] as String?)?.trim(),
+      supportsDifferentialHypothesis: m['supportsDifferentialHypothesis'] == true,
+    );
+  }
+}
+
 /// Draft ownership / access boundary.
 class IntakeAccessBlock {
   final IntakeAccessMode mode;
@@ -328,6 +377,9 @@ class IntakeSession {
 
   final String? pdfSnapshotPath;
 
+  /// PA-P3: Registry snapshot (template/flow/clinical profile). Optional for legacy.
+  final IntakeFlowSnapshot flowSnapshot;
+
   const IntakeSession({
     required this.sessionId,
     required this.schemaVersion,
@@ -344,6 +396,7 @@ class IntakeSession {
     required this.answers,
     required this.triage,
     required this.pdfSnapshotPath,
+    this.flowSnapshot = const IntakeFlowSnapshot(),
   });
 
   bool get isMutable => status == IntakeStatus.draft;
@@ -363,6 +416,7 @@ class IntakeSession {
         'answers': answers.map((k, v) => MapEntry(k, v.toMap())),
         'triage': triage.toMap(),
         'pdfSnapshotPath': pdfSnapshotPath,
+        ...flowSnapshot.toMap(),
       };
 
   static IntakeSession fromDoc({
@@ -379,6 +433,12 @@ class IntakeSession {
         answers[entry.key] = AnswerValue.fromMap(v.cast<String, dynamic>());
       }
     }
+
+    final flowSnapshot = IntakeFlowSnapshot.fromMap(
+      data['flowDefinitionId'] != null || data['clinicalProfileId'] != null || data['templateId'] != null
+          ? data
+          : null,
+    );
 
     return IntakeSession(
       sessionId: sessionId,
@@ -398,6 +458,7 @@ class IntakeSession {
       answers: answers,
       triage: IntakeTriageBlock.fromMap(data['triage'] is Map ? (data['triage'] as Map).cast<String, dynamic>() : null),
       pdfSnapshotPath: data['pdfSnapshotPath'] as String?,
+      flowSnapshot: flowSnapshot,
     );
   }
 

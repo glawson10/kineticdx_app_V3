@@ -5,6 +5,7 @@ import 'package:cloud_firestore/cloud_firestore.dart' show Timestamp;
 import '../../state/intake_draft_controller.dart';
 import '../../domain/answer_value.dart';
 import '../../domain/intake_schema.dart';
+import '../../domain/flow_registry.dart';
 
 class PatientDetailsScreen extends StatefulWidget {
   const PatientDetailsScreen({super.key});
@@ -57,17 +58,25 @@ class _PatientDetailsScreenState extends State<PatientDetailsScreen> {
   /// We treat the flow override as the single source of truth for routing here.
   /// IntakeStartScreen passes it into IntakeFlowHost(flowArgs: ...),
   /// IntakeFlowHost then forwards it into each route settings.arguments.
+  /// PA-P3: Prefer flowDefinitionId from args/draft; fall back to legacy flowIdOverride.
   String _resolveFlowIdOverride() {
     final args = _routeArgs();
     return _safeStr(args['flowIdOverride']);
   }
 
+  /// PA-P3: Resolve next route from flow registry (flowDefinitionId or legacy flowId).
   String _nextRouteForFlow(String flowIdOverride) {
-    final f = flowIdOverride.trim().toLowerCase();
-    if (f == 'generalvisit' || f == 'general_visit' || f == 'general-visit') {
-      return '/general-visit-start';
-    }
-    return '/region-select';
+    final args = _routeArgs();
+    final flowDefinitionId = _safeStr(args['flowDefinitionId']);
+    final draft = context.read<IntakeDraftController>();
+    final snapshotFlowDefinitionId = draft.session.flowSnapshot.flowDefinitionId;
+    final effectiveFlowDefinitionId = flowDefinitionId.isNotEmpty
+        ? flowDefinitionId
+        : (snapshotFlowDefinitionId ?? '');
+    return getFirstScreenRoute(
+      flowDefinitionId: effectiveFlowDefinitionId.isNotEmpty ? effectiveFlowDefinitionId : null,
+      legacyFlowId: flowIdOverride.isNotEmpty ? flowIdOverride : null,
+    );
   }
 
   // ---------------------------------------------------------------------------
@@ -240,10 +249,7 @@ class _PatientDetailsScreenState extends State<PatientDetailsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final draft = context.watch<IntakeDraftController>();
     final bottomInset = MediaQuery.of(context).viewPadding.bottom;
-
-    final flowIdDebug = _resolveFlowIdOverride();
 
     return Scaffold(
       appBar: AppBar(title: const Text('Your details')),

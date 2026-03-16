@@ -1,7 +1,8 @@
 // lib/staff/screens/practitioner_availability_screen.dart
 //
 // Single Availability hub: Recurring availability + Overrides (sub-tabs).
-// Entry: Team → Member → Edit availability; Scheduling → Practitioners → Edit availability.
+// PractitionerAvailabilityContent can be embedded (e.g. in team member profile).
+// PractitionerAvailabilityScreen is the standalone full-screen route.
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -15,7 +16,8 @@ import '../../models/availability_override.dart';
 import 'practitioner_availability_rule_form_screen.dart';
 import 'practitioner_override_form_screen.dart';
 
-class PractitionerAvailabilityScreen extends StatefulWidget {
+/// Standalone screen (e.g. from deep link or legacy entry).
+class PractitionerAvailabilityScreen extends StatelessWidget {
   const PractitionerAvailabilityScreen({
     super.key,
     required this.clinicId,
@@ -28,12 +30,42 @@ class PractitionerAvailabilityScreen extends StatefulWidget {
   final String? practitionerName;
 
   @override
-  State<PractitionerAvailabilityScreen> createState() =>
-      _PractitionerAvailabilityScreenState();
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(
+          'Availability – ${practitionerName ?? practitionerId}',
+        ),
+      ),
+      body: PractitionerAvailabilityContent(
+        clinicId: clinicId,
+        practitionerId: practitionerId,
+        practitionerName: practitionerName,
+      ),
+    );
+  }
 }
 
-class _PractitionerAvailabilityScreenState
-    extends State<PractitionerAvailabilityScreen>
+/// Embeddable availability UI: Recurring + Overrides tabs. Use in team member profile or standalone screen.
+class PractitionerAvailabilityContent extends StatefulWidget {
+  const PractitionerAvailabilityContent({
+    super.key,
+    required this.clinicId,
+    required this.practitionerId,
+    this.practitionerName,
+  });
+
+  final String clinicId;
+  final String practitionerId;
+  final String? practitionerName;
+
+  @override
+  State<PractitionerAvailabilityContent> createState() =>
+      _PractitionerAvailabilityContentState();
+}
+
+class _PractitionerAvailabilityContentState
+    extends State<PractitionerAvailabilityContent>
     with SingleTickerProviderStateMixin {
   late TabController _tabController;
 
@@ -52,77 +84,71 @@ class _PractitionerAvailabilityScreenState
     super.dispose();
   }
 
-  String get _title =>
-      'Availability – ${widget.practitionerName ?? widget.practitionerId}';
-
   @override
   Widget build(BuildContext context) {
     final locationsRepo = context.read<LocationsRepository>();
     final availabilityRepo = context.read<PractitionerAvailabilityRepository>();
     final overridesRepo = context.read<PractitionerOverridesRepository>();
 
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(_title),
-        bottom: TabBar(
-          controller: _tabController,
-          tabs: const [
-            Tab(text: 'Recurring availability'),
-            Tab(text: 'Overrides'),
+    return StreamBuilder<List<ClinicLocation>>(
+      stream: locationsRepo.watchLocations(widget.clinicId),
+      builder: (context, locSnap) {
+        final locations = locSnap.data ?? [];
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _ScopeBar(
+              locations: locations,
+              scopeId: _locationScopeId,
+              onScopeChanged: (id) =>
+                  setState(() => _locationScopeId = id),
+            ),
+            TabBar(
+              controller: _tabController,
+              tabs: const [
+                Tab(text: 'Recurring availability'),
+                Tab(text: 'Overrides'),
+              ],
+            ),
+            Expanded(
+              child: TabBarView(
+                controller: _tabController,
+                children: [
+                  _RecurringTab(
+                    clinicId: widget.clinicId,
+                    practitionerId: widget.practitionerId,
+                    locationScopeId: _locationScopeId,
+                    locations: locations,
+                    availabilityStream: availabilityRepo.watchAvailabilities(
+                      clinicId: widget.clinicId,
+                      practitionerId: widget.practitionerId,
+                    ),
+                    onAddRule: () => _openRuleForm(context, null),
+                    onEditRule: (rule) => _openRuleForm(context, rule),
+                    onDeleteRule: (rule) => _deleteRule(context, rule),
+                    onCopyFromLocation: (list) => _copyFromLocation(context, list),
+                  ),
+                  _OverridesTab(
+                    clinicId: widget.clinicId,
+                    practitionerId: widget.practitionerId,
+                    locationScopeId: _locationScopeId,
+                    locations: locations,
+                    overridesStream: overridesRepo.watchOverrides(
+                      clinicId: widget.clinicId,
+                      practitionerId: widget.practitionerId,
+                    ),
+                    onAddOverride: ({OverrideReason? preset}) =>
+                        _openOverrideForm(context, null, preset: preset),
+                    onEditOverride: (o) =>
+                        _openOverrideForm(context, o),
+                    onDeleteOverride: (o) => _deleteOverride(context, o),
+                  ),
+                ],
+              ),
+            ),
           ],
-        ),
-      ),
-      body: StreamBuilder<List<ClinicLocation>>(
-        stream: locationsRepo.watchLocations(widget.clinicId),
-        builder: (context, locSnap) {
-          final locations = locSnap.data ?? [];
-          return Column(
-            children: [
-              _ScopeBar(
-                locations: locations,
-                scopeId: _locationScopeId,
-                onScopeChanged: (id) =>
-                    setState(() => _locationScopeId = id),
-              ),
-              Expanded(
-                child: TabBarView(
-                  controller: _tabController,
-                  children: [
-                    _RecurringTab(
-                      clinicId: widget.clinicId,
-                      practitionerId: widget.practitionerId,
-                      locationScopeId: _locationScopeId,
-                      locations: locations,
-                      availabilityStream: availabilityRepo.watchAvailabilities(
-                        clinicId: widget.clinicId,
-                        practitionerId: widget.practitionerId,
-                      ),
-                      onAddRule: () => _openRuleForm(context, null),
-                      onEditRule: (rule) => _openRuleForm(context, rule),
-                      onCopyFromLocation: (list) => _copyFromLocation(context, list),
-                    ),
-                    _OverridesTab(
-                      clinicId: widget.clinicId,
-                      practitionerId: widget.practitionerId,
-                      locationScopeId: _locationScopeId,
-                      locations: locations,
-                      overridesStream: overridesRepo.watchOverrides(
-                        clinicId: widget.clinicId,
-                        practitionerId: widget.practitionerId,
-                      ),
-                      onAddOverride: ({OverrideReason? preset}) =>
-                          _openOverrideForm(context, null, preset: preset),
-                      onEditOverride: (o) =>
-                          _openOverrideForm(context, o),
-                      onDeleteOverride: (o) => _deleteOverride(context, o),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          );
-        },
-      ),
+        );
+      },
     );
   }
 
@@ -298,6 +324,50 @@ class _PractitionerAvailabilityScreenState
     );
   }
 
+  Future<void> _deleteRule(BuildContext context, PractitionerAvailability rule) async {
+    final locations = await context.read<LocationsRepository>().watchLocations(widget.clinicId).first;
+    if (!context.mounted) return;
+    final locationName = _locationNameForId(rule.locationId, locations);
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete availability rule?'),
+        content: Text(
+          'Delete this rule at $locationName (${rule.startDate} ${rule.recurrenceRule.frequency})?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !context.mounted) return;
+    try {
+      await context.read<PractitionerAvailabilityRepository>().deleteAvailability(
+            clinicId: widget.clinicId,
+            practitionerId: widget.practitionerId,
+            availabilityId: rule.id,
+          );
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Availability rule deleted.')),
+        );
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to delete: $e')),
+        );
+      }
+    }
+  }
+
   Future<void> _deleteOverride(BuildContext context, PractitionerOverride o) async {
     final ok = await showDialog<bool>(
       context: context,
@@ -403,6 +473,7 @@ class _RecurringTab extends StatelessWidget {
     required this.availabilityStream,
     required this.onAddRule,
     required this.onEditRule,
+    required this.onDeleteRule,
     required this.onCopyFromLocation,
   });
 
@@ -413,6 +484,7 @@ class _RecurringTab extends StatelessWidget {
   final Stream<List<PractitionerAvailability>> availabilityStream;
   final VoidCallback onAddRule;
   final void Function(PractitionerAvailability) onEditRule;
+  final void Function(PractitionerAvailability) onDeleteRule;
   final void Function(List<PractitionerAvailability> list) onCopyFromLocation;
 
   String _locationName(String locationId) {
@@ -475,6 +547,7 @@ class _RecurringTab extends StatelessWidget {
                     rule: rule,
                     locationName: _locationName(rule.locationId),
                     onEdit: () => onEditRule(rule),
+                    onDelete: () => onDeleteRule(rule),
                   )),
             const SizedBox(height: 16),
             Row(
@@ -505,11 +578,13 @@ class _AvailabilityRuleCard extends StatelessWidget {
     required this.rule,
     required this.locationName,
     required this.onEdit,
+    required this.onDelete,
   });
 
   final PractitionerAvailability rule;
   final String locationName;
   final VoidCallback onEdit;
+  final VoidCallback onDelete;
 
   static const _days = ['', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
@@ -553,9 +628,18 @@ class _AvailabilityRuleCard extends StatelessWidget {
               Text(rule.description!, style: Theme.of(context).textTheme.bodySmall),
           ],
         ),
-        trailing: IconButton(
-          icon: const Icon(Icons.edit),
-          onPressed: onEdit,
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            IconButton(
+              icon: const Icon(Icons.edit),
+              onPressed: onEdit,
+            ),
+            IconButton(
+              icon: const Icon(Icons.delete_outline),
+              onPressed: onDelete,
+            ),
+          ],
         ),
       ),
     );

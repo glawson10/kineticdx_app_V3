@@ -29,7 +29,12 @@ abstract final class PermissionKeys {
   static const String manageAppointmentsWrite = 'schedule.write';
   static const String viewClinical = 'clinical.read'; // or notes.read
   static const String editClinical = 'clinical.write'; // or notes.write.own/any
-  static const String manageBilling = 'billing.manage'; // optional; add to rules if used
+  static const String manageBilling = 'billing.manage';
+  static const String manageBillingLegacy = 'manageBilling';
+  static const String viewFinancialReports = 'viewFinancialReports';
+  static const String issueRefunds = 'issueRefunds';
+  static const String billingRead = 'billing.read';
+  static const String billingWrite = 'billing.write';
 
   // ─── Raw keys (what Firestore rules use) ───────────────────────────────
   static const String settingsRead = 'settings.read';
@@ -48,7 +53,22 @@ abstract final class PermissionKeys {
   static const String servicesManage = 'services.manage';
   static const String resourcesManage = 'resources.manage';
   static const String registriesManage = 'registries.manage';
+  static const String templatesManage = 'templates.manage';
   static const String auditRead = 'audit.read';
+
+  /// Legacy/cross-phase compatibility keys for billing access checks.
+  static const List<String> billingReadAny = [
+    manageBillingLegacy,
+    manageBilling,
+    billingRead,
+    viewFinancialReports,
+  ];
+
+  static const List<String> billingWriteAny = [
+    manageBillingLegacy,
+    manageBilling,
+    billingWrite,
+  ];
 
   /// All keys that may appear in membership.permissions (for UI/validation).
   static const List<String> all = [
@@ -68,7 +88,14 @@ abstract final class PermissionKeys {
     servicesManage,
     resourcesManage,
     registriesManage,
+    templatesManage,
     auditRead,
+    manageBillingLegacy,
+    manageBilling,
+    viewFinancialReports,
+    issueRefunds,
+    billingRead,
+    billingWrite,
   ];
 }
 

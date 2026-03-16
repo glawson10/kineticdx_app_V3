@@ -1,8 +1,8 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.recordManualPayment = recordManualPayment;
-const https_1 = require("firebase-functions/v2/https");
-async function recordManualPayment(_request) {
-    throw new https_1.HttpsError("unimplemented", "recordManualPayment not implemented");
+const recordPayment_1 = require("./recordPayment");
+async function recordManualPayment(request) {
+    return (0, recordPayment_1.recordPayment)(request);
 }
 //# sourceMappingURL=recordManualPayment.js.map

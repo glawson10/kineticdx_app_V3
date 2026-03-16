@@ -17,25 +17,14 @@ import 'package:cloud_firestore/cloud_firestore.dart' show Timestamp;
 
 import 'package:kineticdx_app_v3/preassessment/domain/answer_value.dart';
 import 'package:kineticdx_app_v3/preassessment/domain/flow_definition.dart';
+import 'package:kineticdx_app_v3/preassessment/domain/flow_registry.dart';
 import 'package:kineticdx_app_v3/preassessment/domain/intake_schema.dart';
 
 import 'package:kineticdx_app_v3/preassessment/state/intake_draft_controller.dart';
 import 'package:kineticdx_app_v3/preassessment/flows/regions/dynamic_flow_screen.dart';
 import 'package:kineticdx_app_v3/preassessment/flows/thank_you/thank_you_screen.dart';
 
-// Region flows
-import 'package:kineticdx_app_v3/preassessment/domain/flows/regions/ankle/ankle_flow_v1.dart';
-import 'package:kineticdx_app_v3/preassessment/domain/flows/regions/cervical/cervical_flow_v1.dart';
-import 'package:kineticdx_app_v3/preassessment/domain/flows/regions/elbow/elbow_flow_v1.dart';
-import 'package:kineticdx_app_v3/preassessment/domain/flows/regions/hip/hip_flow_v1.dart';
-import 'package:kineticdx_app_v3/preassessment/domain/flows/regions/knee/knee_flow_v1.dart';
-import 'package:kineticdx_app_v3/preassessment/domain/flows/regions/lumbar/lumbar_flow_v1.dart';
-import 'package:kineticdx_app_v3/preassessment/domain/flows/regions/shoulder/shoulder_flow_v1.dart';
-import 'package:kineticdx_app_v3/preassessment/domain/flows/regions/thoracic/thoracic_flow_v1.dart';
-import 'package:kineticdx_app_v3/preassessment/domain/flows/regions/wrist/wrist_flow_v1.dart';
-
-// General (non-region) visit flow
-import 'package:kineticdx_app_v3/preassessment/domain/flows/general_visit/general_visit_flow_v1.dart';
+// PA-P3: Flow resolution is registry-based (flow_registry.dart). Region/general imports only for type.
 
 class ReviewScreen extends StatefulWidget {
   final String Function(String key) t;
@@ -108,56 +97,19 @@ class _ReviewScreenState extends State<ReviewScreen> {
     );
   }
 
-  FlowDefinition? _flowForBodyArea(String bodyArea) {
-    switch (bodyArea) {
-      case 'ankle':
-      case 'region.ankle':
-        return ankleFlowV1;
-      case 'cervical':
-      case 'region.cervical':
-        return cervicalFlowV1;
-      case 'elbow':
-      case 'region.elbow':
-        return elbowFlowV1;
-      case 'hip':
-      case 'region.hip':
-        return hipFlowV1;
-      case 'knee':
-      case 'region.knee':
-        return kneeFlowV1;
-      case 'lumbar':
-      case 'region.lumbar':
-        return lumbarFlowV1;
-      case 'shoulder':
-      case 'region.shoulder':
-        return shoulderFlowV1;
-      case 'thoracic':
-      case 'region.thoracic':
-        return thoracicFlowV1;
-      case 'wrist':
-      case 'region.wrist':
-        return wristFlowV1;
-      default:
-        return null;
-    }
-  }
-
-  /// Resolve the active flow definition for this session.
-  ///
-  /// Priority:
-  /// - meta.flowId == 'generalVisit' → generalVisitFlowV1
-  /// - otherwise, infer from regionSelection.bodyArea (region flows)
+  /// PA-P3: Resolve the active flow definition from registry.
+  /// Prefer draft.session.flowSnapshot.flowDefinitionId; else legacy meta.flowId / regionSelection.bodyArea.
   FlowDefinition? _resolveFlow(IntakeDraftController draft) {
+    final snap = draft.session.flowSnapshot;
     final answers = draft.answers;
     final metaFlow = answers['meta.flowId'];
-    final metaFlowId = metaFlow?.asSingle ?? metaFlow?.asText ?? '';
-
-    if (metaFlowId.trim() == 'generalVisit') {
-      return generalVisitFlowV1;
-    }
-
+    final metaFlowId = (metaFlow?.asSingle ?? metaFlow?.asText ?? '').trim();
     final bodyArea = draft.session.regionSelection.bodyArea;
-    return _flowForBodyArea(bodyArea);
+    return resolveFlowFromRegistry(
+      flowDefinitionId: snap.flowDefinitionId,
+      legacyFlowId: metaFlowId.isNotEmpty ? metaFlowId : null,
+      bodyArea: bodyArea.trim().isNotEmpty ? bodyArea : null,
+    );
   }
 
   String _formatAnswer({
@@ -346,12 +298,19 @@ class _ReviewScreenState extends State<ReviewScreen> {
       final functions = FirebaseFunctions.instanceFor(region: 'europe-west3');
       final callable = functions.httpsCallable('submitIntakeSessionFn');
 
+      final snap = s.flowSnapshot;
       final payload = <String, dynamic>{
         'clinicId': s.clinicId,
         'sessionId': oldSessionId,
         'intakeSchemaVersion': IntakeSchemaVersions.intakeSessionV1,
         'flowId': flow.flowId,
         'flowVersion': flow.flowVersion,
+        if (snap.templateId != null && snap.templateId!.isNotEmpty) 'templateId': snap.templateId,
+        if (snap.flowDefinitionId != null && snap.flowDefinitionId!.isNotEmpty) 'flowDefinitionId': snap.flowDefinitionId,
+        if (snap.clinicalProfileId != null && snap.clinicalProfileId!.isNotEmpty) 'clinicalProfileId': snap.clinicalProfileId,
+        if (snap.summaryEngine != null && snap.summaryEngine!.isNotEmpty) 'summaryEngine': snap.summaryEngine,
+        if (snap.decisionSupportProfile != null && snap.decisionSupportProfile!.isNotEmpty) 'decisionSupportProfile': snap.decisionSupportProfile,
+        'supportsDifferentialHypothesis': snap.supportsDifferentialHypothesis,
         'consent': <String, dynamic>{
           'policyBundleId': s.consent.policyBundleId,
           'policyBundleVersion': s.consent.policyBundleVersion,

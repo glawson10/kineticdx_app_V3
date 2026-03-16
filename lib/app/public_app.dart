@@ -5,6 +5,7 @@
 
 import 'package:flutter/material.dart';
 
+import '../ui/design_tokens.dart';
 import '../features/public/ui/intro_screen.dart';
 import '../features/public/ui/price_list_screen.dart';
 import '../features/public/ui/patient_booking_simple_screen.dart';
@@ -47,6 +48,7 @@ class PublicApp extends StatelessWidget {
   String? _generalTokenFromPath(Uri uri) {
     // Support either:
     // - /q/general/<token>
+    // - /q/launch/<token>
     // - /q/general/<token>/   (trailing slash)
     // - //q/general/<token>   (double slash in generated links)
     // - /q/general?token=<token> or /q/general?t=<token> (fallback)
@@ -60,7 +62,8 @@ class PublicApp extends StatelessWidget {
 
     // Keep it strict: match the LAST 3 non-empty segments exactly.
     final n = segments.length;
-    if (segments[n - 3] == 'q' && segments[n - 2] == 'general') {
+    if (segments[n - 3] == 'q' &&
+        (segments[n - 2] == 'general' || segments[n - 2] == 'launch')) {
       final token = segments[n - 1].trim();
       return token.isEmpty ? null : token;
     }
@@ -90,11 +93,7 @@ class PublicApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        useMaterial3: true,
-        fontFamily: 'OpenSans',
-        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF7B1FA2)),
-      ),
+      theme: PublicTheme.data,
       initialRoute: '/public',
       onGenerateRoute: (settings) {
         final uri = Uri.parse((settings.name ?? '/public').trim());

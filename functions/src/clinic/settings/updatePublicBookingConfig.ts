@@ -15,9 +15,81 @@ import {
   pickAllowedFields,
   requireNonEmptyString,
 } from "./validators";
+import { validateQuestionnaireFlow } from "../questionnaires/questionnaireTemplates";
 
 const db = admin.firestore();
 const FV = admin.firestore.FieldValue;
+
+const DAY_KEYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] as const;
+type Interval = { start: string; end: string };
+type WeeklyHours = Record<(typeof DAY_KEYS)[number], Interval[]>;
+type DayMeta = { corporateOnly?: boolean; requiresCorporateCode?: boolean; locationLabel?: string };
+type WeeklyHoursMeta = Record<(typeof DAY_KEYS)[number], DayMeta>;
+
+function safeStr(v: unknown): string {
+  return typeof v === "string" ? v.trim() : "";
+}
+
+function hmToMinutes(hm: string): number {
+  const m = /^(\d{2}):(\d{2})$/.exec(hm.trim());
+  if (!m) return NaN;
+  const hh = Number(m[1]);
+  const mm = Number(m[2]);
+  if (!Number.isFinite(hh) || !Number.isFinite(mm)) return NaN;
+  if (hh < 0 || hh > 23 || mm < 0 || mm > 59) return NaN;
+  return hh * 60 + mm;
+}
+
+function normalizeIntervals(raw: unknown): Interval[] {
+  const out: Interval[] = [];
+  const list = Array.isArray(raw) ? raw : [];
+  for (const it of list) {
+    const item = it as Record<string, unknown> | null;
+    const start = safeStr(item?.start);
+    const end = safeStr(item?.end);
+    if (!start || !end) continue;
+    const a = hmToMinutes(start);
+    const b = hmToMinutes(end);
+    if (!Number.isFinite(a) || !Number.isFinite(b)) continue;
+    if (b <= a) continue;
+    out.push({ start, end });
+  }
+  out.sort((x, y) => hmToMinutes(x.start) - hmToMinutes(y.start));
+  for (let i = 1; i < out.length; i++) {
+    const prev = out[i - 1];
+    const cur = out[i];
+    if (hmToMinutes(cur.start) < hmToMinutes(prev.end)) {
+      throw new HttpsError("invalid-argument", "Overlapping intervals are not allowed.");
+    }
+  }
+  return out;
+}
+
+function normalizeWeeklyHours(raw: unknown): WeeklyHours {
+  const obj = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+  const out = Object.fromEntries(DAY_KEYS.map((k) => [k, [] as Interval[]])) as WeeklyHours;
+  for (const k of DAY_KEYS) {
+    out[k] = normalizeIntervals(obj[k]);
+  }
+  return out;
+}
+
+function normalizeWeeklyMeta(raw: unknown): WeeklyHoursMeta {
+  const base: DayMeta = { corporateOnly: false, requiresCorporateCode: false, locationLabel: "" };
+  const out = Object.fromEntries(DAY_KEYS.map((k) => [k, { ...base }])) as WeeklyHoursMeta;
+  const obj = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+  for (const k of DAY_KEYS) {
+    const m = obj[k];
+    if (!m || typeof m !== "object") continue;
+    const day = m as Record<string, unknown>;
+    out[k] = {
+      corporateOnly: day.corporateOnly === true,
+      requiresCorporateCode: day.requiresCorporateCode === true,
+      locationLabel: safeStr(day.locationLabel),
+    };
+  }
+  return out;
+}
 
 const ALLOWED_KEYS = new Set([
   "slotStepMinutes",
@@ -28,7 +100,10 @@ const ALLOWED_KEYS = new Set([
   "allowNewPatients",
   "cancellationPolicyHours",
   "weeklyHours",
+  "weeklyHoursMeta",
   "confirmationMessage",
+  "onlineBookingEnabled",
+  "questionnaireFlow",
 ]);
 
 const VALID_SLOT_STEPS = new Set([5, 10, 15, 20, 30, 60]);
@@ -69,7 +144,7 @@ function validatePatch(patch: unknown): PublicBookingPatch {
     if (v != null) out.cancellationPolicyHours = v;
   }
 
-  const booleanFields = ["requirePhone", "requireEmail", "allowNewPatients"] as const;
+  const booleanFields = ["requirePhone", "requireEmail", "allowNewPatients", "onlineBookingEnabled"] as const;
   for (const field of booleanFields) {
     if (raw[field] !== undefined) {
       const v = assertBoolean(raw[field], field);
@@ -84,10 +159,18 @@ function validatePatch(patch: unknown): PublicBookingPatch {
 
   if (raw.weeklyHours !== undefined) {
     if (raw.weeklyHours !== null && typeof raw.weeklyHours === "object") {
-      out.weeklyHours = raw.weeklyHours;
+      out.weeklyHours = normalizeWeeklyHours(raw.weeklyHours);
     } else if (raw.weeklyHours === null) {
       out.weeklyHours = null;
     }
+  }
+
+  if (raw.weeklyHoursMeta !== undefined && raw.weeklyHoursMeta !== null && typeof raw.weeklyHoursMeta === "object") {
+    out.weeklyHoursMeta = normalizeWeeklyMeta(raw.weeklyHoursMeta);
+  }
+
+  if (raw.questionnaireFlow !== undefined) {
+    out.questionnaireFlow = validateQuestionnaireFlow(raw.questionnaireFlow);
   }
 
   return out;

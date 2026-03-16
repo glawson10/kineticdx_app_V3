@@ -108,3 +108,51 @@ export async function requireClinicPermission(
   // Returning this is handy for callers like updateNote
   return { active: member.active, permissions: member.permissions };
 }
+
+/**
+ * Require at least one of the provided permission keys.
+ * Useful for compatibility windows when permission keys are being normalized.
+ */
+export async function requireAnyClinicPermission(
+  db: admin.firestore.Firestore,
+  clinicId: string,
+  uid: string,
+  permKeys: string[]
+): Promise<{
+  active: boolean;
+  permissions: PermissionMap;
+  matchedPermission: string;
+}> {
+  const c = safeStr(clinicId);
+  const u = safeStr(uid);
+  const keys = (permKeys ?? []).map((k) => safeStr(k)).filter(Boolean);
+  if (!c || !u || keys.length === 0) {
+    throw new HttpsError("invalid-argument", "Invalid permission check args.");
+  }
+
+  const member = await loadMemberDoc(db, c, u);
+  if (!member.exists) {
+    throw new HttpsError("permission-denied", "No membership doc for uid in clinic.");
+  }
+  if (!member.active) {
+    throw new HttpsError("permission-denied", "Membership inactive for this clinic.");
+  }
+  if (member.roleId === "owner") {
+    return {
+      active: member.active,
+      permissions: member.permissions,
+      matchedPermission: "owner",
+    };
+  }
+
+  for (const key of keys) {
+    if (member.permissions[key] === true) {
+      return {
+        active: member.active,
+        permissions: member.permissions,
+        matchedPermission: key,
+      };
+    }
+  }
+  throw new HttpsError("permission-denied", `Missing one of permissions: ${keys.join(", ")}`);
+}

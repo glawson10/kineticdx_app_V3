@@ -19,10 +19,14 @@ class StaffRepository {
   final FirebaseFunctions _fn;
 
   /// Cache members stream per clinicId so multiple widgets get the same stream (avoids cancel/resubscribe and Firestore "Unexpected state" on web).
+  /// Uses ShareReplay so late listeners (e.g. booking resolver) get the last emitted value.
   final Map<String, Stream<List<QueryDocumentSnapshot<Map<String, dynamic>>>>> _membersStreamCache = {};
 
   /// Cache for canonical-only list (single listener, emits quickly; used for Team list to avoid combine stall).
   final Map<String, Stream<List<QueryDocumentSnapshot<Map<String, dynamic>>>>> _membersOnlyStreamCache = {};
+
+  /// Cache for practitioner booking metadata streams (ShareReplay so booking resolver listeners get data).
+  final Map<String, Stream<List<QueryDocumentSnapshot<Map<String, dynamic>>>>> _practitionerMetaStreamCache = {};
 
   // ✅ Canonical = members (matches rules + MembershipsRepository)
   // 🟡 Legacy fallback = memberships (temporary migration support)
@@ -100,7 +104,7 @@ class StaffRepository {
         '[StaffRepository] watchMembershipsWithFallback canon=${canonRef.path} legacy=${legacyRef.path}',
       );
 
-      return RxCombineLatest2<
+      return ShareReplay(RxCombineLatest2<
         QuerySnapshot<Map<String, dynamic>>,
         QuerySnapshot<Map<String, dynamic>>,
         List<QueryDocumentSnapshot<Map<String, dynamic>>>>(
@@ -140,7 +144,7 @@ class StaffRepository {
 
         return docs;
       },
-    );
+    ));
     });
   }
 
@@ -170,7 +174,7 @@ class StaffRepository {
     return _membersOnlyStreamCache.putIfAbsent(c, () {
       final ref = _membersCol(c);
       debugPrint('[StaffRepository] watchMembersCached path=${ref.path}');
-      return ref.snapshots().map((snap) => snap.docs);
+      return ShareReplay(ref.snapshots().map((snap) => snap.docs));
     });
   }
 
@@ -179,9 +183,11 @@ class StaffRepository {
     if (clinicId != null && clinicId.trim().isNotEmpty) {
       _membersStreamCache.remove(clinicId.trim());
       _membersOnlyStreamCache.remove(clinicId.trim());
+      _practitionerMetaStreamCache.remove(clinicId.trim());
     } else {
       _membersStreamCache.clear();
       _membersOnlyStreamCache.clear();
+      _practitionerMetaStreamCache.clear();
     }
   }
 
@@ -318,17 +324,24 @@ class StaffRepository {
   }
 
   /// Stream all practitioner booking metadata docs for a clinic.
+  /// Cached with ShareReplay so multiple listeners (e.g. calendar header + rail + booking form)
+  /// all receive the latest value without re-subscribing to Firestore.
   Stream<List<QueryDocumentSnapshot<Map<String, dynamic>>>>
       watchPractitionerBookingMetas(String clinicId) {
     final c = clinicId.trim();
     if (c.isEmpty) return const Stream.empty();
 
-    return _db
-        .collection('clinics')
-        .doc(c)
-        .collection('practitioners')
-        .snapshots()
-        .map((snap) => snap.docs);
+    return _practitionerMetaStreamCache.putIfAbsent(c, () {
+      debugPrint('[StaffRepository] watchPractitionerBookingMetas path=clinics/$c/practitioners');
+      return ShareReplay(
+        _db
+            .collection('clinics')
+            .doc(c)
+            .collection('practitioners')
+            .snapshots()
+            .map((snap) => snap.docs),
+      );
+    });
   }
 
   /// Upsert practitioner booking metadata via callable.
@@ -400,6 +413,82 @@ class RxCombineLatest2<A, B, R> extends Stream<R> {
     };
 
     return controller.stream.listen(
+      onData,
+      onError: onError,
+      onDone: onDone,
+      cancelOnError: cancelOnError,
+    );
+  }
+}
+
+/// Wraps a source stream so that multiple listeners are supported and each
+/// new listener immediately receives the last emitted value (replay-1).
+/// Equivalent to RxDart's `shareReplay(maxSize: 1)` / `BehaviorSubject`.
+///
+/// The source is subscribed once eagerly on construction and stays alive
+/// for the lifetime of this object — designed for app-scoped caches.
+class ShareReplay<T> extends Stream<T> {
+  ShareReplay(Stream<T> source) {
+    _subscription = source.listen(
+      (data) {
+        _lastValue = data;
+        _hasValue = true;
+        for (final c in _children.toList()) {
+          if (!c.isClosed) c.add(data);
+        }
+      },
+      onError: (Object error, StackTrace stack) {
+        _lastError = error;
+        _lastStack = stack;
+        _hasError = true;
+        for (final c in _children.toList()) {
+          if (!c.isClosed) c.addError(error, stack);
+        }
+      },
+      onDone: () {
+        _done = true;
+        for (final c in _children.toList()) {
+          if (!c.isClosed) c.close();
+        }
+      },
+    );
+  }
+
+  // ignore: unused_field — held to keep source subscription alive
+  late final StreamSubscription<T> _subscription;
+  final List<StreamController<T>> _children = [];
+
+  T? _lastValue;
+  bool _hasValue = false;
+  Object? _lastError;
+  StackTrace? _lastStack;
+  bool _hasError = false;
+  bool _done = false;
+
+  @override
+  StreamSubscription<T> listen(
+    void Function(T event)? onData, {
+    Function? onError,
+    void Function()? onDone,
+    bool? cancelOnError,
+  }) {
+    final child = StreamController<T>();
+    _children.add(child);
+
+    child.onCancel = () {
+      _children.remove(child);
+    };
+
+    if (_hasValue) {
+      child.add(_lastValue as T);
+    } else if (_hasError) {
+      child.addError(_lastError!, _lastStack);
+    }
+    if (_done && !child.isClosed) {
+      child.close();
+    }
+
+    return child.stream.listen(
       onData,
       onError: onError,
       onDone: onDone,

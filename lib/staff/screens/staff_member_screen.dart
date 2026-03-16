@@ -10,8 +10,6 @@ import '../../app/callable_error_mapping.dart';
 import '../../app/clinic_context.dart';
 import '../../data/repositories/appointment_types_repository.dart';
 import '../../data/repositories/locations_repository.dart';
-import '../../data/repositories/practitioner_availability_repository.dart';
-import '../../data/repositories/practitioner_overrides_repository.dart';
 import '../../data/repositories/staff_profile_repository.dart';
 import '../../data/repositories/staff_repository.dart';
 import '../../features/auth/permission_guard.dart';
@@ -273,25 +271,6 @@ class _StaffMemberScreenState extends State<StaffMemberScreen> {
     }
   }
 
-  Future<void> _setMemberStatus({
-    required String clinicId,
-    required String status,
-  }) async {
-    final staffRepo = context.read<StaffRepository>();
-    try {
-      await staffRepo.setMembershipStatus(
-        clinicId: clinicId,
-        memberUid: widget.memberUid,
-        status: status,
-      );
-      _toast(status == 'active' ? 'Member activated' : 'Member suspended');
-    } on FirebaseFunctionsException catch (e) {
-      _toast(messageForCallableError(e, fallback: 'Failed to update member status.'));
-    } catch (e) {
-      _toast(messageForCallableError(e, fallback: 'Failed to update member status.'));
-    }
-  }
-
   Future<void> _uploadProfilePhoto({
     required String clinicId,
     required StaffProfileRepository profileRepo,
@@ -325,31 +304,6 @@ class _StaffMemberScreenState extends State<StaffMemberScreen> {
     } finally {
       if (mounted) setState(() => _uploadingPhoto = false);
     }
-  }
-
-  void _openAvailability({
-    required String clinicId,
-    required String practitionerName,
-  }) {
-    final locationsRepo = context.read<LocationsRepository>();
-    final availabilityRepo = context.read<PractitionerAvailabilityRepository>();
-    final overridesRepo = context.read<PractitionerOverridesRepository>();
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => MultiProvider(
-          providers: [
-            Provider<LocationsRepository>.value(value: locationsRepo),
-            Provider<PractitionerAvailabilityRepository>.value(value: availabilityRepo),
-            Provider<PractitionerOverridesRepository>.value(value: overridesRepo),
-          ],
-          child: PractitionerAvailabilityScreen(
-            clinicId: clinicId,
-            practitionerId: widget.memberUid,
-            practitionerName: practitionerName,
-          ),
-        ),
-      ),
-    );
   }
 
   Widget _buildCategoryRail(ThemeData theme) {
@@ -1075,88 +1029,45 @@ class _StaffMemberScreenState extends State<StaffMemberScreen> {
                                               : const Icon(Icons.save_outlined),
                                           label: Text(_savingBookingMeta ? 'Saving...' : 'Save booking settings'),
                                         ),
-                                        const SizedBox(width: 12),
-                                        FilledButton.tonalIcon(
-                                          onPressed: () => _openAvailability(
-                                            clinicId: clinicId,
-                                            practitionerName: displayName,
-                                          ),
-                                          icon: const Icon(Icons.schedule_outlined),
-                                          label: const Text('Edit availability'),
-                                        ),
                                       ],
                                     ),
                                   ],
                                 ],
                               ),
                             );
-                        final availabilityCategoryContent = _buildSectionBlock(
-                              context,
-                              title: 'Account actions',
-                              subtitle:
-                                  'Activation and suspension remain manager-only to preserve function-authoritative team status changes.',
-                              child: Wrap(
-                                spacing: 12,
-                                runSpacing: 12,
-                                children: [
-                                  OutlinedButton.icon(
-                                    onPressed: () => _openAvailability(
-                                      clinicId: clinicId,
-                                      practitionerName: displayName,
-                                    ),
-                                    icon: const Icon(Icons.schedule),
-                                    label: const Text('Edit availability'),
-                                  ),
-                                  if (canManage && !isSelf)
-                                    FilledButton.tonalIcon(
-                                      onPressed: () => _setMemberStatus(
-                                        clinicId: clinicId,
-                                        status: active ? 'suspended' : 'active',
-                                      ),
-                                      icon: Icon(
-                                        active
-                                            ? Icons.pause_circle_outline
-                                            : Icons.check_circle_outline,
-                                      ),
-                                      label: Text(
-                                        active ? 'Suspend member' : 'Activate member',
-                                      ),
-                                    ),
-                                  if (canManage && isSelf)
-                                    Text(
-                                      'Managers cannot suspend their own membership from this screen.',
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .bodySmall
-                                          ?.copyWith(
-                                            color: Theme.of(context)
-                                                .colorScheme
-                                                .onSurfaceVariant,
-                                          ),
-                                    ),
-                                ],
-                              ),
-                            );
                         final contentByCategory = switch (_selectedCategory) {
                           _MemberProfileCategory.profile => profileCategoryContent,
                           _MemberProfileCategory.bookingVisibility => bookingCategoryContent,
-                          _MemberProfileCategory.availability => availabilityCategoryContent,
+                          _MemberProfileCategory.availability => const SizedBox.shrink(),
                         };
                         final rail = _buildCategoryRail(theme);
-                        final scrollContent = SingleChildScrollView(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: AppSpacing.screenPadding,
-                            vertical: AppSpacing.md,
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              contentByCategory,
-                              if (canEditThisProfile && _selectedCategory == _MemberProfileCategory.profile)
-                                const SizedBox(height: 96),
-                            ],
-                          ),
-                        );
+                        final scrollContent = _selectedCategory == _MemberProfileCategory.availability
+                            ? Column(
+                                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                                  children: [
+                                    Expanded(
+                                      child: PractitionerAvailabilityContent(
+                                        clinicId: clinicId,
+                                        practitionerId: widget.memberUid,
+                                        practitionerName: displayName,
+                                      ),
+                                    ),
+                                  ],
+                                )
+                            : SingleChildScrollView(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: AppSpacing.screenPadding,
+                                    vertical: AppSpacing.md,
+                                  ),
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                                    children: [
+                                      contentByCategory,
+                                      if (canEditThisProfile && _selectedCategory == _MemberProfileCategory.profile)
+                                        const SizedBox(height: 96),
+                                    ],
+                                  ),
+                                );
                         final workspaceContent = Container(
                           decoration: BoxDecoration(
                             color: theme.colorScheme.surface,

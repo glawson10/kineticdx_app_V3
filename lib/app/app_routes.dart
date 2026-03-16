@@ -14,6 +14,9 @@ class AppRoutes {
   /// Public price list
   static const String priceList = '/price-list';
 
+  /// Manage appointment / client portal placeholder (future: auth by email + booking ref)
+  static const String manageAppointment = '/public/manage-appointment';
+
   /// ✅ Canonical public booking route (USED EVERYWHERE)
   static const String patientBookSimple = '/patient-book-simple';
 
@@ -35,6 +38,7 @@ class AppRoutes {
   /// ✅ General questionnaire token entry (public)
   /// Example: /q/general/`<token>`
   static const String generalQuestionnaireTokenBase = '/q/general';
+  static const String questionnaireTokenBase = '/q/launch';
 
   // ─────────────────────────────
   // Clinician (auth required)
@@ -69,5 +73,7 @@ class AppRoutes {
   static const String settingsScheduling = 'scheduling';
   static const String settingsCommunication = 'communication';
   static const String settingsBilling = 'billing';
+  /// Preferred slug for Accounts (billing). Legacy deep links may use settingsBilling.
+  static const String settingsAccounts = 'accounts';
   static const String settingsData = 'data';
 }

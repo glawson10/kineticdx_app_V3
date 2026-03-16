@@ -59,6 +59,8 @@ const LOCATION_PATCH_KEYS = new Set([
     "active",
     "showInOnlineBooking",
     "colorHex",
+    "phone",
+    "notes",
 ]);
 function validateAndPickPatch(patch, isCreate) {
     const raw = (0, validators_1.pickAllowedFields)(patch, LOCATION_PATCH_KEYS);
@@ -78,6 +80,8 @@ function validateAndPickPatch(patch, isCreate) {
     const active = (0, validators_1.assertBoolean)(raw.active, "active");
     const showInOnlineBooking = (0, validators_1.assertBoolean)(raw.showInOnlineBooking, "showInOnlineBooking");
     const colorHex = (0, validators_1.assertHexColor)(raw.colorHex, "colorHex");
+    const phone = (0, validators_1.assertString)(raw.phone, "phone", { trim: true, maxLength: 64 });
+    const notes = (0, validators_1.assertString)(raw.notes, "notes", { trim: true, maxLength: 1024 });
     // Address optional unless showInOnlineBooking is being set to true: then require minimal address (future: line1, city, country).
     if (raw.showInOnlineBooking === true) {
         const addr = (addressText !== null && addressText !== void 0 ? addressText : "").toString().trim();
@@ -96,6 +100,10 @@ function validateAndPickPatch(patch, isCreate) {
         out.showInOnlineBooking = showInOnlineBooking !== null && showInOnlineBooking !== void 0 ? showInOnlineBooking : null;
     if (colorHex !== undefined)
         out.colorHex = colorHex !== null && colorHex !== void 0 ? colorHex : null;
+    if (phone !== undefined)
+        out.phone = phone !== null && phone !== void 0 ? phone : null;
+    if (notes !== undefined)
+        out.notes = notes !== null && notes !== void 0 ? notes : null;
     return out;
 }
 async function upsertLocation(request) {

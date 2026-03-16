@@ -8,6 +8,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../../app/app_routes.dart';
 import '../../../data/repositories/public_booking_mirror_repository.dart';
+import '../../../ui/design_tokens.dart';
 
 /// ----------------------------------------------------------------------------
 /// Clinic branding model (UI-only)
@@ -438,6 +439,14 @@ class _BrandIntroScreenState extends State<BrandIntroScreen>
     );
   }
 
+  Future<void> _goToManageAppointment() async {
+    if (!mounted) return;
+    await Navigator.of(context).pushNamed(
+      AppRoutes.manageAppointment,
+      arguments: _routeArgs(),
+    );
+  }
+
   Widget _buildClinicLogoAsset(double height) {
     final b = widget.branding;
     return Image.asset(
@@ -478,14 +487,13 @@ class _BrandIntroScreenState extends State<BrandIntroScreen>
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final b = widget.branding;
-    // ignore: unnecessary_null_comparison -- clinicId is String?; guard for null
-    final clinicId = (widget.clinicId ?? '').trim();
+    final clinicId = widget.clinicId.trim();
     final stream = clinicId.isEmpty
         ? Stream<DocumentSnapshot<Map<String, dynamic>>>.empty()
         : context.read<PublicBookingMirrorRepository>().streamFullMirrorDoc(clinicId);
 
     return Scaffold(
-      backgroundColor: Colors.white,
+      backgroundColor: PublicBookingColors.background,
       body: SafeArea(
         child: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
           stream: stream,
@@ -493,33 +501,28 @@ class _BrandIntroScreenState extends State<BrandIntroScreen>
             final data = snap.data?.data() ?? const <String, dynamic>{};
 
             final logoUrl = _s(data['logoUrl']);
+            final onlineBookingEnabled = data['onlineBookingEnabled'] != false;
+            final landingBookHeadline = _s(data['landingBookHeadline']);
+            final landingBookSubhead = _s(data['landingBookSubhead']);
+            final landingTrustLine = _s(data['landingTrustLine']);
 
-            final landingUrl = _s(data['landingUrl']);
-            final websiteUrl = _s(data['websiteUrl']);
-            final email = _s(data['email']);
-            final whatsapp = _s(data['whatsapp']);
-            final phone = _s(data['phone']);
+            final contact = data['contact'] is Map ? data['contact'] as Map<String, dynamic> : null;
+            String _fromContact(String k) => contact != null ? _s(contact[k]) : _s(data[k]);
+            final landingUrl = _fromContact('landingUrl');
+            final websiteUrl = _fromContact('websiteUrl');
+            final email = _fromContact('email');
+            final whatsapp = _fromContact('whatsapp');
+            final phone = _fromContact('phone');
+            final address = _fromContact('address');
 
             return LayoutBuilder(
               builder: (context, constraints) {
-                final isWide = constraints.maxWidth >= 680;
-
-                final double contentMaxWidth =
-                    isWide ? 900 : constraints.maxWidth;
-                final double horizontalPad = isWide ? 32 : 24;
-
-                final double prevCardSide = isWide
-                    ? (contentMaxWidth - 24 - 24 - 24) / 2
-                    : constraints.maxWidth - 48;
-
-                final double diameter =
-                    (prevCardSide * 0.40).clamp(110.0, 180.0);
-                final double gap = isWide ? diameter * 0.25 : 18;
-                final double logoHeight = isWide ? 120.0 : 100.0;
+                final contentMaxWidth = constraints.maxWidth >= 500 ? 480.0 : constraints.maxWidth - 32.0;
+                final horizontalPad = constraints.maxWidth >= 500 ? 24.0 : 16.0;
+                final double logoHeight = 96.0;
 
                 return Stack(
                   children: [
-                    // ✅ Top-right action icons
                     Positioned(
                       top: 8,
                       right: 8,
@@ -533,104 +536,167 @@ class _BrandIntroScreenState extends State<BrandIntroScreen>
                         ),
                       ),
                     ),
-
                     Center(
-                      child: ConstrainedBox(
-                        constraints: BoxConstraints(maxWidth: contentMaxWidth),
-                        child: Padding(
-                          padding:
-                              EdgeInsets.symmetric(horizontal: horizontalPad),
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              const SizedBox(height: 8),
-                              _buildClinicLogo(
-                                logoHeight,
-                                logoUrl: logoUrl.isEmpty ? null : logoUrl,
-                              ),
-                              const SizedBox(height: 20),
-                              Text(
-                                b.brandBodyText,
-                                textAlign: TextAlign.center,
-                                style: theme.textTheme.titleMedium?.copyWith(
-                                  color: b.navy,
-                                  height: 1.4,
-                                ),
-                              ),
-                              const SizedBox(height: 28),
-                              FadeTransition(
-                                opacity: _fadeIn,
-                                child: ScaleTransition(
-                                  scale: _scalePop,
+                      child: SingleChildScrollView(
+                        child: ConstrainedBox(
+                          constraints: BoxConstraints(maxWidth: contentMaxWidth + (horizontalPad * 2)),
+                          child: Padding(
+                            padding: EdgeInsets.symmetric(horizontal: horizontalPad, vertical: 24),
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Card(
+                                  elevation: 1,
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(AppRadius.card),
+                                  ),
+                                  color: PublicBookingColors.cardSurface,
                                   child: Padding(
-                                    padding: const EdgeInsets.fromLTRB(
-                                        12, 0, 12, 24),
-                                    child: Wrap(
-                                      alignment: WrapAlignment.center,
-                                      crossAxisAlignment:
-                                          WrapCrossAlignment.center,
-                                      spacing: gap,
-                                      runSpacing: 18,
+                                    padding: const EdgeInsets.all(24),
+                                    child: Column(
+                                      mainAxisSize: MainAxisSize.min,
                                       children: [
-                                        _CircleIconButton(
-                                          key:
-                                              const ValueKey('book_online_btn'),
-                                          diameter: diameter,
-                                          icon: Icons.calendar_today_rounded,
-                                          semanticLabel: 'Book Online',
-                                          onTap: _goToBooking,
+                                        _buildClinicLogo(
+                                          logoHeight,
+                                          logoUrl: logoUrl.isEmpty ? null : logoUrl,
                                         ),
-                                        _CircleIconButton(
-                                          key: const ValueKey('price_list_btn'),
-                                          diameter: diameter,
-                                          icon: Icons.list_alt_rounded,
-                                          semanticLabel: 'Price list',
-                                          onTap: _goToPriceList,
+                                        const SizedBox(height: 24),
+                                        Text(
+                                          landingBookHeadline.isEmpty
+                                              ? 'Book your appointment'
+                                              : landingBookHeadline,
+                                          style: theme.textTheme.headlineSmall?.copyWith(
+                                            fontWeight: FontWeight.w700,
+                                            color: theme.colorScheme.onSurface,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 8),
+                                        Text(
+                                          landingBookSubhead.isEmpty
+                                              ? 'Select a time that suits you. Secure and simple booking.'
+                                              : landingBookSubhead,
+                                          textAlign: TextAlign.center,
+                                          style: theme.textTheme.bodyMedium?.copyWith(
+                                            color: theme.colorScheme.onSurfaceVariant,
+                                          ),
+                                        ),
+                                        if (address.isNotEmpty) ...[
+                                          const SizedBox(height: 12),
+                                          Row(
+                                            mainAxisAlignment: MainAxisAlignment.center,
+                                            children: [
+                                              Icon(Icons.location_on_outlined, size: 18, color: theme.colorScheme.onSurfaceVariant),
+                                              const SizedBox(width: 6),
+                                              Flexible(
+                                                child: Text(
+                                                  address,
+                                                  textAlign: TextAlign.center,
+                                                  style: theme.textTheme.bodySmall?.copyWith(
+                                                    color: theme.colorScheme.onSurfaceVariant,
+                                                  ),
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ],
+                                        const SizedBox(height: 24),
+                                        if (!onlineBookingEnabled)
+                                          Container(
+                                            padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+                                            decoration: BoxDecoration(
+                                              color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+                                              borderRadius: BorderRadius.circular(8),
+                                            ),
+                                            child: Text(
+                                              'Booking is temporarily unavailable.',
+                                              style: theme.textTheme.bodyMedium?.copyWith(
+                                                color: theme.colorScheme.onSurfaceVariant,
+                                              ),
+                                            ),
+                                          )
+                                        else
+                                          FadeTransition(
+                                            opacity: _fadeIn,
+                                            child: ScaleTransition(
+                                              scale: _scalePop,
+                                              child: SizedBox(
+                                                width: double.infinity,
+                                                child: FilledButton(
+                                                  onPressed: _goToBooking,
+                                                  style: FilledButton.styleFrom(
+                                                    backgroundColor: PublicBookingColors.primaryButton,
+                                                    foregroundColor: Colors.white,
+                                                    padding: const EdgeInsets.symmetric(vertical: 16),
+                                                    shape: RoundedRectangleBorder(
+                                                      borderRadius: BorderRadius.circular(AppRadius.element),
+                                                    ),
+                                                  ),
+                                                  child: const Text('BOOK APPOINTMENT'),
+                                                ),
+                                              ),
+                                            ),
+                                          ),
+                                        const SizedBox(height: 16),
+                                        Column(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            TextButton(
+                                              onPressed: _goToPriceList,
+                                              child: const Text('View pricing'),
+                                            ),
+                                            TextButton(
+                                              onPressed: _goToManageAppointment,
+                                              child: const Text('Manage appointment'),
+                                            ),
+                                            TextButton(
+                                              onPressed: _goToManageAppointment,
+                                              child: const Text('Access your bookings'),
+                                            ),
+                                          ],
+                                        ),
+                                        const SizedBox(height: 16),
+                                        Text(
+                                          landingTrustLine.isEmpty
+                                              ? 'Secure, confidential, instant confirmation.'
+                                              : landingTrustLine,
+                                          style: theme.textTheme.bodySmall?.copyWith(
+                                            color: theme.colorScheme.onSurfaceVariant,
+                                          ),
                                         ),
                                       ],
                                     ),
                                   ),
                                 ),
-                              ),
-                              const SizedBox(height: 8),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-
-                    Positioned(
-                      bottom: 22,
-                      left: 0,
-                      right: 0,
-                      child: Center(
-                        child: AnimatedOpacity(
-                          opacity: _showPowered ? 1.0 : 0.0,
-                          duration: const Duration(milliseconds: 400),
-                          curve: Curves.easeOut,
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Text(
-                                b.poweredByText,
-                                style: Theme.of(context)
-                                    .textTheme
-                                    .titleSmall
-                                    ?.copyWith(
-                                      color: Colors.grey[700],
-                                      fontWeight: FontWeight.w600,
-                                      fontSize: 16,
-                                    ),
-                              ),
-                              if ((b.poweredByLogoAsset ?? '').isNotEmpty)
-                                Image.asset(
-                                  b.poweredByLogoAsset!,
-                                  height: 48,
-                                  fit: BoxFit.contain,
-                                  errorBuilder: (_, __, ___) =>
-                                      const SizedBox.shrink(),
+                                const SizedBox(height: 24),
+                                AnimatedOpacity(
+                                  opacity: _showPowered ? 1.0 : 0.0,
+                                  duration: const Duration(milliseconds: 400),
+                                  curve: Curves.easeOut,
+                                  child: Row(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Text(
+                                        b.poweredByText,
+                                        style: theme.textTheme.bodySmall?.copyWith(
+                                          color: theme.colorScheme.onSurfaceVariant,
+                                          fontWeight: FontWeight.w500,
+                                        ),
+                                      ),
+                                      if ((b.poweredByLogoAsset ?? '').isNotEmpty) ...[
+                                        const SizedBox(width: 6),
+                                        Image.asset(
+                                          b.poweredByLogoAsset!,
+                                          height: 28,
+                                          fit: BoxFit.contain,
+                                          errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+                                        ),
+                                      ],
+                                    ],
+                                  ),
                                 ),
-                            ],
+                              ],
+                            ),
                           ),
                         ),
                       ),
@@ -776,60 +842,3 @@ class _PublicActionIcons extends StatelessWidget {
   }
 }
 
-/// Circular icon button (replaces old image-based buttons; no asset dependency)
-class _CircleIconButton extends StatelessWidget {
-  final double diameter;
-  final IconData icon;
-  final String semanticLabel;
-  final VoidCallback onTap;
-
-  const _CircleIconButton({
-    super.key,
-    required this.diameter,
-    required this.icon,
-    required this.semanticLabel,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final double padding = diameter * 0.12;
-    final theme = Theme.of(context);
-
-    return Semantics(
-      button: true,
-      label: semanticLabel,
-      child: Material(
-        color: Colors.transparent,
-        shape: const CircleBorder(),
-        child: InkWell(
-          onTap: onTap,
-          customBorder: const CircleBorder(),
-          child: Container(
-            width: diameter,
-            height: diameter,
-            decoration: const BoxDecoration(
-              shape: BoxShape.circle,
-              color: Colors.white,
-              boxShadow: [
-                BoxShadow(
-                  color: Color(0x1A000000),
-                  offset: Offset(6, 10),
-                  blurRadius: 20,
-                  spreadRadius: 0,
-                ),
-              ],
-            ),
-            padding: EdgeInsets.all(padding),
-            alignment: Alignment.center,
-            child: Icon(
-              icon,
-              size: diameter - (padding * 2),
-              color: theme.colorScheme.primary,
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}

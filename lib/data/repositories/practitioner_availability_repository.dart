@@ -72,4 +72,18 @@ class PractitionerAvailabilityRepository {
     if (id == null || id.isEmpty) throw StateError('Callable did not return availabilityId');
     return id;
   }
+
+  /// Delete an availability rule via callable.
+  Future<void> deleteAvailability({
+    required String clinicId,
+    required String practitionerId,
+    required String availabilityId,
+  }) async {
+    final callable = _functions.httpsCallable('settingsDeletePractitionerAvailability');
+    await callable.call(<String, dynamic>{
+      'clinicId': clinicId,
+      'practitionerId': practitionerId,
+      'availabilityId': availabilityId,
+    });
+  }
 }

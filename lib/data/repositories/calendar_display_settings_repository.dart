@@ -3,6 +3,9 @@ import 'package:cloud_functions/cloud_functions.dart';
 import '../../models/calendar_display_settings.dart';
 
 class CalendarDisplaySettingsRepository {
+  static FirebaseFunctions get _functions =>
+      FirebaseFunctions.instanceFor(region: 'europe-west3');
+
   final Map<String, StreamController<CalendarDisplaySettings>> _controllers = {};
   final Map<String, CalendarDisplaySettings> _cache = {};
 
@@ -27,7 +30,7 @@ class CalendarDisplaySettingsRepository {
     final cached = _cache[c];
     if (cached != null) return cached;
 
-    final fn = FirebaseFunctions.instance.httpsCallable('settingsGetCalendarDisplayConfig');
+    final fn = _functions.httpsCallable('settingsGetCalendarDisplayConfig');
     final result = await fn.call({'clinicId': c});
     final data = Map<String, dynamic>.from(result.data as Map? ?? {});
     final settings = CalendarDisplaySettings.fromMap(data);
@@ -44,8 +47,8 @@ class CalendarDisplaySettingsRepository {
   }
 
   Future<void> updateSettings(String clinicId, Map<String, dynamic> data) async {
-    final fn = FirebaseFunctions.instance.httpsCallable('settingsUpdateCalendarDisplayConfig');
-    await fn.call({'clinicId': clinicId, ...data});
+    final fn = _functions.httpsCallable('settingsUpdateCalendarDisplayConfig');
+    await fn.call({'clinicId': clinicId, 'patch': data});
     _cache.remove(clinicId.trim());
     _fetchAndEmit(clinicId.trim());
   }

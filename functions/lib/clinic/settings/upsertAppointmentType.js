@@ -55,6 +55,8 @@ const APPT_TYPE_PATCH_KEYS = new Set([
     "description",
     "defaultPrice",
     "allowedLocationIds",
+    "telehealth",
+    "allowedPractitionerIds",
 ]);
 function validateAndPickPatch(patch, isCreate) {
     const raw = (0, validators_1.pickAllowedFields)(patch, APPT_TYPE_PATCH_KEYS);
@@ -99,6 +101,16 @@ function validateAndPickPatch(patch, isCreate) {
             allowedLocationIds = raw.allowedLocationIds.map((id) => String(id).trim()).filter(Boolean);
         }
     }
+    const telehealth = (0, validators_1.assertBoolean)(raw.telehealth, "telehealth");
+    let allowedPractitionerIds;
+    if (raw.allowedPractitionerIds !== undefined) {
+        if (raw.allowedPractitionerIds === null) {
+            allowedPractitionerIds = null;
+        }
+        else if (Array.isArray(raw.allowedPractitionerIds)) {
+            allowedPractitionerIds = raw.allowedPractitionerIds.map((id) => String(id).trim()).filter(Boolean);
+        }
+    }
     const out = {};
     if (name != null)
         out.name = name;
@@ -116,10 +128,14 @@ function validateAndPickPatch(patch, isCreate) {
         out.defaultPrice = defaultPrice;
     if (allowedLocationIds !== undefined)
         out.allowedLocationIds = allowedLocationIds;
+    if (telehealth !== undefined && telehealth !== null)
+        out.telehealth = telehealth;
+    if (allowedPractitionerIds !== undefined)
+        out.allowedPractitionerIds = allowedPractitionerIds;
     return out;
 }
 async function upsertAppointmentType(request) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k;
+    var _a;
     if (!((_a = request.auth) === null || _a === void 0 ? void 0 : _a.uid)) {
         throw new https_1.HttpsError("unauthenticated", "Sign in required.");
     }
@@ -144,19 +160,33 @@ async function upsertAppointmentType(request) {
     }
     const uid = request.auth.uid;
     await (0, permissions_1.requireClinicPermission)(db, clinicId, uid, "settings.write");
+    try {
+        return await upsertAppointmentTypeImpl(db, clinicId, uid, appointmentTypeId, isCreate, patch);
+    }
+    catch (e) {
+        if (e instanceof https_1.HttpsError)
+            throw e;
+        const message = e instanceof Error ? e.message : String(e);
+        throw new https_1.HttpsError("internal", message || "Failed to save appointment type.");
+    }
+}
+async function upsertAppointmentTypeImpl(db, clinicId, uid, appointmentTypeId, isCreate, patch) {
+    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l;
     const colRef = db.collection("clinics").doc(clinicId).collection("appointmentTypes");
     const now = FV.serverTimestamp();
     if (isCreate) {
         const finalId = colRef.doc().id;
         const doc = {
-            name: (_b = patch.name) !== null && _b !== void 0 ? _b : "",
-            durationMinutes: (_c = patch.durationMinutes) !== null && _c !== void 0 ? _c : 30,
-            colorHex: (_d = patch.colorHex) !== null && _d !== void 0 ? _d : null,
-            active: (_e = patch.active) !== null && _e !== void 0 ? _e : true,
-            showInOnlineBooking: (_f = patch.showInOnlineBooking) !== null && _f !== void 0 ? _f : false,
-            description: (_g = patch.description) !== null && _g !== void 0 ? _g : null,
-            defaultPrice: (_h = patch.defaultPrice) !== null && _h !== void 0 ? _h : null,
-            allowedLocationIds: (_j = patch.allowedLocationIds) !== null && _j !== void 0 ? _j : null,
+            name: (_a = patch.name) !== null && _a !== void 0 ? _a : "",
+            durationMinutes: (_b = patch.durationMinutes) !== null && _b !== void 0 ? _b : 30,
+            colorHex: (_c = patch.colorHex) !== null && _c !== void 0 ? _c : null,
+            active: (_d = patch.active) !== null && _d !== void 0 ? _d : true,
+            showInOnlineBooking: (_e = patch.showInOnlineBooking) !== null && _e !== void 0 ? _e : false,
+            description: (_f = patch.description) !== null && _f !== void 0 ? _f : null,
+            defaultPrice: (_g = patch.defaultPrice) !== null && _g !== void 0 ? _g : null,
+            allowedLocationIds: (_h = patch.allowedLocationIds) !== null && _h !== void 0 ? _h : null,
+            telehealth: (_j = patch.telehealth) !== null && _j !== void 0 ? _j : false,
+            allowedPractitionerIds: (_k = patch.allowedPractitionerIds) !== null && _k !== void 0 ? _k : null,
             createdAt: now,
             updatedAt: now,
         };
@@ -174,7 +204,7 @@ async function upsertAppointmentType(request) {
     if (!snap.exists) {
         throw new https_1.HttpsError("not-found", "Appointment type not found.");
     }
-    const existing = (_k = snap.data()) !== null && _k !== void 0 ? _k : {};
+    const existing = (_l = snap.data()) !== null && _l !== void 0 ? _l : {};
     const updateData = { updatedAt: now };
     const changes = {};
     for (const key of Object.keys(patch)) {
@@ -183,6 +213,6 @@ async function upsertAppointmentType(request) {
     }
     await ref.update(updateData);
     await (0, audit_1.writeSettingsAuditEvent)(db, clinicId, "settings.appointmentType.updated", uid, `clinics/${clinicId}/appointmentTypes/${appointmentTypeId}`, appointmentTypeId, changes);
-    return { ok: true, appointmentTypeId };
+    return { ok: true, appointmentTypeId: appointmentTypeId };
 }
 //# sourceMappingURL=upsertAppointmentType.js.map

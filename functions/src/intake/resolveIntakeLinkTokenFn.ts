@@ -4,6 +4,8 @@ import { onCall, HttpsError } from "firebase-functions/v2/https";
 import { logger } from "firebase-functions/logger";
 import * as crypto from "crypto";
 
+import { resolveIntakeSnapshot } from "../clinic/intake/flowRegistry";
+
 if (!admin.apps.length) admin.initializeApp();
 const db = admin.firestore();
 
@@ -14,6 +16,10 @@ function safeStr(v: unknown): string {
   return (v ?? "").toString().trim();
 }
 
+function isObj(v: unknown): v is Record<string, unknown> {
+  return !!v && typeof v === "object" && !Array.isArray(v);
+}
+
 function sha256Base64Url(s: string): string {
   return crypto.createHash("sha256").update(s).digest("base64url");
 }
@@ -22,7 +28,19 @@ function tsNow() {
   return admin.firestore.FieldValue.serverTimestamp();
 }
 
-function intakeDraftPayload(params: { clinicId: string; linkId: string }) {
+function intakeDraftPayload(params: {
+  clinicId: string;
+  linkId: string;
+  templateId?: string;
+  flowId: string;
+  flowVersion: number;
+  flowCategory: string;
+  flowDefinitionId?: string | null;
+  clinicalProfileId?: string | null;
+  summaryEngine?: string;
+  decisionSupportProfile?: string;
+  supportsDifferentialHypothesis?: boolean;
+}) {
   return {
     schemaVersion: 1,
     clinicId: params.clinicId,
@@ -33,11 +51,19 @@ function intakeDraftPayload(params: { clinicId: string; linkId: string }) {
     lockedAt: null,
 
     intakeLinkId: params.linkId,
+    questionnaireTemplateId: params.templateId ?? null,
 
-    flow: { flowId: GENERAL_FLOW_ID, flowVersion: GENERAL_FLOW_VERSION },
-    flowId: GENERAL_FLOW_ID,
-    flowVersion: GENERAL_FLOW_VERSION,
-    flowCategory: "general",
+    flow: { flowId: params.flowId, flowVersion: params.flowVersion },
+    flowId: params.flowId,
+    flowVersion: params.flowVersion,
+    flowCategory: params.flowCategory,
+
+    flowDefinitionId: params.flowDefinitionId ?? null,
+    clinicalProfileId: params.clinicalProfileId ?? null,
+    templateId: params.templateId ?? null,
+    summaryEngine: params.summaryEngine ?? null,
+    decisionSupportProfile: params.decisionSupportProfile ?? null,
+    supportsDifferentialHypothesis: params.supportsDifferentialHypothesis ?? false,
 
     consent: null,
     patientDetails: null,
@@ -49,9 +75,9 @@ function intakeDraftPayload(params: { clinicId: string; linkId: string }) {
 }
 
 /**
- * ✅ Resolve a tokenized general questionnaire link (public).
+ * Resolve a tokenized questionnaire link (public).
  * Input: { token }
- * Output: { clinicId, kind, intakeSessionId, flowId, flowVersion }
+ * Output: { clinicId, kind, intakeSessionId, flowId, flowVersion, templateId? }
  */
 export const resolveIntakeLinkTokenFn = onCall(
   { region: "europe-west3", cors: true },
@@ -104,13 +130,39 @@ export const resolveIntakeLinkTokenFn = onCall(
         throw new HttpsError("failed-precondition", "Link missing clinicId.");
       }
 
-      const kind = safeStr((link as any).kind) || "preassessment";
-      if (kind !== "general") {
+      const kind = safeStr((link as any).kind) || "general";
+      if (kind !== "general" && kind !== "questionnaire") {
         throw new HttpsError(
           "failed-precondition",
-          "This link is not for the general questionnaire."
+          "This link is not for a questionnaire."
         );
       }
+      const templateId = safeStr((link as any).templateId);
+      const flowId = safeStr((link as any).flowId) || GENERAL_FLOW_ID;
+      const flowVersion = typeof (link as any).flowVersion === "number"
+        ? Math.trunc((link as any).flowVersion)
+        : GENERAL_FLOW_VERSION;
+      const flowCategory = safeStr((link as any).flowCategory) || (flowId === GENERAL_FLOW_ID ? "general" : "region");
+      const flowDefinitionId = safeStr((link as any).flowDefinitionId);
+      const clinicalProfileId = safeStr((link as any).clinicalProfileId);
+      const snapshot = resolveIntakeSnapshot({
+        templateId: templateId || "",
+        flowDefinitionId: flowDefinitionId || undefined,
+        clinicalProfileId: clinicalProfileId || undefined,
+        flowId,
+        flowVersion,
+      });
+      const bookingRequestId = safeStr((link as any).bookingRequestId);
+      const prefillPatient = isObj((link as any).prefillPatient)
+        ? {
+            firstName: safeStr((link as any).prefillPatient.firstName),
+            lastName: safeStr((link as any).prefillPatient.lastName),
+            dobIso: safeStr((link as any).prefillPatient.dobIso),
+            phone: safeStr((link as any).prefillPatient.phone),
+            email: safeStr((link as any).prefillPatient.email),
+            address: safeStr((link as any).prefillPatient.address),
+          }
+        : null;
 
       const existingSessionId = safeStr(
         (link as any).intakeSessionId ?? (link as any).sessionId
@@ -155,7 +207,19 @@ export const resolveIntakeLinkTokenFn = onCall(
         const intakeSnap = await tx.get(intakeRef);
 
         if (!intakeSnap.exists) {
-          tx.set(intakeRef, intakeDraftPayload({ clinicId, linkId }), {
+          tx.set(intakeRef, intakeDraftPayload({
+            clinicId,
+            linkId,
+            templateId: templateId || undefined,
+            flowId: snapshot.flowId,
+            flowVersion: snapshot.flowVersion,
+            flowCategory,
+            flowDefinitionId: snapshot.flowDefinitionId,
+            clinicalProfileId: snapshot.clinicalProfileId,
+            summaryEngine: snapshot.summaryEngine,
+            decisionSupportProfile: snapshot.decisionSupportProfile,
+            supportsDifferentialHypothesis: snapshot.supportsDifferentialHypothesis,
+          }), {
             merge: false,
           });
         } else {
@@ -179,7 +243,14 @@ export const resolveIntakeLinkTokenFn = onCall(
         const newRef = sessionsCol.doc();
         intakeSessionId = newRef.id;
 
-        tx.set(newRef, intakeDraftPayload({ clinicId, linkId }), {
+        tx.set(newRef, intakeDraftPayload({
+          clinicId,
+          linkId,
+          templateId,
+          flowId,
+          flowVersion,
+          flowCategory,
+        }), {
           merge: false,
         });
       }
@@ -198,10 +269,18 @@ export const resolveIntakeLinkTokenFn = onCall(
 
       return {
         clinicId,
-        kind: "general",
+        kind,
         intakeSessionId,
-        flowId: GENERAL_FLOW_ID,
-        flowVersion: GENERAL_FLOW_VERSION,
+        flowId: snapshot.flowId,
+        flowVersion: snapshot.flowVersion,
+        templateId: templateId || undefined,
+        flowDefinitionId: snapshot.flowDefinitionId,
+        clinicalProfileId: snapshot.clinicalProfileId,
+        summaryEngine: snapshot.summaryEngine,
+        decisionSupportProfile: snapshot.decisionSupportProfile,
+        supportsDifferentialHypothesis: snapshot.supportsDifferentialHypothesis,
+        bookingRequestId,
+        prefillPatient,
         resumed,
       };
     });

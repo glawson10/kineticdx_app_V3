@@ -33,6 +33,12 @@ class LocationDisplayOrderScreen extends StatelessWidget {
             StreamBuilder<LocationDisplaySettings>(
               stream: displayRepo.streamSettings(clinicId),
               builder: (context, displaySnap) {
+                if (displaySnap.hasError) {
+                  return _SettingsStreamError(
+                    message: 'Could not load display order.',
+                    error: displaySnap.error,
+                  );
+                }
                 if (!displaySnap.hasData) {
                   return const Center(child: CircularProgressIndicator());
                 }
@@ -40,6 +46,12 @@ class LocationDisplayOrderScreen extends StatelessWidget {
                 return StreamBuilder<List<ClinicLocation>>(
                   stream: locationsRepo.watchLocations(clinicId),
                   builder: (context, locSnap) {
+                    if (locSnap.hasError) {
+                      return _SettingsStreamError(
+                        message: 'Could not load locations.',
+                        error: locSnap.error,
+                      );
+                    }
                     if (!locSnap.hasData) {
                       return const Center(child: CircularProgressIndicator());
                     }
@@ -159,6 +171,58 @@ class _DisplayOrderFormState extends State<_DisplayOrderForm> {
           child: const Text('Save'),
         ),
       ],
+    );
+  }
+}
+
+/// Shown when a settings stream errors; suggests switching tab and back to retry.
+class _SettingsStreamError extends StatelessWidget {
+  const _SettingsStreamError({
+    required this.message,
+    this.error,
+  });
+
+  final String message;
+  final Object? error;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.error_outline, size: 48, color: Theme.of(context).colorScheme.error),
+            const SizedBox(height: 16),
+            Text(
+              message,
+              style: Theme.of(context).textTheme.titleMedium,
+              textAlign: TextAlign.center,
+            ),
+            if (error != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                '$error',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                textAlign: TextAlign.center,
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
+            const SizedBox(height: 12),
+            Text(
+              'Switch to another tab and back to retry.',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

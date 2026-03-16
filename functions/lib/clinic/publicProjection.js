@@ -442,6 +442,7 @@ function readClinicProfileLike(clinicDoc) {
         websiteUrl: pick("websiteUrl"),
         landingUrl: pick("landingUrl"),
         whatsapp: pick("whatsapp"),
+        address: pick("address"),
     };
 }
 function buildPublicBookingProjection(args) {
@@ -450,7 +451,21 @@ function buildPublicBookingProjection(args) {
     const settings = isObj(args.publicBookingSettingsDoc)
         ? args.publicBookingSettingsDoc
         : {};
-    const bookingRules = isObj(settings.bookingRules) ? settings.bookingRules : {};
+    const baseRules = isObj(settings.bookingRules) ? settings.bookingRules : {};
+    const bookingRules = {
+        ...baseRules,
+        requireEmail: baseRules.requireEmail !== false && settings.requireEmail !== false,
+        requirePhone: baseRules.requirePhone === true || settings.requirePhone === true,
+        cancellationPolicyHours: typeof baseRules.cancellationPolicyHours === "number"
+            ? baseRules.cancellationPolicyHours
+            : (typeof settings.cancellationPolicyHours === "number" ? settings.cancellationPolicyHours : 24),
+        confirmationMessage: typeof baseRules.confirmationMessage === "string"
+            ? baseRules.confirmationMessage
+            : (typeof settings.confirmationMessage === "string" ? settings.confirmationMessage : null),
+    };
+    if (isObj(settings.questionnaireFlow)) {
+        bookingRules.questionnaireFlow = settings.questionnaireFlow;
+    }
     const bookingStructure = isObj(settings.bookingStructure)
         ? settings.bookingStructure
         : {};
@@ -490,7 +505,9 @@ function buildPublicBookingProjection(args) {
         whatsapp: safeStr(c.whatsapp),
         email: safeStr(c.email),
         phone: safeStr(c.phone),
+        address: safeStr(c.address),
     };
+    const onlineBookingEnabled = settings.onlineBookingEnabled !== false;
     return {
         clinicId: safeStr(args.clinicId),
         clinicName: safeStr(args.clinicName) || "Clinic",
@@ -501,6 +518,7 @@ function buildPublicBookingProjection(args) {
         openingHours,
         bookingRules,
         slotMinutes,
+        onlineBookingEnabled,
         services,
         practitioners,
         updatedAt: now,

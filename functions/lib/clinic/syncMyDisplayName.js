@@ -79,8 +79,8 @@ async function syncMyDisplayName(req) {
     const emailLower = normEmail((_b = req.auth.token) === null || _b === void 0 ? void 0 : _b.email);
     const db = admin.firestore();
     // ✅ Membership docs (canonical + legacy)
-    const canonRef = db.collection("clinics").doc(clinicId).collection("memberships").doc(uid);
-    const legacyRef = db.collection("clinics").doc(clinicId).collection("members").doc(uid);
+    const canonRef = db.collection("clinics").doc(clinicId).collection("members").doc(uid);
+    const legacyRef = db.collection("clinics").doc(clinicId).collection("memberships").doc(uid);
     const [canonSnap, legacySnap] = await Promise.all([canonRef.get(), legacyRef.get()]);
     if (!canonSnap.exists && !legacySnap.exists) {
         throw new https_1.HttpsError("permission-denied", "Not a member of this clinic.");

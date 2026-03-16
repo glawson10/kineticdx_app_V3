@@ -270,6 +270,24 @@ async function submitIntakeSession(req) {
                 flowId,
                 flowVersion,
                 flowCategory, // "general" | "region"
+                ...(data.templateId != null && String(data.templateId).trim() !== ""
+                    ? { templateId: String(data.templateId).trim() }
+                    : {}),
+                ...(data.flowDefinitionId != null && String(data.flowDefinitionId).trim() !== ""
+                    ? { flowDefinitionId: String(data.flowDefinitionId).trim() }
+                    : {}),
+                ...(data.clinicalProfileId != null && String(data.clinicalProfileId).trim() !== ""
+                    ? { clinicalProfileId: String(data.clinicalProfileId).trim() }
+                    : {}),
+                ...(data.summaryEngine != null && String(data.summaryEngine).trim() !== ""
+                    ? { summaryEngine: String(data.summaryEngine).trim() }
+                    : {}),
+                ...(data.decisionSupportProfile != null && String(data.decisionSupportProfile).trim() !== ""
+                    ? { decisionSupportProfile: String(data.decisionSupportProfile).trim() }
+                    : {}),
+                ...(typeof data.supportsDifferentialHypothesis === "boolean"
+                    ? { supportsDifferentialHypothesis: data.supportsDifferentialHypothesis }
+                    : {}),
                 consent: { ...c, acceptedAt: now },
                 patientDetails: {
                     ...p,
